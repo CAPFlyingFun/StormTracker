@@ -3,6 +3,14 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.36
+
+  **Choose your AI provider — OpenAI or Claude (Anthropic) — for the assistant, briefings, and background alerts.**
+
+  - **What changed** — the AI Weather Assistant now has a provider selector in Settings. Alongside OpenAI (GPT), you can pick Claude (Anthropic), paste your own Claude API key, and choose a Claude model. Your choice powers the in-app chat, AI Briefings, and the optional AI-written background push notifications.
+  - **How** — a single provider switch drives everything. The in-app assistant routes chat/briefings through the selected provider's API (`api.openai.com` or `api.anthropic.com`), and the background alert server (Cloudflare Worker) writes push digests with the matching provider. Keys stay on your device (and encrypted on the alert server for background use) and are billed to your own account. OpenAI remains the default; existing users are unaffected until they switch.
+  - **Cache bumped** — `?v=635` / `stormtracker-v635`.
+
   ## v5.35
 
   **Bottom tab bar no longer drifts while scrolling on phones — the navigation bar stays pinned for good.**

@@ -4,7 +4,7 @@
 const _aiChatHistory=[];
 let _aiChatOpen=false;
 
-function saveAIKey(v){const t=(v||'').trim();localStorage.setItem('st_aiKey',t);if(!t)localStorage.setItem('st_briefingMode','system');updateAIFab();if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();}
+function saveAIKey(v){const t=(v||'').trim();localStorage.setItem('st_aiKey',t);_syncAiKeyState();if(typeof syncPushAlerts==='function')syncPushAlerts();}
 function saveAITone(v){localStorage.setItem('st_aiTone',v);}
 function saveAIDetail(v){localStorage.setItem('st_aiDetail',v);}
 function saveAIModel(v){localStorage.setItem('st_aiModel',v);}
@@ -13,8 +13,30 @@ function getAITone(){return localStorage.getItem('st_aiTone')||'professional';}
 function getAIDetail(){return localStorage.getItem('st_aiDetail')||'standard';}
 const _AI_MODELS=['gpt-4o-mini','gpt-4o','gpt-4.1-mini','gpt-4.1'];
 function getAIModel(){const m=localStorage.getItem('st_aiModel');return _AI_MODELS.includes(m)?m:'gpt-4o-mini';}
-function toggleAIKeyVis(){
-  const inp=document.getElementById('settings-ai-key');
+// ----- Provider selection (OpenAI default, Claude/Anthropic secondary) -----
+function getAIProvider(){return localStorage.getItem('st_aiProvider')==='anthropic'?'anthropic':'openai';}
+function getAIProviderLabel(){return getAIProvider()==='anthropic'?'Claude':'OpenAI';}
+function saveAIProvider(v){const next=v==='anthropic'?'anthropic':'openai';const changed=next!==getAIProvider();localStorage.setItem('st_aiProvider',next);
+  // A push-specific key override (st_pushAiKey) is provider-agnostic; on a real
+  // provider switch it is now the wrong provider's key, so clear it and let
+  // background alerts fall back to the new provider's in-app key.
+  if(changed){try{localStorage.removeItem('st_pushAiKey');}catch(e){}}
+  _applyAIProviderUI();_syncAiKeyState();if(typeof _applyAIPanelMode==='function')_applyAIPanelMode();if(typeof renderPushAlertSettings==='function'){try{renderPushAlertSettings();}catch(e){}}if(typeof syncPushAlerts==='function')syncPushAlerts();}
+function saveAnthropicKey(v){const t=(v||'').trim();localStorage.setItem('st_aiKeyAnthropic',t);_syncAiKeyState();if(typeof syncPushAlerts==='function')syncPushAlerts();}
+function getAnthropicKey(){return localStorage.getItem('st_aiKeyAnthropic')||'';}
+const _AI_MODELS_ANTHROPIC=['claude-haiku-4-5','claude-sonnet-5','claude-sonnet-4-6','claude-opus-4-8'];
+function saveAnthropicModel(v){localStorage.setItem('st_aiModelAnthropic',v);}
+function getAnthropicModel(){const m=localStorage.getItem('st_aiModelAnthropic');return _AI_MODELS_ANTHROPIC.includes(m)?m:'claude-haiku-4-5';}
+// Active (provider-aware) key/model — the single source every AI call site reads.
+function getActiveAIKey(){return getAIProvider()==='anthropic'?getAnthropicKey():getAIKey();}
+function getActiveAIModel(){return getAIProvider()==='anthropic'?getAnthropicModel():getAIModel();}
+// Shared post-key-change sync: force the on-device briefing when the ACTIVE
+// provider has no key, refresh the FAB, and re-render the briefing-mode UI.
+function _syncAiKeyState(){if(!getActiveAIKey())localStorage.setItem('st_briefingMode','system');updateAIFab();if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();}
+// Show only the selected provider's key + model rows in Settings.
+function _applyAIProviderUI(){const p=getAIProvider();const ow=document.getElementById('settings-ai-openai-wrap');const aw=document.getElementById('settings-ai-anthropic-wrap');if(ow)ow.style.display=(p==='anthropic')?'none':'';if(aw)aw.style.display=(p==='anthropic')?'':'none';}
+function toggleAIKeyVis(id){
+  const inp=document.getElementById(id||'settings-ai-key');
   if(inp)inp.type=inp.type==='password'?'text':'password';
 }
 function updateAIFab(){
@@ -22,14 +44,21 @@ function updateAIFab(){
   if(fab)fab.style.display='block';
 }
 function syncAISettings(){
+  const prov=document.getElementById('settings-ai-provider');
+  if(prov)prov.value=getAIProvider();
   const inp=document.getElementById('settings-ai-key');
   if(inp)inp.value=getAIKey();
+  const inpA=document.getElementById('settings-ai-key-anthropic');
+  if(inpA)inpA.value=getAnthropicKey();
   const tone=document.getElementById('settings-ai-tone');
   if(tone)tone.value=getAITone();
   const detail=document.getElementById('settings-ai-detail');
   if(detail)detail.value=getAIDetail();
   const model=document.getElementById('settings-ai-model');
   if(model)model.value=getAIModel();
+  const modelA=document.getElementById('settings-ai-model-anthropic');
+  if(modelA)modelA.value=getAnthropicModel();
+  _applyAIProviderUI();
   const sk=document.getElementById('settings-skylink-key');
   if(sk&&typeof getSkylinkKey==='function')sk.value=getSkylinkKey();
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
@@ -58,7 +87,7 @@ function toggleAIChat(){
 // ♻️ refresh button in their place. When a key IS present the original
 // full chat UI is restored.
 function _applyAIPanelMode(){
-  const hasKey=(typeof getAIKey==='function')?!!getAIKey():false;
+  const hasKey=(typeof getActiveAIKey==='function')?!!getActiveAIKey():false;
   const title=document.getElementById('ai-header-title');
   const icon=document.getElementById('ai-header-icon');
   const refreshBtn=document.getElementById('ai-refresh-btn');
@@ -747,15 +776,56 @@ RULES:
 - If all conditions are calm and clear, a 3-4 sentence summary is perfectly fine — don't pad`;
 }
 
+// Provider-agnostic single completion. Returns {ok,status,text,errMsg}; throws
+// only on network error / abort so the caller's retry loop can handle it. The
+// system prompt is passed separately because OpenAI takes it as the first
+// message while Anthropic takes it as a top-level `system` param.
+async function _aiComplete(history,sysPrompt,opts){
+  const o=opts||{};
+  const maxTokens=o.maxTokens||2500;
+  const temperature=(typeof o.temperature==='number')?o.temperature:0.4;
+  const signal=o.signal;
+  const provider=getAIProvider();
+  const key=getActiveAIKey();
+  const model=getActiveAIModel();
+  const turns=(history||[]).filter(m=>m&&(m.role==='user'||m.role==='assistant'));
+  if(provider==='anthropic'){
+    // Anthropic requires the messages array to START with a user turn; after
+    // trimming to the last N, drop any leading assistant turns.
+    let msgs=turns;
+    while(msgs.length&&msgs[0].role!=='user')msgs=msgs.slice(1);
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model,max_tokens:maxTokens,temperature,system:sysPrompt,messages:msgs}),
+      signal
+    });
+    if(!res.ok){const err=await res.json().catch(()=>({}));return{ok:false,status:res.status,text:null,errMsg:(err&&err.error&&err.error.message)||('API error '+res.status)};}
+    const data=await res.json();
+    const block=Array.isArray(data.content)?data.content.find(b=>b&&b.type==='text'):null;
+    return{ok:true,status:res.status,text:(block&&block.text)||'',errMsg:''};
+  }
+  // OpenAI (default): system is the first message.
+  const msgs=[{role:'system',content:sysPrompt},...turns];
+  const res=await fetch('https://api.openai.com/v1/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+    body:JSON.stringify({model,messages:msgs,max_tokens:maxTokens,temperature}),
+    signal
+  });
+  if(!res.ok){const err=await res.json().catch(()=>({}));return{ok:false,status:res.status,text:null,errMsg:(err&&err.error&&err.error.message)||('API error '+res.status)};}
+  const data=await res.json();
+  return{ok:true,status:res.status,text:(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'',errMsg:''};
+}
 async function sendAIChat(){
   const inp=document.getElementById('ai-chat-input');if(!inp)return;
   const msg=inp.value.trim();if(!msg)return;
   inp.value='';
 
-  const key=getAIKey();
+  const key=getActiveAIKey();
   if(!key){
     addAIMsg('user',msg);
-    addAIMsg('error','No API key configured. Add your OpenAI API key in Settings (gear icon) under AI Weather Assistant, or tap "Full briefing" to get a deterministic on-device briefing instead.');
+    addAIMsg('error','No API key configured. Add your '+getAIProviderLabel()+' API key in Settings (gear icon) under AI Weather Assistant, or tap "Full briefing" to get a deterministic on-device briefing instead.');
     return;
   }
 
@@ -775,7 +845,7 @@ async function sendAIChat(){
   const MAX_ATTEMPTS=3;
   const PER_ATTEMPT_MS=60000;
   const sysPrompt=getAISystemPrompt();
-  const messages=[{role:'system',content:sysPrompt},..._aiChatHistory.slice(-10)];
+  const history=_aiChatHistory.slice(-10);
   let attempt=0;
   let lastErrMsg='';
   while(attempt<MAX_ATTEMPTS){
@@ -784,32 +854,27 @@ async function sendAIChat(){
     const ctrl=new AbortController();
     const to=setTimeout(()=>ctrl.abort(),PER_ATTEMPT_MS);
     try{
-      const res=await fetch('https://api.openai.com/v1/chat/completions',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-        body:JSON.stringify({model:getAIModel(),messages,max_tokens:2500,temperature:0.4}),
-        signal:ctrl.signal
-      });
+      const result=await _aiComplete(history,sysPrompt,{maxTokens:2500,temperature:0.4,signal:ctrl.signal});
       clearTimeout(to);
       _stopAICountdown();
 
-      if(!res.ok){
-        const err=await res.json().catch(()=>({}));
-        const errMsg=err.error?.message||`API error ${res.status}`;
+      if(!result.ok){
+        const errMsg=result.errMsg;
         lastErrMsg=errMsg;
+        const provLabel=getAIProviderLabel();
+        const billUrl=getAIProvider()==='anthropic'?'console.anthropic.com':'platform.openai.com';
         // Non-retryable: don't burn attempts on errors that won't fix themselves.
-        if(res.status===401){hideAITyping();addAIMsg('error','Invalid API key. Please check your OpenAI API key in Settings.');return}
-        if(res.status===429){hideAITyping();addAIMsg('error','Rate limit exceeded. Please wait a moment and try again.');return}
-        if(res.status===402||(res.status===400&&errMsg.includes('quota'))){hideAITyping();addAIMsg('error','API quota exceeded. Check your OpenAI billing at platform.openai.com.');return}
-        // 5xx (server error) and other transient codes — retry if we have attempts left.
-        if(res.status>=500&&attempt<MAX_ATTEMPTS){console.log(`AI retry: HTTP ${res.status} on attempt ${attempt}`);continue}
+        if(result.status===401){hideAITyping();addAIMsg('error','Invalid API key. Please check your '+provLabel+' API key in Settings.');return}
+        if(result.status===429){hideAITyping();addAIMsg('error','Rate limit exceeded. Please wait a moment and try again.');return}
+        if(result.status===402||(result.status===400&&errMsg.includes('quota'))){hideAITyping();addAIMsg('error','API quota exceeded. Check your '+provLabel+' billing at '+billUrl+'.');return}
+        // 5xx server errors AND Anthropic 529 (overloaded, ≥500) — retry if attempts remain.
+        if(result.status>=500&&attempt<MAX_ATTEMPTS){console.log(`AI retry: HTTP ${result.status} on attempt ${attempt}`);continue}
         hideAITyping();
         addAIMsg('error','API error: '+errMsg);
         return;
       }
 
-      const data=await res.json();
-      const reply=data.choices?.[0]?.message?.content||'No response received.';
+      const reply=result.text||'No response received.';
       _aiChatHistory.push({role:'assistant',content:reply});
       hideAITyping();
       addAIMsg('assistant',reply);

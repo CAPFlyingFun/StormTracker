@@ -439,7 +439,7 @@
 // ----- Briefing Mode (System vs AI) -----
 function getBriefingMode(){
   const m=localStorage.getItem('st_briefingMode');
-  const hasKey=(typeof getAIKey==='function')?!!getAIKey():false;
+  const hasKey=(typeof getActiveAIKey==='function')?!!getActiveAIKey():false;
   if(m==='ai'&&hasKey)return 'ai';
   return 'system';
 }
@@ -452,7 +452,7 @@ function saveBriefingMode(v){
 function syncBriefingModeUI(){
   const wrap=document.getElementById('settings-briefing-mode-wrap');
   if(!wrap)return;
-  const hasKey=(typeof getAIKey==='function')?!!getAIKey():false;
+  const hasKey=(typeof getActiveAIKey==='function')?!!getActiveAIKey():false;
   const pref=getBriefingModePref();
   const btns=wrap.querySelectorAll('button[data-mode]');
   btns.forEach(b=>{
@@ -465,13 +465,13 @@ function syncBriefingModeUI(){
     b.style.background=active?(m==='ai'?'rgba(168,85,247,0.18)':'rgba(0,229,255,0.18)'):'rgba(255,255,255,0.04)';
     b.style.borderColor=active?(m==='ai'?'#a855f7':'#00e5ff'):'var(--border-subtle)';
     b.style.color=active?(m==='ai'?'#a855f7':'#00e5ff'):'var(--text-muted)';
-    b.title=aiDisabled?'Add an OpenAI API key below to enable AI Briefing':'';
+    b.title=aiDisabled?'Add an AI API key below to enable AI Briefing':'';
   });
   const hint=document.getElementById('briefing-mode-hint');
   if(hint){
     hint.textContent=hasKey
-      ? 'System Briefing is instant and on-device. AI Briefing uses OpenAI for natural-language reasoning.'
-      : 'System Briefing runs on-device with no API key required. Add an OpenAI key below to unlock AI Briefing.';
+      ? 'System Briefing is instant and on-device. AI Briefing uses your selected AI provider for natural-language reasoning.'
+      : 'System Briefing runs on-device with no API key required. Add an AI key below to unlock AI Briefing.';
   }
 }
 
@@ -480,14 +480,14 @@ function syncBriefingModeUI(){
 // silently falls back to System and prepends a visible notice.
 async function runFullBriefing(){
   const pref=getBriefingModePref();
-  const hasKey=(typeof getAIKey==='function')?!!getAIKey():false;
+  const hasKey=(typeof getActiveAIKey==='function')?!!getActiveAIKey():false;
   const effective=(pref==='ai'&&hasKey)?'ai':'system';
   const fellBack=(pref==='ai'&&!hasKey);
   if(effective==='system'){
     if(typeof addAIMsg==='function')addAIMsg('user','Full weather briefing');
     let reply=(typeof buildBriefing==='function')?buildBriefing():'Briefing engine not loaded.';
     if(fellBack){
-      reply='[!yellow]Using System Briefing — no OpenAI API key is configured.[/!] Add a key in Settings to enable AI Briefing.\n\n'+reply;
+      reply='[!yellow]Using System Briefing — no AI API key is configured.[/!] Add a key in Settings to enable AI Briefing.\n\n'+reply;
     }else{
       reply='[!cyan]System Briefing (deterministic, on-device).[/!]\n\n'+reply;
     }

@@ -152,7 +152,12 @@ function _aiTone() { try { return (typeof getAITone === 'function') ? getAITone(
 // AI Assistant key (st_aiKey). Paste a separate key in the push box only if you
 // want background alerts billed to a different key than the in-app assistant.
 function _getPushAiKeyOwn() { try { return (localStorage.getItem('st_pushAiKey') || '').trim(); } catch (e) { return ''; } }
-function _getPushAiKey() { try { return _getPushAiKeyOwn() || ((typeof getAIKey === 'function') ? getAIKey().trim() : ''); } catch (e) { return ''; } }
+function _getPushAiKey() { try { return _getPushAiKeyOwn() || ((typeof getActiveAIKey === 'function') ? getActiveAIKey().trim() : ''); } catch (e) { return ''; } }
+// Which provider the background alert server should use to write this device's
+// digests. Mirrors the in-app AI provider selection (OpenAI default). There is
+// ONE push key override (st_pushAiKey); if set, it MUST match this provider.
+function _pushAiProvider() { try { return (typeof getAIProvider === 'function') ? getAIProvider() : 'openai'; } catch (e) { return 'openai'; } }
+function _pushAiProviderLabel() { return _pushAiProvider() === 'anthropic' ? 'Claude' : 'OpenAI'; }
 // "Only notify on changes" (edge-triggered cadence), opt-in, default OFF. Mirrors
 // changesCfgOf() in scanner/scan.js — it only affects the background scanner's
 // SEND TIMING (notify when the situation changes; severe/warnings/lightning still
@@ -387,7 +392,7 @@ async function enablePushAlerts(silent, opts) {
         bands: _pushBands(),
         tropical: { on: _tropOn(th), radius: _pushTropRadius(), everyH: _tropEveryH(th) },
         area: { on: _areaCfg(th).on },
-        ai: _aiCfg(th).on ? { on: true, tone: _aiTone(), key: _getPushAiKey() || undefined } : false,
+        ai: _aiCfg(th).on ? { on: true, tone: _aiTone(), provider: _pushAiProvider(), key: _getPushAiKey() || undefined } : false,
         changes: _changesCfg(th).on ? { on: true } : false,
         tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; } })(),
         h24: (typeof _is24h === 'function') ? _is24h() : false,
@@ -549,7 +554,7 @@ function setPushAi(on) {
   const th = _getPushThresholds();
   th.ai = { on: !!on };
   _savePushThresholds(th);
-  if (on && !_getPushAiKey()) toast('🔑 Add an OpenAI key (here or in AI Assistant) to activate AI alerts');
+  if (on && !_getPushAiKey()) toast('🔑 Add a ' + _pushAiProviderLabel() + ' key (here or in AI Assistant) to activate AI alerts');
   _afterPushCfg();
 }
 // Save (or clear) the user's personal OpenAI key. Fires on blur of the key field.
@@ -558,7 +563,7 @@ function setPushAi(on) {
 function setPushAiKey(v) {
   const k = (v || '').trim();
   try { if (k) localStorage.setItem('st_pushAiKey', k); else localStorage.removeItem('st_pushAiKey'); } catch (e) {}
-  toast(k ? '🔑 OpenAI key saved on this device' : '🔑 OpenAI key removed');
+  toast(k ? '🔑 ' + _pushAiProviderLabel() + ' key saved on this device' : '🔑 ' + _pushAiProviderLabel() + ' key removed');
   _afterPushCfg();
 }
 function togglePushAiKeyVis() {
@@ -577,14 +582,20 @@ async function testPushAiKey() {
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 12000);
-    const r = await fetch('https://api.openai.com/v1/models', { headers: { 'Authorization': 'Bearer ' + k }, signal: ctrl.signal });
+    const prov = _pushAiProvider();
+    let r;
+    if (prov === 'anthropic') {
+      r = await fetch('https://api.anthropic.com/v1/models', { headers: { 'x-api-key': k, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, signal: ctrl.signal });
+    } else {
+      r = await fetch('https://api.openai.com/v1/models', { headers: { 'Authorization': 'Bearer ' + k }, signal: ctrl.signal });
+    }
     clearTimeout(to);
     if (r.ok) setMsg('✓ Key works', 'var(--accent-green)');
     else if (r.status === 401) setMsg('✗ Key was rejected — check it', 'var(--accent-red)');
     else if (r.status === 429) setMsg('✗ No credit / rate-limited — add billing', 'var(--accent-red)');
-    else setMsg('✗ OpenAI error ' + r.status, 'var(--accent-red)');
+    else setMsg('✗ ' + _pushAiProviderLabel() + ' error ' + r.status, 'var(--accent-red)');
   } catch (e) {
-    setMsg('✗ Could not reach OpenAI', 'var(--accent-red)');
+    setMsg('✗ Could not reach ' + _pushAiProviderLabel(), 'var(--accent-red)');
   }
 }
 function setPushChangesOnly(on) {
@@ -674,20 +685,20 @@ function renderPushAlertSettings() {
     <div class="setting-row-6"><span class="text-xxs-muted">AI-written alerts</span>
       <button class="small-btn" onclick="setPushAi(${!aiOn})" style="${aiOn ? 'color:var(--accent-green);border-color:var(--accent-green)' : 'color:var(--text-muted)'}">${aiOn ? 'ON' : 'OFF'}</button>
     </div>
-    <div class="setting-hint" style="font-size:0.7em;margin-top:2px"><b>AI-written alerts</b> rephrases each notification into one short, natural sentence. It uses <b>your own</b> OpenAI key — the same one as the AI Assistant by default — so it's billed to your account, not shared. Off by default; the most urgent threat always stays first, and if the AI is ever unavailable you still get the normal wording.</div>
+    <div class="setting-hint" style="font-size:0.7em;margin-top:2px"><b>AI-written alerts</b> rephrases each notification into one short, natural sentence. It uses <b>your own</b> ${_pushAiProviderLabel()} key — the same one as the AI Assistant by default — so it's billed to your account, not shared. Off by default; the most urgent threat always stays first, and if the AI is ever unavailable you still get the normal wording.</div>
     ${aiOn ? `
-    <div class="setting-row-6" style="align-items:center"><span class="text-xxs-muted">Your OpenAI key</span>
+    <div class="setting-row-6" style="align-items:center"><span class="text-xxs-muted">Your ${_pushAiProviderLabel()} key</span>
       <span style="display:flex;gap:4px;align-items:center;flex:1;justify-content:flex-end">
-        <input id="push-ai-key" type="password" value="${escHtml(_getPushAiKeyOwn())}" placeholder="sk-… (optional — reuses AI Assistant key)" autocomplete="off" autocapitalize="off" spellcheck="false" onchange="setPushAiKey(this.value)" style="flex:1;max-width:170px;background:var(--bg-input,#10151f);border:1px solid var(--border-subtle,#2a3343);color:var(--text-main,#e6edf3);border-radius:6px;padding:3px 7px;font-size:0.82em;font-family:var(--font-mono)">
+        <input id="push-ai-key" type="password" value="${escHtml(_getPushAiKeyOwn())}" placeholder="${_pushAiProvider()==='anthropic'?'sk-ant-… (optional — reuses AI Assistant key)':'sk-… (optional — reuses AI Assistant key)'}" autocomplete="off" autocapitalize="off" spellcheck="false" onchange="setPushAiKey(this.value)" style="flex:1;max-width:170px;background:var(--bg-input,#10151f);border:1px solid var(--border-subtle,#2a3343);color:var(--text-main,#e6edf3);border-radius:6px;padding:3px 7px;font-size:0.82em;font-family:var(--font-mono)">
         <button class="small-btn" onclick="togglePushAiKeyVis()" title="Show/hide" style="padding:2px 7px">👁</button>
       </span>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
       <button class="small-btn" onclick="testPushAiKey()" style="padding:2px 9px;font-size:0.82em">Test key</button>
-      <a href="setup-guide.html?v=629" target="_blank" rel="noopener" style="font-size:0.78em;color:var(--accent-cyan)">How to get a key →</a>
+      <a href="${_pushAiProvider()==='anthropic'?'https://console.anthropic.com/settings/keys':'setup-guide.html?v=629'}" target="_blank" rel="noopener" style="font-size:0.78em;color:var(--accent-cyan)">How to get a key →</a>
       <span id="push-ai-key-status" style="font-size:0.76em;color:var(--text-muted)"></span>
     </div>
-    <div class="setting-hint" style="font-size:0.7em;margin-top:3px">${_getPushAiKeyOwn() ? 'Using the key above for background alerts. ' : ((typeof getAIKey==='function'&&getAIKey().trim()) ? '✓ Leave this blank to reuse your <b>AI Assistant</b> key automatically, or paste a different key to bill background alerts separately. ' : '')}Your key is stored on this device and on the alert server (encrypted) only so it can write your notifications while the app is closed, and you're billed on your own OpenAI account. ${_getPushAiKey() ? '' : '<b style="color:var(--accent-yellow)">Add a key here or in AI Assistant to activate AI alerts.</b>'}</div>` : ''}
+    <div class="setting-hint" style="font-size:0.7em;margin-top:3px">${_getPushAiKeyOwn() ? 'Using the key above for background alerts. ' : ((typeof getActiveAIKey==='function'&&getActiveAIKey().trim()) ? '✓ Leave this blank to reuse your <b>AI Assistant</b> key automatically, or paste a different key to bill background alerts separately. ' : '')}Your key is stored on this device and on the alert server (encrypted) only so it can write your notifications while the app is closed, and you're billed on your own ${_pushAiProviderLabel()} account. ${_getPushAiKey() ? '' : '<b style="color:var(--accent-yellow)">Add a key here or in AI Assistant to activate AI alerts.</b>'}</div>` : ''}
     <div class="setting-row-6"><span class="text-xxs-muted">Only notify on changes</span>
       <button class="small-btn" onclick="setPushChangesOnly(${!changesOnly})" style="${changesOnly ? 'color:var(--accent-green);border-color:var(--accent-green)' : 'color:var(--text-muted)'}">${changesOnly ? 'ON' : 'OFF'}</button>
     </div>

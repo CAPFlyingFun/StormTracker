@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v5.35</title>
+<title>StormTracker v5.36</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
-<link rel="stylesheet" href="css/style.css?v=634">
+<link rel="stylesheet" href="css/style.css?v=635">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -28,7 +28,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.35</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.36</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -284,20 +284,59 @@
         <div style="font-size:0.8em;font-weight:600;color:#00e5ff;margin-bottom:8px">📋 Briefing Mode</div>
         <div id="settings-briefing-mode-wrap" style="display:flex;gap:6px;margin-bottom:6px">
           <button type="button" data-mode="system" onclick="saveBriefingMode('system')" style="flex:1;padding:6px 10px;font-size:0.75em;font-weight:600;border-radius:8px;border:1px solid var(--border-subtle);background:rgba(0,229,255,0.18);color:#00e5ff;cursor:pointer">System Briefing<br><span style="font-size:0.85em;font-weight:400;opacity:0.8">(default · on-device)</span></button>
-          <button type="button" data-mode="ai" onclick="saveBriefingMode('ai')" style="flex:1;padding:6px 10px;font-size:0.75em;font-weight:600;border-radius:8px;border:1px solid var(--border-subtle);background:rgba(255,255,255,0.04);color:var(--text-muted);cursor:pointer">AI Briefing<br><span style="font-size:0.85em;font-weight:400;opacity:0.8">(OpenAI key required)</span></button>
+          <button type="button" data-mode="ai" onclick="saveBriefingMode('ai')" style="flex:1;padding:6px 10px;font-size:0.75em;font-weight:600;border-radius:8px;border:1px solid var(--border-subtle);background:rgba(255,255,255,0.04);color:var(--text-muted);cursor:pointer">AI Briefing<br><span style="font-size:0.85em;font-weight:400;opacity:0.8">(AI key required)</span></button>
         </div>
-        <div class="setting-hint" id="briefing-mode-hint">System Briefing runs on-device with no API key required. Add an OpenAI key below to unlock AI Briefing.</div>
+        <div class="setting-hint" id="briefing-mode-hint">System Briefing runs on-device with no API key required. Add an AI key below to unlock AI Briefing.</div>
       </div>
       <div class="setting-sep">
         <div style="font-size:0.8em;font-weight:600;color:#a855f7;margin-bottom:8px">🤖 AI Weather Assistant</div>
         <div class="setting-row-6">
-          <span class="text-xxs-muted">OpenAI API Key</span>
-          <div style="display:flex;gap:4px;align-items:center">
-            <input type="password" id="settings-ai-key" placeholder="sk-..." style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px;width:130px;font-family:var(--font-mono)" onchange="saveAIKey(this.value)">
-            <button onclick="toggleAIKeyVis()" style="font-size:0.7em;padding:3px 6px;background:rgba(255,255,255,0.05);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer;color:var(--text-muted)">👁</button>
-          </div>
+          <span class="text-xxs-muted">AI Provider</span>
+          <select id="settings-ai-provider" onchange="saveAIProvider(this.value)" class="small-btn">
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="anthropic">Claude (Anthropic)</option>
+          </select>
         </div>
-        <div class="setting-hint">Stored locally on your device only — never sent anywhere except OpenAI</div>
+        <div id="settings-ai-openai-wrap">
+          <div class="setting-row-6">
+            <span class="text-xxs-muted">OpenAI API Key</span>
+            <div style="display:flex;gap:4px;align-items:center">
+              <input type="password" id="settings-ai-key" placeholder="sk-..." style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px;width:130px;font-family:var(--font-mono)" onchange="saveAIKey(this.value)">
+              <button onclick="toggleAIKeyVis('settings-ai-key')" style="font-size:0.7em;padding:3px 6px;background:rgba(255,255,255,0.05);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer;color:var(--text-muted)">👁</button>
+            </div>
+          </div>
+          <div class="setting-hint">Stored locally on your device only — never sent anywhere except OpenAI</div>
+          <div class="setting-row-6">
+            <span class="text-xxs-muted">OpenAI Model</span>
+            <select id="settings-ai-model" onchange="saveAIModel(this.value)" class="small-btn">
+              <option value="gpt-4o-mini">GPT-4o Mini</option>
+              <option value="gpt-4o">GPT-4o</option>
+              <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+              <option value="gpt-4.1">GPT-4.1</option>
+            </select>
+          </div>
+          <div class="setting-hint">4o Mini is fastest/cheapest. Full 4o and 4.1 give deeper meteorological analysis.</div>
+        </div>
+        <div id="settings-ai-anthropic-wrap" style="display:none">
+          <div class="setting-row-6">
+            <span class="text-xxs-muted">Claude API Key</span>
+            <div style="display:flex;gap:4px;align-items:center">
+              <input type="password" id="settings-ai-key-anthropic" placeholder="sk-ant-..." style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px;width:130px;font-family:var(--font-mono)" onchange="saveAnthropicKey(this.value)">
+              <button onclick="toggleAIKeyVis('settings-ai-key-anthropic')" style="font-size:0.7em;padding:3px 6px;background:rgba(255,255,255,0.05);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer;color:var(--text-muted)">👁</button>
+            </div>
+          </div>
+          <div class="setting-hint">Stored locally on your device only — never sent anywhere except Anthropic</div>
+          <div class="setting-row-6">
+            <span class="text-xxs-muted">Claude Model</span>
+            <select id="settings-ai-model-anthropic" onchange="saveAnthropicModel(this.value)" class="small-btn">
+              <option value="claude-haiku-4-5">Claude Haiku 4.5 (fast)</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+            </select>
+          </div>
+          <div class="setting-hint">Haiku is fastest/cheapest. Sonnet and Opus give deeper meteorological analysis.</div>
+        </div>
         <div class="setting-row-6">
           <span class="text-xxs-muted">AI Tone</span>
           <select id="settings-ai-tone" onchange="saveAITone(this.value)" class="small-btn">
@@ -314,16 +353,6 @@
             <option value="technical">Technical</option>
           </select>
         </div>
-        <div class="setting-row-6">
-          <span class="text-xxs-muted">AI Model</span>
-          <select id="settings-ai-model" onchange="saveAIModel(this.value)" class="small-btn">
-            <option value="gpt-4o-mini">GPT-4o Mini</option>
-            <option value="gpt-4o">GPT-4o</option>
-            <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-            <option value="gpt-4.1">GPT-4.1</option>
-          </select>
-        </div>
-        <div class="setting-hint">4o Mini is fastest/cheapest. Full 4o and 4.1 give deeper meteorological analysis.</div>
       </div>
       <div class="setting-sep">
         <div style="font-size:0.8em;font-weight:600;color:#38bdf8;margin-bottom:8px">✈️ Skylink (Aviation Winds Aloft)</div>
@@ -621,25 +650,25 @@
   </div>
 </div>
 
-<script src="js/core.js?v=634"></script>
-<script src="js/gauges.js?v=634"></script>
-<script src="js/icons.js?v=634"></script>
-<script src="js/geo.js?v=634"></script>
-<script src="js/settings.js?v=634"></script>
-<script src="js/thresholds.js?v=634"></script>
-<script src="js/weather.js?v=634"></script>
-<script src="js/radar.js?v=634"></script>
-<script src="js/storms.js?v=634"></script>
-<script src="js/station.js?v=634"></script>
-<script src="js/alerts.js?v=634"></script>
-<script src="js/briefingEngine.js?v=634"></script>
-<script src="js/ai.js?v=634"></script>
-<script src="js/push.js?v=634"></script>
-<script src="js/init.js?v=634"></script>
+<script src="js/core.js?v=635"></script>
+<script src="js/gauges.js?v=635"></script>
+<script src="js/icons.js?v=635"></script>
+<script src="js/geo.js?v=635"></script>
+<script src="js/settings.js?v=635"></script>
+<script src="js/thresholds.js?v=635"></script>
+<script src="js/weather.js?v=635"></script>
+<script src="js/radar.js?v=635"></script>
+<script src="js/storms.js?v=635"></script>
+<script src="js/station.js?v=635"></script>
+<script src="js/alerts.js?v=635"></script>
+<script src="js/briefingEngine.js?v=635"></script>
+<script src="js/ai.js?v=635"></script>
+<script src="js/push.js?v=635"></script>
+<script src="js/init.js?v=635"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
-<script src="js/view3d.js?v=634"></script>
+<script src="js/view3d.js?v=635"></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -649,7 +678,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=634')
+    navigator.serviceWorker.register('sw.js?v=635')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

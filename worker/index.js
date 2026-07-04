@@ -174,21 +174,24 @@ export default {
       if (typeof b.lat !== 'number' || typeof b.lon !== 'number') {
         return json({ error: 'lat/lon required' }, 400);
       }
-      // AI-written alerts: the client sends its OWN OpenAI key (plaintext over
-      // HTTPS) inside thresholds.ai.key. Encrypt it at rest before storing, and
-      // never let it leave this Worker (it is stripped from /subscriptions and
-      // only ever decrypted here in /ai-digest). If AI is off or no key was
-      // supplied, no key is stored.
+      // AI-written alerts: the client sends its OWN provider key (OpenAI or
+      // Anthropic, plaintext over HTTPS) inside thresholds.ai.key. Encrypt it at
+      // rest before storing, and never let it leave this Worker (it is stripped
+      // from /subscriptions and only ever decrypted here in /ai-digest). If AI is
+      // off or no key was supplied, no key is stored.
       const thObj = (b.thresholds && typeof b.thresholds === 'object') ? b.thresholds : {};
       if (thObj.ai && typeof thObj.ai === 'object') {
         const tone = String(thObj.ai.tone || 'professional');
+        // Which AI provider writes this user's digests. Whitelisted; anything
+        // unknown (or a legacy sub with no provider) falls back to OpenAI.
+        const provider = thObj.ai.provider === 'anthropic' ? 'anthropic' : 'openai';
         const rawKey = (typeof thObj.ai.key === 'string') ? thObj.ai.key.trim().slice(0, 500) : '';
         if (thObj.ai.on && rawKey) {
           const enc = await encAiKey(env, rawKey);
-          thObj.ai = enc ? { on: true, tone, key: enc } : { on: true, tone };
+          thObj.ai = enc ? { on: true, tone, provider, key: enc } : { on: true, tone, provider };
         } else {
-          // AI on without a key, or AI off: keep the flag/tone but store no key.
-          thObj.ai = thObj.ai.on ? { on: true, tone } : { on: false };
+          // AI on without a key, or AI off: keep the flag/tone/provider but store no key.
+          thObj.ai = thObj.ai.on ? { on: true, tone, provider } : { on: false };
         }
       }
       const thresholds = JSON.stringify(thObj || {});
@@ -306,6 +309,8 @@ export default {
       const aiOn = !!(thAi && typeof thAi === 'object' && thAi.on === true);
       const userKey = (aiOn && typeof thAi.key === 'string') ? await decAiKey(env, thAi.key) : null;
       if (!userKey) return json({ error: 'no user key' }, 503);
+      // Which provider this user picked. Legacy subs (no provider) => OpenAI.
+      const provider = (thAi && thAi.provider === 'anthropic') ? 'anthropic' : 'openai';
       const lines = Array.isArray(b.lines) ? b.lines.filter(x => typeof x === 'string' && x.trim()).slice(0, 12) : [];
       if (!lines.length) return json({ error: 'no lines' }, 400);
       const place = String(b.place || '').slice(0, 80);
@@ -318,27 +323,55 @@ Rules:
 - Lead with the most dangerous/urgent item (tornado or severe warning, lightning, inbound storm) first.
 - NEVER invent facts, numbers, distances, directions, or times that are not in the facts. Never drop a life-safety warning.
 - No greeting and no sign-off. Skip generic "stay safe" filler unless the tone clearly calls for a brief nudge.`;
+      const userMsg = `Location: ${place || 'your area'}\nFacts:\n${facts}`;
       try {
         const ctrl = new AbortController();
         const to = setTimeout(() => ctrl.abort(), 9000);
-        const r = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${userKey}`, 'Content-Type': 'application/json' },
-          signal: ctrl.signal,
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            temperature: 0.5,
-            max_tokens: 160,
-            messages: [
-              { role: 'system', content: sys },
-              { role: 'user', content: `Location: ${place || 'your area'}\nFacts:\n${facts}` },
-            ],
-          }),
-        });
-        clearTimeout(to);
-        if (!r.ok) { const t = (await r.text()).slice(0, 160); return json({ error: 'openai ' + r.status, detail: t }, 502); }
-        const d = await r.json();
-        let text = ((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '').trim();
+        let text = '';
+        if (provider === 'anthropic') {
+          // Anthropic Messages API: system is a TOP-LEVEL param (not a message),
+          // max_tokens is required, and the reply is content[].text blocks.
+          const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'x-api-key': userKey,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json',
+            },
+            signal: ctrl.signal,
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5',
+              max_tokens: 160,
+              temperature: 0.5,
+              system: sys,
+              messages: [{ role: 'user', content: userMsg }],
+            }),
+          });
+          clearTimeout(to);
+          if (!r.ok) { const t = (await r.text()).slice(0, 160); return json({ error: 'anthropic ' + r.status, detail: t }, 502); }
+          const d = await r.json();
+          const block = (d && Array.isArray(d.content)) ? d.content.find(x => x && x.type === 'text') : null;
+          text = ((block && block.text) || '').trim();
+        } else {
+          const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${userKey}`, 'Content-Type': 'application/json' },
+            signal: ctrl.signal,
+            body: JSON.stringify({
+              model: 'gpt-4o-mini',
+              temperature: 0.5,
+              max_tokens: 160,
+              messages: [
+                { role: 'system', content: sys },
+                { role: 'user', content: userMsg },
+              ],
+            }),
+          });
+          clearTimeout(to);
+          if (!r.ok) { const t = (await r.text()).slice(0, 160); return json({ error: 'openai ' + r.status, detail: t }, 502); }
+          const d = await r.json();
+          text = ((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '').trim();
+        }
         text = text.replace(/^["']+|["']+$/g, '').slice(0, 300).trim();
         if (!text) return json({ error: 'empty' }, 502);
         return json({ text });
@@ -418,7 +451,8 @@ Rules:
         // key itself only ever leaves D1 inside /ai-digest, here in this Worker.
         if (th && th.ai && typeof th.ai === 'object') {
           const hasKey = typeof th.ai.key === 'string' && th.ai.key.length > 0;
-          th.ai = { on: th.ai.on === true, tone: th.ai.tone || 'professional', hasKey };
+          const provider = th.ai.provider === 'anthropic' ? 'anthropic' : 'openai';
+          th.ai = { on: th.ai.on === true, tone: th.ai.tone || 'professional', provider, hasKey };
         }
         return {
           endpoint: r.endpoint,

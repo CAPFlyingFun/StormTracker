@@ -3,6 +3,17 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.46
+
+  **Refactor (Phase 3 of scan-pipeline consolidation): one post-scan commit pipeline.**
+
+  - New `commitScanResults(rawPoints, opts)` in `docs/js/radar.js` next to the engine — the single place that commits scan results into app state and notifies every consumer (storm cards, badges, mini-sonar, hero zone, rain clock, ISO grid, map markers/zones, threat ticker). All four scan paths route through it; caller-specific UI (toasts, overlays, SPC/NWS polygons, view circles, setView, path arrows, tiered hi-res, cell alerts, winds retry) stays in the callers.
+  - Flags cover the per-path differences: `fullDetect` (hook echoes + NWS-warning rotation, home scan only), `hiRes` (spacing-filter mode + `S._lastScanWasHiRes`), `sonarZoomReset` (hi-res 15 mi sonar snap), `abortCheck` (home scan's post-plot location-change bail), and `spliceRadiusMi`+`center` (overhead poll's 3 mi splice-merge — hero + rain clock refresh only, no storm rebuild).
+  - Wrappers now consume the engine's `radarAgeMs` instead of recomputing it (Phase 2 follow-up).
+  - Deleted an unreachable `tilePath` assignment in the engine's RainViewer else-branch (flagged in the Phase 2 review).
+  - No behavior change intended; architect review verified parity path-by-path (abort semantics, hi-res reorder inertness, spacing-filter falsy-arg equivalence); live e2e passed (Pensacola home scan + map Scan View, 81 cells, zero JS errors).
+  - Cache: `?v=645`, SW `stormtracker-v645`.
+
   ## v5.45
 
   **Refactor (Phase 2 of scan-pipeline consolidation): one browser scan engine.**

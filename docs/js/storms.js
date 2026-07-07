@@ -1290,28 +1290,19 @@ async function scanRadarForStorms(){
     const rawPoints=result.points;
     console.log('[SCAN] src='+S.radarSource+' zoom='+result.zoom+' rawPoints='+rawPoints.length);
 
-    S._rawScanPts=rawPoints;
-    _clusterSonarPoints();
-    S.storms=spacingFilter(rawPoints).sort((a,b)=>a.distance-b.distance);if(typeof bumpStormScanId==='function')bumpStormScanId();
-    console.log('[SCAN] after spacingFilter: '+S.storms.length+' storms');
-    detectHookEchoes(rawPoints, S.storms);
-    detectWarningRotation(S.storms); // v4.82: rotation display gated on active NWS Tornado Warning
-    S.scanTime=Date.now();S.lastScanMs=Date.now();S._lastScanWasHiRes=false;
-    S._radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad):RADAR_LATENCY_MS;
-    computeTopStorms();
-    recordScanSnapshot();
-
+    // v5.46: unified commit pipeline (radar.js) — state + consumer updates in
+    // ONE place; only the storms-scan extras (polygons, boot step, tiered
+    // hi-res, etc.) remain below.
+    const committed=await commitScanResults(rawPoints,{
+      useNexrad,
+      radarAgeMs:result.radarAgeMs,
+      fullDetect:true,
+      plotLabel:n=>`Plotting ${n} storm points...`,
+      abortCheck:()=>reqId===S._locReqId
+    });
+    if(!committed){hideScanOverlay();return}
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
-    scanStep(3,`Plotting ${S.storms.length} storm points...`);
-    await new Promise(r=>setTimeout(r,300));
-    if(reqId!==S._locReqId){hideScanOverlay();return}
-    renderStorms();updateStormBadges();drawMiniSonar();
-    if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
-    if(typeof refreshRainClock==='function')refreshRainClock(true);
-    if(typeof ISO!=='undefined'&&ISO.open){ISO._grid=buildTerrainGrid();ISO._dirty=true;}
-    if(S.map){plotStormMarkers(S.map);if(rawPoints.length>0){autoActivateZones()}else{clearStormZones();if(S.radarLayer&&!S.map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(S.map)}catch(e){}}}
     if(S.map){plotSPCWatchPolygons(S.map);plotNWSWarningPolygons(S.map);plotSPCReports(S.map);plotNHCTracks(S.map)}
-    updateThreatTicker();
     hideScanOverlay();
     toast(`${S.storms.length} cell${S.storms.length!==1?'s':''} found (${srcLabel})`);
     if(typeof _bootStepDone==='function')_bootStepDone('scan',`Radar scan: ${S.storms.length} cell${S.storms.length!==1?'s':''}`);

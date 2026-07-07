@@ -725,7 +725,6 @@ async function runRadarScan(opts){
     }else{
       if(!keepStaleTilePath)S._rvTilePath=null;
       if(!S._rvTilePath)return null;
-      tilePath=S._rvTilePath;
     }
   }
   const colorFn=useNexrad?nexradToDbz:rvToDbz;
@@ -743,6 +742,76 @@ async function runRadarScan(opts){
   const points=tileResults.flat();
   const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
   return{points,frames,tilePath,radarAgeMs,zoom};
+}
+
+// ---------------------------------------------------------------------------
+// v5.46: unified post-scan commit pipeline (Phase 3 of the scan consolidation).
+// ONE place that commits engine results into app state and notifies every
+// consumer (storm cards, badges, mini-sonar, hero zone, rain clock, ISO grid,
+// map markers/zones, threat ticker) so the four scan paths can't drift apart.
+// Caller-specific UI (toasts, overlays, SPC/NWS polygons, view circles,
+// setView, path arrows, tiered hi-res, cell alerts, winds retry) stays in the
+// callers, after this returns.
+//
+// opts:
+//   useNexrad       fallback radar-age bookkeeping when radarAgeMs is absent
+//   radarAgeMs      engine-computed age from runRadarScan (preferred)
+//   hiRes           hi-res spacingFilter flag + sets S._lastScanWasHiRes
+//   sonarZoomReset  hi-res: force sonar zoom to 15 mi before re-clustering
+//   fullDetect      full home scan only: hook echoes + NWS-warning rotation
+//   plotLabel       n => label for scanStep(3, ...); omitted = no scanStep
+//   abortCheck      called after the 300ms plot pause; return false to abort
+//                   (commit returns false; caller hides overlay and bails)
+//   map             Leaflet map for markers/zones (defaults to S.map)
+//   spliceRadiusMi + center {lat,lon}: overhead-poll mode — splice-merge the
+//                   new points into S._rawScanPts inside the radius and
+//                   refresh hero card + rain clock ONLY (no storm rebuild).
+// Returns true when committed (false only when abortCheck failed).
+async function commitScanResults(rawPoints,opts){
+  opts=opts||{};
+  // --- overhead-poll splice mode ---
+  if(opts.spliceRadiusMi!=null){
+    const c=opts.center;
+    const kept=(S._rawScanPts||[]).filter(p=>haversine(c.lat,c.lon,p.lat,p.lng)>opts.spliceRadiusMi);
+    S._rawScanPts=kept.concat(rawPoints);
+    if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
+    if(typeof refreshRainClock==='function')refreshRainClock(true);
+    return true;
+  }
+  // --- full commit ---
+  S._rawScanPts=rawPoints;
+  if(opts.sonarZoomReset){_sonarZoomMi=15;localStorage.setItem('st_sonarZoom',15);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_syncSonarZoomBtns();}
+  // NOTE: _clusterSonarPoints fires refreshRainClock(true) internally
+  // (gauges.js), so the rain clock briefly redraws with fresh raw points and
+  // the PRIOR storm list; the explicit refresh after the 300ms pause below
+  // converges it — same transient storms/view scans always had in v5.45.
+  _clusterSonarPoints();
+  S.storms=spacingFilter(rawPoints,!!opts.hiRes).sort((a,b)=>a.distance-b.distance);
+  if(typeof bumpStormScanId==='function')bumpStormScanId();
+  if(opts.fullDetect){
+    console.log('[SCAN] after spacingFilter: '+S.storms.length+' storms');
+    detectHookEchoes(rawPoints,S.storms);
+    detectWarningRotation(S.storms); // v4.82: rotation gated on active NWS Tornado Warning
+  }
+  S.scanTime=Date.now();S.lastScanMs=Date.now();S._lastScanWasHiRes=!!opts.hiRes;
+  S._radarAgeMs=(opts.radarAgeMs!=null)?opts.radarAgeMs:((typeof computeRadarAgeMs==='function')?computeRadarAgeMs(!!opts.useNexrad):RADAR_LATENCY_MS);
+  computeTopStorms();
+  recordScanSnapshot();
+  if(opts.plotLabel)scanStep(3,opts.plotLabel(S.storms.length));
+  await new Promise(r=>setTimeout(r,300));
+  if(opts.abortCheck&&!opts.abortCheck())return false;
+  renderStorms();updateStormBadges();drawMiniSonar();
+  if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
+  if(typeof refreshRainClock==='function')refreshRainClock(true);
+  if(typeof ISO!=='undefined'&&ISO.open){ISO._grid=buildTerrainGrid();ISO._dirty=true;}
+  const map=opts.map||S.map;
+  if(map){
+    plotStormMarkers(map);
+    if(rawPoints.length>0){autoActivateZones()}
+    else{clearStormZones();if(S.radarLayer&&!map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(map)}catch(e){}}
+  }
+  updateThreatTicker();
+  return true;
 }
 
 async function scanRadarForView(){
@@ -772,27 +841,15 @@ async function scanRadarForView(){
     if(!useNexrad)S.radarFrames=result.frames;
     const rawPoints=result.points;
 
-    S._rawScanPts=rawPoints;
-    _clusterSonarPoints();
-    S.storms=spacingFilter(rawPoints).sort((a,b)=>a.distance-b.distance);if(typeof bumpStormScanId==='function')bumpStormScanId();
-    S.scanTime=Date.now();S.lastScanMs=Date.now();S._lastScanWasHiRes=false;
-    S._radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad):RADAR_LATENCY_MS;
-    computeTopStorms();
-    recordScanSnapshot();
+    // v5.46: unified commit pipeline — view-scan extras (scan circle, toast)
+    // remain below. No abortCheck: view scans never had a post-plot recheck.
+    await commitScanResults(rawPoints,{
+      useNexrad,
+      radarAgeMs:result.radarAgeMs,
+      plotLabel:n=>`Plotting ${n.toLocaleString()} storm points...`
+    });
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
-    scanStep(3,`Plotting ${S.storms.length.toLocaleString()} storm points...`);
-    await new Promise(r=>setTimeout(r,300));
-    renderStorms();updateStormBadges();drawMiniSonar();
-    if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
-    if(typeof refreshRainClock==='function')refreshRainClock(true);
-    if(typeof ISO!=='undefined'&&ISO.open){ISO._grid=buildTerrainGrid();ISO._dirty=true;}
-    if(S.map){
-      plotStormMarkers(S.map);
-      if(rawPoints.length>0){autoActivateZones()}
-      else{clearStormZones();if(S.radarLayer&&!S.map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(S.map)}catch(e){}}
-      showViewScanCircle(S.map,cLat,cLng,radius,S.storms.length);
-    }
-    updateThreatTicker();
+    if(S.map)showViewScanCircle(S.map,cLat,cLng,radius,S.storms.length);
     hideScanOverlay();
     toast(`${S.storms.length.toLocaleString()} cells in ${radius} mi radius (${srcLabel})`);
     scheduleAutoScan();
@@ -841,28 +898,21 @@ async function scanRadarHiRes(map,fromHome){
     if(!useNexrad)S.radarFrames=result.frames;
     const rawPoints=result.points;
 
-    S._rawScanPts=rawPoints;
-    S.storms=spacingFilter(rawPoints,true).sort((a,b)=>a.distance-b.distance);if(typeof bumpStormScanId==='function')bumpStormScanId();
-    S.scanTime=Date.now();S.lastScanMs=Date.now();S._lastScanWasHiRes=true;
-    S._radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad):RADAR_LATENCY_MS;
-    computeTopStorms();
-    recordScanSnapshot();
-    _sonarZoomMi=15;localStorage.setItem('st_sonarZoom',15);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_syncSonarZoomBtns();
-    _clusterSonarPoints();
+    // v5.46: unified commit pipeline — hiRes flag drives the spacingFilter
+    // hi-res mode + S._lastScanWasHiRes; sonarZoomReset snaps sonar to 15 mi
+    // before re-clustering (every hi-res call site passes map===S.map).
+    await commitScanResults(rawPoints,{
+      useNexrad,
+      radarAgeMs:result.radarAgeMs,
+      hiRes:true,
+      sonarZoomReset:true,
+      map,
+      plotLabel:n=>`Hi-Res: ${n.toLocaleString()} points in ${HIRES_RADIUS} mi`
+    });
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
-    scanStep(3,`Hi-Res: ${S.storms.length.toLocaleString()} points in ${HIRES_RADIUS} mi`);
-    await new Promise(r=>setTimeout(r,300));
-    renderStorms();updateStormBadges();drawMiniSonar();
-    if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
-    if(typeof refreshRainClock==='function')refreshRainClock(true);
-    if(typeof ISO!=='undefined'&&ISO.open){ISO._grid=buildTerrainGrid();ISO._dirty=true;}
-    plotStormMarkers(map);
-    if(rawPoints.length>0){autoActivateZones()}
-    else{clearStormZones();if(S.radarLayer&&S.map&&!S.map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(S.map)}catch(e){}}
     showViewScanCircle(map,cLat,cLng,HIRES_RADIUS,S.storms.length);
     if(S.map&&S._showPathArrows)setTimeout(()=>buildPathArrows(S.map),150);
     map.setView([cLat,cLng],11,{animate:true,duration:0.5});
-    updateThreatTicker();
     hideScanOverlay();
     toast(`Hi-Res: ${S.storms.length.toLocaleString()} cells in ${HIRES_RADIUS} mi (${srcLabel})`);
     scheduleAutoScan();
@@ -1972,12 +2022,11 @@ async function pollOverheadRain(){
     if(!result)return;
     if(S.lat!==cLat||S.lon!==cLon){console.log('[OverheadPoll] location changed mid-poll, discarding');return}
     const newPts=result.points;
-    const kept=(S._rawScanPts||[]).filter(p=>haversine(cLat,cLon,p.lat,p.lng)>POLL_RADIUS_MI);
-    S._rawScanPts=kept.concat(newPts);
     const maxDbz=newPts.reduce((m,p)=>p.dbz>m?p.dbz:m,-999);
     console.log('[OverheadPoll]',useNexrad?'NEX':'RV','newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
-    if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
-    if(typeof refreshRainClock==='function')refreshRainClock(true);
+    // v5.46: splice-merge + hero/rain-clock refresh via the unified commit
+    // pipeline (spliceRadiusMi mode) — no storm-list rebuild on quick polls.
+    await commitScanResults(newPts,{spliceRadiusMi:POLL_RADIUS_MI,center:{lat:cLat,lon:cLon}});
   }catch(e){console.log('[OverheadPoll] failed:',e.message)}
   finally{S._overheadPollBusy=false}
 }

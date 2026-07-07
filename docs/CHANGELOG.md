@@ -3,6 +3,18 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.45
+
+  **Refactor (Phase 2 of scan-pipeline consolidation): one browser scan engine.**
+
+  - New `runRadarScan({lat, lon, radiusMi, zoom, step, minDbz, source, forceRVRefresh, keepStaleTilePath, cacheBustNexrad})` → `{points, frames, tilePath, radarAgeMs, zoom}` in `docs/js/radar.js` — the single tile-scanning engine for all four scan paths: `scanRadarForStorms` (storms.js), `scanRadarForView`, `scanRadarHiRes`, `pollOverheadRain` (radar.js). Each caller is now a thin wrapper; every post-pipeline (spacingFilter, hook echoes, badges, zones, rain clock, scan snapshots, radar-age bookkeeping) is preserved byte-for-byte.
+  - `scanTileForPoints` gains explicit `centerLat`/`centerLon` params. The old hack where `scanRadarForView`/`scanRadarHiRes` temporarily overwrote `S.lat`/`S.lon` to steer the distance filter (a known race against concurrent scans) is **gone**.
+  - The engine owns the RainViewer `weather-maps.json` fetch for scans behind a 60s TTL cache (`_fetchRvScanFrames`); the overhead poll forces a fresh `no-store` copy. Map-layer/animation fetches are unchanged (non-scan paths).
+  - `computeRadarAgeMs(useNexrad, framesOverride)` — optional frames override so the engine can compute age from just-fetched frames; wrappers still recompute for exact parity (Phase 3 will consume `result.radarAgeMs`).
+  - Per-caller failure semantics preserved: storms aborts with toast + state reset; view/hi-res abort with toast; overhead silently returns and reuses a stale tile path on fetch hiccups.
+  - No behavior change intended; architect review verified wrapper-by-wrapper parity.
+  - Cache: `?v=644`, SW `stormtracker-v644`.
+
   ## v5.44
 
   **UX fix: "in N storm track cones" no longer contradicts "no storms approaching".**

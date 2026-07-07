@@ -92,8 +92,12 @@ async function decodeRvRgba(buf){
   }
   return{w,h,data:rgba};
 }
-async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOverride){
+async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOverride,centerLat,centerLon){
   const tileSize=256,step=stepOverride||S._scanStep||2;
+  // v5.44: center coords are passed in explicitly by runRadarScan so the
+  // distance filter no longer reads S.lat/S.lon (killed the scan-center hack
+  // where scanRadarForView/HiRes temporarily overwrote those globals).
+  const cLat=centerLat!=null?centerLat:S.lat,cLon=centerLon!=null?centerLon:S.lon;
   const isRV=url.includes('rainviewer');
   if(isRV){
     try{
@@ -111,7 +115,7 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
           const ptLon=(tx+x/w)*360/Math.pow(2,zoom)-180;
           const ptLatRad=Math.atan(Math.sinh(Math.PI*(1-2*(ty+y/h)/Math.pow(2,zoom))));
           const ptLat=ptLatRad*180/Math.PI;
-          const dist=haversine(S.lat,S.lon,ptLat,ptLon);
+          const dist=haversine(cLat,cLon,ptLat,ptLon);
           if(dist<=scanRadius)pts.push({lat:ptLat,lng:ptLon,dbz,dist});
         }
       }
@@ -135,7 +139,7 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
         const ptLon=(tx+x/tileSize)*360/Math.pow(2,zoom)-180;
         const ptLatRad=Math.atan(Math.sinh(Math.PI*(1-2*(ty+y/tileSize)/Math.pow(2,zoom))));
         const ptLat=ptLatRad*180/Math.PI;
-        const dist=haversine(S.lat,S.lon,ptLat,ptLon);
+        const dist=haversine(cLat,cLon,ptLat,ptLon);
         if(dist<=scanRadius)pts.push({lat:ptLat,lng:ptLon,dbz,dist});
       }
     }
@@ -1272,49 +1276,19 @@ async function scanRadarForStorms(){
   if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
   scanStep(2,'Scanning radar tiles...');
   try{
-    const radius=S.scanRadius;
-    let zoom=useNexrad?(radius<=15?11:radius<=30?10:radius<=50?9:8):(radius<=30?8:7);
-    const radiusDeg=radius/69.0;
-    const northLat=S.lat+radiusDeg,southLat=S.lat-radiusDeg;
-    const eastLon=S.lon+radiusDeg/Math.cos(S.lat*Math.PI/180);
-    const westLon=S.lon-radiusDeg/Math.cos(S.lat*Math.PI/180);
-    let minTX=lonToTileX(westLon,zoom),maxTX=lonToTileX(eastLon,zoom);
-    let minTY=latToTileY(northLat,zoom),maxTY=latToTileY(southLat,zoom);
-    while((maxTX-minTX+1)*(maxTY-minTY+1)>48&&zoom>(useNexrad?8:7)){
-      zoom--;minTX=lonToTileX(westLon,zoom);maxTX=lonToTileX(eastLon,zoom);
-      minTY=latToTileY(northLat,zoom);maxTY=latToTileY(southLat,zoom);
-    }
-
-    if(!useNexrad){
-      try{
-        const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:AbortSignal.timeout(6000)}).then(r=>r.json());
-        const past=rv.radar?.past||[];
-        const nowcast=rv.radar?.nowcast||[];
-        const allFrames=past.concat(nowcast);
-        S.radarFrames=allFrames;
-        S._rvTilePath=allFrames.length?allFrames[allFrames.length-1].path:null;
-      }catch(e){S._rvTilePath=null}
-      if(!S._rvTilePath){toast('No radar data available');S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();computeTopStorms();renderStorms();updateStormBadges();return}
-    }
-
-    const colorFn=useNexrad?nexradToDbz:rvToDbz;
-    // v4.65: tie the scan floor to the shared STORM_MIN_DBZ so the Rain Clock
-    // (which reads the same constant) always matches the cards' detection floor.
-    const minDbz=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15;
-    const tilePromises=[];
-    const tileCount=(maxTX-minTX+1)*(maxTY-minTY+1);
-    console.log('[SCAN] src='+S.radarSource+' zoom='+zoom+' tiles='+tileCount+' TX='+minTX+'-'+maxTX+' TY='+minTY+'-'+maxTY+' lat='+S.lat+' lon='+S.lon);
-    for(let tx=minTX;tx<=maxTX;tx++){
-      for(let ty=minTY;ty<=maxTY;ty++){
-        const url=useNexrad
-          ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${zoom}/${tx}/${ty}.png`
-          :`https://tilecache.rainviewer.com${S._rvTilePath}/256/${zoom}/${tx}/${ty}/2/1_1.png`;
-        tilePromises.push(scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,S.scanRadius));
-      }
-    }
-    const tileResults=await Promise.all(tilePromises);
-    const rawPoints=tileResults.flat();
-    console.log('[SCAN] rawPoints='+rawPoints.length+' from '+tileResults.length+' tiles (non-empty: '+tileResults.filter(t=>t.length>0).length+')');
+    // v5.44: thin wrapper over the unified runRadarScan engine (radar.js).
+    // Scan floor is the shared STORM_MIN_DBZ so the Rain Clock (same constant)
+    // always matches the cards' detection floor.
+    const result=await runRadarScan({
+      lat:S.lat,lon:S.lon,
+      radiusMi:S.scanRadius,
+      minDbz:(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15,
+      source:useNexrad?'nexrad':'rainviewer'
+    });
+    if(!result){toast('No radar data available');S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();computeTopStorms();renderStorms();updateStormBadges();return}
+    if(!useNexrad)S.radarFrames=result.frames;
+    const rawPoints=result.points;
+    console.log('[SCAN] src='+S.radarSource+' zoom='+result.zoom+' rawPoints='+rawPoints.length);
 
     S._rawScanPts=rawPoints;
     _clusterSonarPoints();

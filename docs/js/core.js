@@ -30,14 +30,17 @@ function radarAgeMs(){
   return ms;
 }
 function radarAgeMin(){return radarAgeMs()/60000;}
-function computeRadarAgeMs(useNexrad){
+function computeRadarAgeMs(useNexrad,framesOverride){
   // Prefer the real age of the latest RainViewer PAST (observed) frame — nowcast
   // frames are forecasts (future) so they're filtered out. NEXRAD exposes no
   // timestamp here, so it falls back to the 5-min default. Clamped 0–30 min so a
   // bad timestamp can never produce an absurd shift.
+  // framesOverride lets the unified scan engine (radar.js) compute the age from
+  // the frames it just fetched, before they're assigned to S.radarFrames.
   try{
-    if(!useNexrad&&S.radarFrames&&S.radarFrames.length){
-      const past=S.radarFrames.filter(f=>f&&f.time&&(!f.path||!f.path.includes('/nowcast/')));
+    const frames=framesOverride||S.radarFrames;
+    if(!useNexrad&&frames&&frames.length){
+      const past=frames.filter(f=>f&&f.time&&(!f.path||!f.path.includes('/nowcast/')));
       if(past.length){
         const latest=past[past.length-1];
         const a=Date.now()-latest.time*1000;

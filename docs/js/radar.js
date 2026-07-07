@@ -650,6 +650,101 @@ function showViewScanCircle(map,lat,lng,radiusMi,count){
   S._viewScanLabel=label;
 }
 
+// ==========================================
+// UNIFIED RADAR SCAN ENGINE (Phase 2 consolidation)
+// One engine for all four scan paths (scanRadarForStorms, scanRadarForView,
+// scanRadarHiRes, pollOverheadRain). Center coords are ALWAYS explicit, so the
+// old S.lat/S.lon overwrite hack (a known race in view/HiRes) is gone. Owns
+// weather-maps.json fetching behind a 60s TTL cache. Returns raw points plus
+// scan metadata; each caller's post-pipeline (spacingFilter, hook echoes,
+// badges, zones, rain clock, scan snapshot, radar-age bookkeeping) stays in its
+// own thin wrapper so per-caller behavior is preserved byte-for-byte.
+//   runRadarScan({lat, lon, radiusMi, zoom, step, minDbz, source,
+//                 forceRVRefresh, keepStaleTilePath, cacheBustNexrad})
+//     -> { points, frames, tilePath, radarAgeMs, zoom } | null
+//   Returns null when RainViewer is selected but no usable tile path exists
+//   (caller runs its own "no radar data" fallback).
+// ==========================================
+let _rvScanFramesCache={ts:0,frames:null,tilePath:null};
+const _RV_SCAN_FRAMES_TTL_MS=60000;
+async function _fetchRvScanFrames(forceRefresh){
+  // Returns {frames, tilePath} on a successful fetch (tilePath null if the API
+  // returned no frames), or null if the fetch itself threw. A 60s TTL cache
+  // stops the four scan paths each hammering weather-maps.json; the overhead
+  // poll passes forceRefresh to always pull a fresh no-store copy.
+  if(!forceRefresh&&_rvScanFramesCache.tilePath&&(Date.now()-_rvScanFramesCache.ts)<_RV_SCAN_FRAMES_TTL_MS){
+    return{frames:_rvScanFramesCache.frames,tilePath:_rvScanFramesCache.tilePath};
+  }
+  try{
+    const opts=forceRefresh?{cache:'no-store'}:{signal:AbortSignal.timeout(6000)};
+    const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json',opts).then(r=>r.json());
+    const past=rv.radar?.past||[];
+    const nowcast=rv.radar?.nowcast||[];
+    const frames=past.concat(nowcast);
+    const tilePath=frames.length?frames[frames.length-1].path:null;
+    if(tilePath)_rvScanFramesCache={ts:Date.now(),frames,tilePath};
+    return{frames,tilePath};
+  }catch(e){return null}
+}
+async function runRadarScan(opts){
+  const lat=opts.lat,lon=opts.lon;
+  const radiusMi=opts.radiusMi!=null?opts.radiusMi:80;
+  const source=opts.source||'nexrad';
+  const useNexrad=source==='nexrad';
+  const minDbz=opts.minDbz!=null?opts.minDbz:15;
+  const step=opts.step; // undefined => scanTileForPoints falls back to S._scanStep
+  const forceRVRefresh=!!opts.forceRVRefresh;
+  const keepStaleTilePath=!!opts.keepStaleTilePath;
+  const cacheBustNexrad=!!opts.cacheBustNexrad;
+  // Zoom: explicit (fixed) when provided; otherwise auto from radius, then the
+  // >48-tile guard walks it down — the guard only runs in the auto path so it
+  // matches storms/view exactly while hi-res/overhead keep their fixed zoom.
+  const autoZoom=(opts.zoom==null);
+  let zoom=autoZoom?(useNexrad?(radiusMi<=15?11:radiusMi<=30?10:radiusMi<=50?9:8):(radiusMi<=30?8:7)):opts.zoom;
+  const radiusDeg=radiusMi/69.0;
+  const northLat=lat+radiusDeg,southLat=lat-radiusDeg;
+  const eastLon=lon+radiusDeg/Math.cos(lat*Math.PI/180);
+  const westLon=lon-radiusDeg/Math.cos(lat*Math.PI/180);
+  let minTX=lonToTileX(westLon,zoom),maxTX=lonToTileX(eastLon,zoom);
+  let minTY=latToTileY(northLat,zoom),maxTY=latToTileY(southLat,zoom);
+  if(autoZoom){
+    while((maxTX-minTX+1)*(maxTY-minTY+1)>48&&zoom>(useNexrad?8:7)){
+      zoom--;minTX=lonToTileX(westLon,zoom);maxTX=lonToTileX(eastLon,zoom);
+      minTY=latToTileY(northLat,zoom);maxTY=latToTileY(southLat,zoom);
+    }
+  }
+  let frames=S.radarFrames,tilePath=S._rvTilePath;
+  if(!useNexrad){
+    const rvRes=await _fetchRvScanFrames(forceRVRefresh);
+    if(rvRes&&rvRes.tilePath){
+      frames=rvRes.frames;tilePath=rvRes.tilePath;S._rvTilePath=tilePath;
+    }else if(keepStaleTilePath&&S._rvTilePath){
+      // overhead poll: fetch failed or returned no frames — reuse the last
+      // known tile path instead of aborting the quick rain check.
+      tilePath=S._rvTilePath;if(rvRes&&rvRes.frames)frames=rvRes.frames;
+    }else{
+      if(!keepStaleTilePath)S._rvTilePath=null;
+      if(!S._rvTilePath)return null;
+      tilePath=S._rvTilePath;
+    }
+  }
+  const colorFn=useNexrad?nexradToDbz:rvToDbz;
+  const ts=Date.now();
+  const tilePromises=[];
+  for(let tx=minTX;tx<=maxTX;tx++){
+    for(let ty=minTY;ty<=maxTY;ty++){
+      const url=useNexrad
+        ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${zoom}/${tx}/${ty}.png${cacheBustNexrad?`?t=${ts}`:''}`
+        :`https://tilecache.rainviewer.com${tilePath}/256/${zoom}/${tx}/${ty}/2/1_1.png`;
+      tilePromises.push(scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,radiusMi,step,lat,lon));
+    }
+  }
+  const tileResults=await Promise.all(tilePromises);
+  const points=tileResults.flat();
+  const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
+  return{points,frames,tilePath,radarAgeMs,zoom};
+}
+
 async function scanRadarForView(){
   if(S._radarAnimPlaying)stopRadarAnim(S.map);
   if(!S.map)return;
@@ -665,46 +760,17 @@ async function scanRadarForView(){
   if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
   scanStep(2,'Scanning radar tiles...');
   try{
-    let zoom=useNexrad?(radius<=15?11:radius<=30?10:radius<=50?9:8):(radius<=30?8:7);
-    const radiusDeg=radius/69.0;
-    const northLat=cLat+radiusDeg,southLat=cLat-radiusDeg;
-    const eastLon=cLng+radiusDeg/Math.cos(cLat*Math.PI/180);
-    const westLon=cLng-radiusDeg/Math.cos(cLat*Math.PI/180);
-    let minTX=lonToTileX(westLon,zoom),maxTX=lonToTileX(eastLon,zoom);
-    let minTY=latToTileY(northLat,zoom),maxTY=latToTileY(southLat,zoom);
-    while((maxTX-minTX+1)*(maxTY-minTY+1)>48&&zoom>(useNexrad?8:7)){
-      zoom--;minTX=lonToTileX(westLon,zoom);maxTX=lonToTileX(eastLon,zoom);
-      minTY=latToTileY(northLat,zoom);maxTY=latToTileY(southLat,zoom);
-    }
-
-    if(!useNexrad){
-      try{
-        const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:AbortSignal.timeout(6000)}).then(r=>r.json());
-        const past=rv.radar?.past||[];
-        const nowcast=rv.radar?.nowcast||[];
-        const allFrames=past.concat(nowcast);
-        S.radarFrames=allFrames;
-        S._rvTilePath=allFrames.length?allFrames[allFrames.length-1].path:null;
-      }catch(e){S._rvTilePath=null}
-      if(!S._rvTilePath){hideScanOverlay();toast('No radar data');return}
-    }
-
-    const colorFn=useNexrad?nexradToDbz:rvToDbz;
-    const minDbz=15;
-    const tilePromises=[];
-    const savedLat=S.lat,savedLon=S.lon;
-    S.lat=cLat;S.lon=cLng;
-    for(let tx=minTX;tx<=maxTX;tx++){
-      for(let ty=minTY;ty<=maxTY;ty++){
-        const url=useNexrad
-          ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${zoom}/${tx}/${ty}.png`
-          :`https://tilecache.rainviewer.com${S._rvTilePath}/256/${zoom}/${tx}/${ty}/2/1_1.png`;
-        tilePromises.push(scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,radius));
-      }
-    }
-    const tileResults=await Promise.all(tilePromises);
-    const rawPoints=tileResults.flat();
-    S.lat=savedLat;S.lon=savedLon;
+    // v5.44: thin wrapper over the unified runRadarScan engine — center coords
+    // are passed explicitly so the old S.lat/S.lon overwrite hack is gone.
+    const result=await runRadarScan({
+      lat:cLat,lon:cLng,
+      radiusMi:radius,
+      minDbz:15,
+      source:useNexrad?'nexrad':'rainviewer'
+    });
+    if(!result){hideScanOverlay();toast('No radar data');return}
+    if(!useNexrad)S.radarFrames=result.frames;
+    const rawPoints=result.points;
 
     S._rawScanPts=rawPoints;
     _clusterSonarPoints();
@@ -761,41 +827,19 @@ async function scanRadarHiRes(map,fromHome){
   if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
   scanStep(2,'Hi-Res scanning (step=1)...');
   try{
-    const radiusDeg=HIRES_RADIUS/69.0;
-    const northLat=cLat+radiusDeg,southLat=cLat-radiusDeg;
-    const eastLon=cLng+radiusDeg/Math.cos(cLat*Math.PI/180);
-    const westLon=cLng-radiusDeg/Math.cos(cLat*Math.PI/180);
-    const minTX=lonToTileX(westLon,hiZoom),maxTX=lonToTileX(eastLon,hiZoom);
-    const minTY=latToTileY(northLat,hiZoom),maxTY=latToTileY(southLat,hiZoom);
-
-    if(!useNexrad){
-      try{
-        const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:AbortSignal.timeout(6000)}).then(r=>r.json());
-        const past=rv.radar?.past||[];
-        const nowcast=rv.radar?.nowcast||[];
-        const allFrames=past.concat(nowcast);
-        S.radarFrames=allFrames;
-        S._rvTilePath=allFrames.length?allFrames[allFrames.length-1].path:null;
-      }catch(e){S._rvTilePath=null}
-      if(!S._rvTilePath){hideScanOverlay();toast('No radar data');return}
-    }
-
-    const colorFn=useNexrad?nexradToDbz:rvToDbz;
-    const minDbz=10;
-    const tilePromises=[];
-    const savedLat=S.lat,savedLon=S.lon;
-    S.lat=cLat;S.lon=cLng;
-    for(let tx=minTX;tx<=maxTX;tx++){
-      for(let ty=minTY;ty<=maxTY;ty++){
-        const url=useNexrad
-          ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${hiZoom}/${tx}/${ty}.png`
-          :`https://tilecache.rainviewer.com${S._rvTilePath}/256/${hiZoom}/${tx}/${ty}/2/1_1.png`;
-        tilePromises.push(scanTileForPoints(url,tx,ty,hiZoom,colorFn,minDbz,HIRES_RADIUS,1));
-      }
-    }
-    const tileResults=await Promise.all(tilePromises);
-    const rawPoints=tileResults.flat();
-    S.lat=savedLat;S.lon=savedLon;
+    // v5.44: thin wrapper over the unified runRadarScan engine — fixed hi-res
+    // zoom + step=1 + 15 mi radius, explicit center (no S.lat/S.lon hack).
+    const result=await runRadarScan({
+      lat:cLat,lon:cLng,
+      radiusMi:HIRES_RADIUS,
+      zoom:hiZoom,
+      step:1,
+      minDbz:10,
+      source:useNexrad?'nexrad':'rainviewer'
+    });
+    if(!result){hideScanOverlay();toast('No radar data');return}
+    if(!useNexrad)S.radarFrames=result.frames;
+    const rawPoints=result.points;
 
     S._rawScanPts=rawPoints;
     S.storms=spacingFilter(rawPoints,true).sort((a,b)=>a.distance-b.distance);if(typeof bumpStormScanId==='function')bumpStormScanId();
@@ -1911,42 +1955,27 @@ async function pollOverheadRain(){
     const cLat=S.lat,cLon=S.lon;
     const useNexrad=S.radarSource==='nexrad'&&isUSLocation(cLat,cLon);
     const POLL_RADIUS_MI=3;
-    const zoom=useNexrad?11:8;
-    if(!useNexrad){
-      try{
-        const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json',{cache:'no-store'}).then(r=>r.json());
-        const past=rv.radar?.past||[];
-        const nowcast=rv.radar?.nowcast||[];
-        const allFrames=past.concat(nowcast);
-        if(allFrames.length)S._rvTilePath=allFrames[allFrames.length-1].path;
-      }catch(e){}
-      if(!S._rvTilePath)return;
-    }
-    const radiusDeg=POLL_RADIUS_MI/69.0;
-    const northLat=cLat+radiusDeg,southLat=cLat-radiusDeg;
-    const eastLon=cLon+radiusDeg/Math.cos(cLat*Math.PI/180);
-    const westLon=cLon-radiusDeg/Math.cos(cLat*Math.PI/180);
-    const minTX=lonToTileX(westLon,zoom),maxTX=lonToTileX(eastLon,zoom);
-    const minTY=latToTileY(northLat,zoom),maxTY=latToTileY(southLat,zoom);
-    const colorFn=useNexrad?nexradToDbz:rvToDbz;
-    const minDbz=5;
-    const ts=Date.now();
-    const promises=[];
-    for(let tx=minTX;tx<=maxTX;tx++){
-      for(let ty=minTY;ty<=maxTY;ty++){
-        const url=useNexrad
-          ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${zoom}/${tx}/${ty}.png?t=${ts}`
-          :`https://tilecache.rainviewer.com${S._rvTilePath}/256/${zoom}/${tx}/${ty}/2/1_1.png`;
-        promises.push(scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,POLL_RADIUS_MI,1));
-      }
-    }
-    const tileResults=await Promise.all(promises);
+    // v5.44: thin wrapper over the unified runRadarScan engine — quick 3 mi
+    // overhead check. forceRVRefresh (no-store) + cacheBustNexrad keep it fresh;
+    // keepStaleTilePath reuses the last RV path instead of aborting on a hiccup.
+    const result=await runRadarScan({
+      lat:cLat,lon:cLon,
+      radiusMi:POLL_RADIUS_MI,
+      zoom:useNexrad?11:8,
+      step:1,
+      minDbz:5,
+      source:useNexrad?'nexrad':'rainviewer',
+      forceRVRefresh:true,
+      keepStaleTilePath:true,
+      cacheBustNexrad:true
+    });
+    if(!result)return;
     if(S.lat!==cLat||S.lon!==cLon){console.log('[OverheadPoll] location changed mid-poll, discarding');return}
-    const newPts=tileResults.flat();
+    const newPts=result.points;
     const kept=(S._rawScanPts||[]).filter(p=>haversine(cLat,cLon,p.lat,p.lng)>POLL_RADIUS_MI);
     S._rawScanPts=kept.concat(newPts);
     const maxDbz=newPts.reduce((m,p)=>p.dbz>m?p.dbz:m,-999);
-    console.log('[OverheadPoll]',useNexrad?'NEX':'RV','tiles=',promises.length,'newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
+    console.log('[OverheadPoll]',useNexrad?'NEX':'RV','newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
     if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
     if(typeof refreshRainClock==='function')refreshRainClock(true);
   }catch(e){console.log('[OverheadPoll] failed:',e.message)}

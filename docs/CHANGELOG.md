@@ -3,6 +3,15 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.52
+
+  **Perf: faster first paint — defer Leaflet, add preconnect hints.**
+
+  - Leaflet (`unpkg.com/leaflet@1.9.4`) was a synchronous, render-blocking `<script>` in `<head>`, but the map only initializes when the Radar tab is opened (`initRadar()`) — so first paint of the Weather tab stalled on a ~150 KB external download. Added `defer`: Leaflet still executes before the app's own deferred scripts (document order preserved, so `L` is available before any app code runs and long before the map inits), it just no longer blocks parsing.
+  - Added `preconnect` for fonts.googleapis.com / fonts.gstatic.com / unpkg.com and `dns-prefetch` for cdn.jsdelivr.net / basemaps.cartocdn.com / tilecache.rainviewer.com to cut DNS+TLS latency off the external critical-path requests.
+  - No behavior change — the map, fonts, and tiles still load the same way, just not render-blocking.
+  - Cache: `?v=651`, SW `stormtracker-v651`.
+
   ## v5.51
 
   **Rain Clock: forecast stays on the inner ring (radar always outer); header tidy-up.**

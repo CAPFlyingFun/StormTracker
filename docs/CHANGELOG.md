@@ -3,6 +3,17 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.43
+
+  **Refactor (Phase 1 of scan-pipeline consolidation): one shared radar module for app + scanner.**
+
+  - New `docs/js/radar-shared.js` — a plain global-scope script loaded FIRST (before `core.js`) — now holds the single copy of: `haversine`, `bearingDeg`, `degToDir`, `lonToTileX`, `latToTileY`, the master `DBZ_SCALE` palette, `pixelToDbz`, `NEXRAD_PAL`/`nexradToDbz`, and `RV_UB`/`rvToDbz`. The file ends with a guarded CommonJS export so the Node scanner can consume the exact same code.
+  - `scanner/detect.js` now imports these via `createRequire('../docs/js/radar-shared.js')` and re-exports them (its ~120-line verbatim copies deleted) — the GitHub Actions push scanner is now guaranteed to decode radar identically to the app, permanently closing the palette/threshold drift bug class. New `docs/js/package.json` (`"type":"commonjs"`) makes Node treat the shared file as CJS.
+  - Duplicates removed: `haversine`/`bearingDeg`/`degToDir`/`DBZ_SCALE`/converters from `core.js`, `lonToTileX`/`latToTileY` from `storms.js`, `bearingDeg3D` from `view3d.js` (`haversineMi3D` intentionally kept — it uses R=3958.8 vs shared 3959; replacing it would nudge 3D distances).
+  - New parity fixture test `scanner/test-shared-parity.mjs` (67 cases: converter RGBA→dBZ expected values captured from the pre-refactor code, geo sanity, re-export identity) — passes.
+  - `radar-shared.js` added to `sw.js` STATIC_ASSETS (offline) and `index.html` script block. No behavior changes.
+  - Cache: `stormtracker-v642`, query strings `?v=642`.
+
   ## v5.42
 
   **Fix: 3D tab showed a blank screen (no spinner) during the first-open script download.**

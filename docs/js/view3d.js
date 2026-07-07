@@ -324,11 +324,10 @@ function haversineMi3D(la1, lo1, la2, lo2) {
 function haversineKm3D(la1, lo1, la2, lo2) { return haversineMi3D(la1, lo1, la2, lo2) * 1.60934; }
 function fmtDist3D(mi) { return V3D.metric ? Math.round(mi * 1.60934) + ' km' : Math.round(mi) + ' mi'; }
 function fmtSpeed3D(mph) { return V3D.metric ? Math.round(mph * 1.60934) + ' km/h' : Math.round(mph) + ' mph'; }
-function bearingDeg3D(la1, lo1, la2, lo2) {
-  var dLo = toRad3D(lo2 - lo1);
-  return ((Math.atan2(Math.sin(dLo) * Math.cos(toRad3D(la2)),
-    Math.cos(toRad3D(la1)) * Math.sin(toRad3D(la2)) - Math.sin(toRad3D(la1)) * Math.cos(toRad3D(la2)) * Math.cos(dLo)) * 180 / Math.PI) + 360) % 360;
-}
+// bearingDeg3D removed — identical to the shared bearingDeg in radar-shared.js
+// (loaded first; global), which view3d now calls directly. haversineMi3D above
+// intentionally stays: it uses R=3958.8 mi vs the shared haversine's R=3959, so
+// replacing it would nudge 3D distances — left as-is to avoid any behavior change.
 var DIRS16_3D = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 function dir16_3D(deg) { return DIRS16_3D[Math.round(deg / 22.5) % 16]; }
 
@@ -1292,7 +1291,7 @@ function rebuildStorms3D() {
       lspr.position.set(sp.x, cloudTop + 0.4, sp.z); lspr.visible = showLabels; lspr.renderOrder = 5; V3D.stormGroup.add(lspr);
     }
 
-    var cellForCone = { lat: lat, lon: lon, dbz: cell.dbz, distance: cell.distance, bearing: cell.bearing || bearingDeg3D(S.lat, S.lon, lat, lon) };
+    var cellForCone = { lat: lat, lon: lon, dbz: cell.dbz, distance: cell.distance, bearing: cell.bearing || bearingDeg(S.lat, S.lon, lat, lon) };
     V3D.stormMeshes.push({ mesh: cl.grp, cell: cellForCone, rain: null, label: lspr, halo: haloMesh, dkm: dkm, _showRain: false, tierIdx: tierIdx });
     if (cell.dbz >= 35) {
       var q = _qualifyCone3D(cellForCone, sp);

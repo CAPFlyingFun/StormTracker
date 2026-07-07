@@ -2,7 +2,7 @@
 
 ## Overview
 
-StormTracker is a real-time storm detection web application providing live weather radar maps, storm tracking, and weather alerts. It uses GPS or manual location input to monitor storm activity within a customizable radius. The application is enhanced with AI-powered weather analysis, integrating National Weather Service Area Forecast Discussions for comprehensive meteorological assessments. The project aims to deliver a professional, reliable, and user-friendly tool for anticipating and reacting to severe weather, with a vision to become a leading platform for public safety and meteorological insight. Current version: **v5.42** (cache bust ?v=641, SW cache stormtracker-v641).
+StormTracker is a real-time storm detection web application providing live weather radar maps, storm tracking, and weather alerts. It uses GPS or manual location input to monitor storm activity within a customizable radius. The application is enhanced with AI-powered weather analysis, integrating National Weather Service Area Forecast Discussions for comprehensive meteorological assessments. The project aims to deliver a professional, reliable, and user-friendly tool for anticipating and reacting to severe weather, with a vision to become a leading platform for public safety and meteorological insight. Current version: **v5.43** (cache bust ?v=642, SW cache stormtracker-v642).
 
 For a full per-version changelog, see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
@@ -55,6 +55,7 @@ Preferred communication style: Simple, everyday language with customizable AI as
 
 ### JavaScript Module Structure (docs/js/)
 The frontend is a static HTML site with global-scope script tags (no ES modules). Load order matters:
+0. **radar-shared.js** (~200 lines) — SHARED with the Node scanner (`scanner/detect.js` consumes it via `createRequire`; `docs/js/package.json` marks it CJS for Node). Single source for: haversine, bearingDeg, degToDir, lonToTileX/latToTileY, master DBZ_SCALE palette, pixelToDbz, NEXRAD_PAL/nexradToDbz, RV_UB/rvToDbz. Guarded `module.exports` at the end; loads before all other scripts.
 1. **core.js** (~711 lines) — Global state object `S`, unit constants, time/clock formatting, basic utilities (toast, escHtml, degToDir), temperature/wind/altitude/visibility formatters, FAA weather theory (cloud base, density alt, flight categories), Beaufort scale, unit system management, storm DBZ/ETA utilities, pixel-to-dBZ radar converters, page switching
 2. **gauges.js** (~724 lines) — Sonar radar configuration, gyro compass, wind min/max tracking, 5 gauge renderers (neon, marine, minimal, G1000, speedo), LED7 display, wind gauge animation, gauge style management
 3. **icons.js** (~322 lines) — Icon pack system (8 built-in packs), custom icon upload/import/export via IndexedDB, WMO code mapping, weather condition icons, Basmilius CDN integration

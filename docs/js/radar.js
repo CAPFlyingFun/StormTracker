@@ -1960,29 +1960,32 @@ function autoActivateZones(){
   }
   if(S.map)buildStormZones(S.map,S._rawScanPts);
 }
-// v5.47: ONE canonical "what dBZ is at this spot right now" oracle (Phase 4 of
-// the scan-pipeline consolidation). Hex-bins the live raw scan points around ANY
-// location and reads the center cell, else the 6 immediate neighbors (cell
-// centers ≤5mi). Every "now" surface — hero card, rain-clock minute 0,
-// overhead/drizzle alerts, Storms-tab zone banner — derives from THIS (via
-// rainOverUserNow / checkUserInZone); advection is only ever used for FUTURE
-// projection. maxRadiusMi=8: a point >4.8mi from the query center can't land in
-// hex0 or a ≤5mi-neighbor cell (neighbor centers ≈3.0mi + hex circumradius
-// ≈1.73mi), so results are identical to binning the full scan radius while
-// skipping the hex math for the vast majority of points.
+// v5.49: ONE canonical "what dBZ is at this spot right now" oracle. "Over you"
+// means a live radar echo genuinely ON your location — within OVERHEAD_MI. Every
+// "now" surface — hero card, rain-clock minute 0, overhead/drizzle alerts,
+// Storms-tab zone banner — derives from THIS (via rainOverUserNow /
+// checkUserInZone); advection is only ever used for FUTURE projection.
+//
+// PRIOR BUG (v5.47 consolidation): this hex-binned the scan and, when YOUR 3-mi
+// hex was empty, fell back to the 6 neighbor hexes whose CENTERS were ≤5mi — so
+// rain sitting in the next hex over (nearest echo up to ~4.7mi away) read as
+// "raining now over you." Reported by a user whose own hex was clear while rain
+// filled the hex to the north. Now it is a direct proximity test on the raw scan
+// points: max dBZ among echoes within OVERHEAD_MI. Rain in the 1.5–6mi band is
+// "nearby" (surfaced as the Rain Clock's "Nearest Precipitation" line), not overhead.
+const OVERHEAD_MI=1.5;   // ≤ this from your spot counts as "over you"
 function dbzAtLocation(lat,lon){
-  if(!S._rawScanPts||!S._rawScanPts.length||lat==null||lon==null)return null;
-  const cells=hexGridBin(S._rawScanPts,lat,lon,8);
-  const center=cells.get('0,0');
-  if(center)return{maxDbz:center.maxDbz,source:'hex0'};
-  const neighbors=['1,0','-1,0','0,1','0,-1','1,-1','-1,1'];
-  let nMax=-999;
-  for(const k of neighbors){
-    const c=cells.get(k);
-    if(c&&c.dist<=5&&c.maxDbz>nMax)nMax=c.maxDbz;
+  const pts=S._rawScanPts;
+  if(!pts||!pts.length||lat==null||lon==null)return null;
+  // p.dist is each echo's distance from the scan center (== the user for a
+  // user-centered scan), so skip haversine on the common path.
+  const atUser=(lat===S.lat&&lon===S.lon);
+  let mx=-999;
+  for(const p of pts){
+    const d=(atUser&&p.dist!=null)?p.dist:haversine(lat,lon,p.lat,p.lng);
+    if(d<=OVERHEAD_MI&&p.dbz>mx)mx=p.dbz;
   }
-  if(nMax>-999)return{maxDbz:nMax,source:'hexN'};
-  return null;
+  return mx>-999?{maxDbz:mx,source:'overhead'}:null;
 }
 function checkUserInZone(){
   const z=dbzAtLocation(S.lat,S.lon);

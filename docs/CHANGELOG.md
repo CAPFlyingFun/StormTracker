@@ -3,6 +3,15 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.49
+
+  **Fix: "raining now over you" no longer counts rain in the neighbouring hex.**
+
+  - `dbzAtLocation()` — the canonical "what dBZ is at this spot right now" oracle behind the hero card, Rain Clock minute-0, overhead/drizzle alerts, and the Storms-tab zone banner — previously hex-binned the scan and, when the user's own 3-mi hex was empty, fell back to the 6 neighbour hexes whose centres were ≤5 mi. Rain sitting entirely in the next hex over (nearest echo up to ~4.7 mi away) registered as overhead, so a user with a clear hex and rain filling the hex to the north saw "Rain until …".
+  - Replaced with a direct proximity test: max dBZ among raw scan echoes within `OVERHEAD_MI` (1.5 mi). Rain in the 1.5–6 mi band is "nearby" (already surfaced by the "Nearest Precipitation" line), not overhead. Reuses each echo's precomputed `p.dist` on the user-centred path, so it stays O(n) with no haversine.
+  - Consistent across every "now" surface, since they all read this one oracle.
+  - Cache: `?v=648`, SW `stormtracker-v648`.
+
   ## v5.48
 
   **Rain Clock: dual-ring dial — forecast (inner) beside radar (outer).**

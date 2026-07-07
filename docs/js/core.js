@@ -866,6 +866,26 @@ function toggleLocOverlay(open){
     el.classList.remove('open');
   }
 }
+var _3dLoaded=false,_3dLoading=false;
+function _ensure3DLoaded(){
+  if(_3dLoaded){activate3DView();return;}
+  if(_3dLoading)return;
+  _3dLoading=true;
+  var c=document.getElementById('view3d-container');
+  if(c)c.innerHTML='<div style="display:flex;justify-content:center;align-items:center;height:100%;color:var(--text-secondary);font-size:1.1em;letter-spacing:0.02em">Loading 3D…</div>';
+  function _ld(src,cb){var s=document.createElement('script');s.src=src;s.onload=cb;s.onerror=function(){console.error('[3D] failed to load:',src);_3dLoading=false;var c2=document.getElementById('view3d-container');if(c2)c2.innerHTML='<div style="display:flex;justify-content:center;align-items:center;height:100%;color:var(--accent-red,#f55)">Failed to load 3D. Check connection.</div>';};document.head.appendChild(s);}
+  var CDN='https://cdn.jsdelivr.net/npm/three@0.128.0/';
+  _ld(CDN+'build/three.min.js',function(){
+    _ld(CDN+'examples/js/controls/OrbitControls.js',function(){
+      _ld(CDN+'examples/js/utils/BufferGeometryUtils.js',function(){
+        _ld('js/view3d.js?v=638',function(){
+          _3dLoaded=true;_3dLoading=false;
+          if(typeof activate3DView==='function')activate3DView();
+        });
+      });
+    });
+  });
+}
 function switchPage(page){
   if(_isDesktop()){
     const target=document.getElementById('page-'+page);
@@ -875,7 +895,7 @@ function switchPage(page){
     if(page==='radar'&&S.lat&&S.map){
       setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map)},200);
     }
-    if(page==='3d'){if(typeof activate3DView==='function')activate3DView();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
+    if(page==='3d'){_ensure3DLoaded();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
     if(_curLang!=='en'){setTimeout(()=>quickTranslate(),200);setTimeout(()=>quickTranslate(),800)}
     return;
   }
@@ -890,7 +910,7 @@ function switchPage(page){
   if(page==='station'){const navBtn=document.getElementById('nav-station');if(navBtn&&navBtn.style.display==='none'){switchPage('weather');return}if(S.lat&&(!S.station||S._stationLocKey!==S.lat+','+S.lon))fetchStation()}
   if(page==='alerts'&&S.lat){fetchAlerts();fetchHazards()}
   if(page==='storms'&&S.lat)renderStorms();
-  if(page==='3d'){if(typeof activate3DView==='function')activate3DView();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
+  if(page==='3d'){_ensure3DLoaded();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
   if(_curLang!=='en'){setTimeout(()=>quickTranslate(),200);setTimeout(()=>quickTranslate(),800)}
 }
 function updateStormBadges(){

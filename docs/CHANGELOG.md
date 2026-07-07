@@ -3,6 +3,16 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.39
+
+  **Startup performance: parallel script loading, 3D on-demand, Turf removed from boot.**
+
+  - **Parallel script loading** — all 15 local app scripts now carry `defer`, so the browser downloads them simultaneously instead of one-at-a-time. The HTML also finishes parsing (and can paint) before any script executes, eliminating render-blocking.
+  - **Three.js / 3D view on-demand** — the Three.js library, its OrbitControls and BufferGeometryUtils add-ons, and `view3d.js` are no longer part of the initial page load. They are injected in sequence the first time the user opens the 3D tab, with a "Loading 3D…" indicator while they fetch. Users who never open 3D download nothing. A one-time guard prevents double-loading.
+  - **Turf.js removed from startup** — the Turf geometry library was loaded unconditionally at boot but is not called at launch; its script tag has been removed from the page load.
+  - **SW precache trimmed** — `view3d.js` removed from the service-worker install-time precache (it is now fetched and runtime-cached on first 3D tab open). All other offline behavior is unchanged.
+  - **Cache bumped** — `?v=638` / `stormtracker-v638`.
+
   ## v5.38
 
   **Globe icon packs rebuilt at hero resolution — fixes v5.37 pixelation on the Weather hero showcase.**

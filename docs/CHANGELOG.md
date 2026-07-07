@@ -3,6 +3,14 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.50
+
+  **Fix: Rain Clock forecast (inner) ring now shows light forecast rain.**
+
+  - The dashed inner forecast ring (v5.48) was gated at `_RC_FC_MIN_DBZ = 28` (~0.09 in/hr, moderate). Typical light rain (~0.01 in/hr ≈ 13.5 dBZ) never cleared it, so the ring — and its legend — stayed hidden while the independent "Total Precipitation Next 36 Hrs" bar chart plotted the same rain. It read as the dual-ring feature not working.
+  - Lowered `_RC_FC_MIN_DBZ` to 12 (~0.008 in/hr, light rain). The `_rcForecastHours()` helper still pre-filters at `FC_FLOOR_MM = 0.1` (measurable), so pure trace is excluded, but the ring now appears whenever measurable rain is in the forecast — consistent with the bar chart. Also lightens the radar-empty forecast-fallback dial the same way.
+  - Cache: `?v=649`, SW `stormtracker-v649`.
+
   ## v5.49
 
   **Fix: "raining now over you" no longer counts rain in the neighbouring hex.**

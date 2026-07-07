@@ -1975,7 +1975,7 @@ const _RC_MIN_DBZ=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15;
 // read "raining for hours" even for trace/drizzle. This floor (~28 dBZ ≈
 // 0.08 in/hr, light-moderate) hides drizzle while still showing real rain.
 // Forecast-only — the live-radar dial keeps the stricter _RC_MIN_DBZ floor.
-const _RC_FC_MIN_DBZ=28;
+const _RC_FC_MIN_DBZ=12;   // v5.50: light-rain floor for the FORECAST ring (~0.008 in/hr). Was 28 (moderate), which hid the light forecast rain the 36-hr bar chart plots, so the dual-ring/forecast ring almost never appeared.
 // v4.66: intensity-scaled Rain Clock cell radius. Mirrors the Storms-tab cone
 // base width clamp((dbz-20)/15,0,3) but with a 0.2 mi floor so even a light
 // ~20 dBZ cell has a small but non-zero footprint (~0.2 mi), scaling up to

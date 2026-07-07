@@ -3,6 +3,16 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.48
+
+  **Rain Clock: dual-ring dial — forecast (inner) beside radar (outer).**
+
+  - `renderRainClock()` now draws a second, INNER ring from the hourly precipitation forecast — dimmer and dashed — beneath the existing solid outer radar ring. The outer ring stays the authoritative nowcast (drives the center summary and windows); the inner ring is the model view, so predicted vs observed arrival times can be compared at a glance. A legend under the dial labels the two.
+  - `_rainClockProject()` always computes `out.fcMinutes` from a new shared `_rcForecastHours()` helper (mm/hr → dBZ via Marshall-Palmer, `_RC_FC_MIN_DBZ` floor, 12 h horizon). `out.fcReady` is false in the radar-empty forecast-fallback mode, so the single fallback ring is never duplicated.
+  - Dial span mode is user-selectable via a "Span: fits forecast ⇄" chip in the legend — `_rcSpanMode()` / `_rcToggleSpanMode()`, persisted in `st_rcSpanMode`, default `forecast`. `forecast` grows the span to keep forecast rain in view; `radar` keeps it sized to the nearest radar storm.
+  - Purely additive to the radar pipeline — no change to windows, tap-details, cell counts, or the center summary.
+  - Cache: `?v=647`, SW `stormtracker-v647`.
+
   ## v5.47
 
   **Phase 4 (final) of scan-pipeline consolidation: canonical `dbzAtLocation()` oracle (BEHAVIOR CHANGE).**

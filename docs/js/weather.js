@@ -2020,6 +2020,37 @@ function _rcSpanLabel(min){
   const h=min/60;
   return (Number.isInteger(h)?h:(Math.round(h*10)/10))+'h';
 }
+// v5.x: hourly FORECAST rain mapped to dial minutes — shared by the inner
+// forecast ring (renderRainClock) and the radar-empty fallback below. Each rainy
+// hour -> {start,end} minutes-from-now + an intensity dBZ (mm/hr via Marshall-
+// Palmer). Light-moderate+ only, 12 h horizon, current hour included.
+function _rcForecastHours(){
+  const h=S._hourlyData;
+  if(!h||!h.time||!h.precipitation||!h.time.length)return [];
+  const nowMs=Date.now();
+  const FC_FLOOR_MM=0.1;
+  const out=[];
+  for(let i=0;i<h.time.length;i++){
+    const ts=new Date(h.time[i]).getTime();
+    if(isNaN(ts))continue;
+    const offMin=(ts-nowMs)/60000;
+    if(offMin<-60||offMin>720)continue;
+    const mm=h.precipitation[i]||0;
+    if(mm<FC_FLOOR_MM)continue;
+    const dbz=Math.round(_precipMmToDbz(mm));
+    if(dbz<_RC_FC_MIN_DBZ)continue;
+    out.push({start:Math.max(0,offMin),end:offMin+60,dbz,mm});
+  }
+  return out;
+}
+
+// v5.x: dial SPAN mode. 'forecast' (default) grows the span so the inner forecast
+// ring is always visible; 'radar' keeps the span sized to the nearest radar storm
+// (the most readable nowcast). Toggled from the chip in the dial legend.
+function _rcSpanMode(){return localStorage.getItem('st_rcSpanMode')||'forecast'}
+function _rcToggleSpanMode(){localStorage.setItem('st_rcSpanMode',_rcSpanMode()==='forecast'?'radar':'forecast');if(typeof renderRainClock==='function')renderRainClock()}
+if(typeof window!=='undefined')window._rcToggleSpanMode=_rcToggleSpanMode;
+
 function _rainClockProject(){
   const out={ready:false,minutes:new Array(_RC_TOTAL_MIN+1).fill(0),windows:[],
     nearest:null,stale:false,motionUnknown:false,noLoc:false,empty:false,
@@ -2071,7 +2102,14 @@ function _rainClockProject(){
   // fixed 3 h edge). Done in a quick pre-pass before we build the minutes array.
   let _maxEta=0;
   for(const s of inboundSrc){if(!s)continue;const e=s._eta;if(!e||e.eta==null)continue;if(e.eta>_maxEta)_maxEta=e.eta}
-  const span=_rcPickSpan(_maxEta);
+  // v5.x: the dial now carries a second (inner) FORECAST ring that must stay
+  // visible, so grow the span to also cover the furthest rainy forecast hour
+  // (capped at the same 12 h horizon as radar). Computed once and reused below.
+  const _fcHrs=_rcForecastHours();
+  let _maxFcMin=0;
+  for(const f of _fcHrs){if(f.end>_maxFcMin)_maxFcMin=f.end}
+  const _spanMode=(typeof _rcSpanMode==='function')?_rcSpanMode():'forecast';
+  const span=_rcPickSpan(Math.min(720,_spanMode==='radar'?_maxEta:Math.max(_maxEta,_maxFcMin)));
   out.span=span;
   out.minutes=new Array(span+1).fill(0);
   // v4.68: build cells from the inbound set regardless of radar staleness. The
@@ -2332,6 +2370,21 @@ function _rainClockProject(){
       out.totalMm=fcTotal;
     }
   }
+  // v5.x: inner-ring FORECAST minutes (predicted rain timing), computed from the
+  // hourly forecast over the dial's current span so the dial can show forecast
+  // timing on an INNER ring beside the outer radar ring. fcReady is false when the
+  // dial itself already fell back to forecast (out.forecast) — one ring is enough.
+  const _fcSpan=out.span||_RC_TOTAL_MIN;
+  out.fcMinutes=new Array(_fcSpan+1).fill(0);
+  const _fcH=_fcHrs;
+  out.fcReady=_fcH.length>0 && !out.forecast;
+  if(out.fcReady){
+    for(const f of _fcH){
+      const tIn=Math.max(0,Math.floor(f.start));
+      const tOut=Math.min(_fcSpan,Math.ceil(f.end));
+      for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}
+    }
+  }
   out.ready=true;
   return out;
 }
@@ -2434,6 +2487,30 @@ function renderRainClock(){
       const large=((e-s)/TOTAL)>0.5?1:0;
       segHandlers+=`<path d="M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R_ARC} ${R_ARC} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="rgba(0,0,0,0.001)" stroke-width="${R_ARC_W+10}" fill="none" stroke-linecap="butt" style="cursor:pointer" onclick="_rainClockSelectWindow(${wi})"><title>Tap for details · ${w.cells.length} cell${w.cells.length!==1?'s':''}</title></path>`;
     });
+  }
+  // v5.x: INNER forecast ring — dimmer + dashed, drawn INSIDE the tick ring so it
+  // reads as "predicted" beneath the solid outer radar ring. Contiguous rainy
+  // forecast runs become dashed arc paths coloured by their peak dBZ. Radar (outer,
+  // solid) stays the authoritative ring; forecast (inner, dashed) is the model view.
+  let fcArcs='';
+  const R_ARC_IN=80, R_ARC_IN_W=9;
+  if(data.ready&&data.fcReady&&data.fcMinutes){
+    const fm=data.fcMinutes;
+    const flush=(a,b)=>{
+      let peak=0;for(let t=a;t<=b;t++)if(fm[t]>peak)peak=fm[t];
+      const e=Math.min(TOTAL,b+1);
+      const [x0,y0]=ptAt(a,R_ARC_IN);
+      const [x1,y1]=ptAt(e,R_ARC_IN);
+      const large=(((e-a)/TOTAL)>0.5)?1:0;
+      const col=(typeof dbzHex==='function')?dbzHex(peak):'#39ff14';
+      fcArcs+=`<path d="M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R_ARC_IN} ${R_ARC_IN} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="${col}" stroke-width="${R_ARC_IN_W}" fill="none" stroke-linecap="butt" stroke-dasharray="5 4" opacity="0.5"/>`;
+    };
+    let a=null;
+    for(let m=0;m<=TOTAL;m++){
+      if(fm[m]>=_RC_FC_MIN_DBZ){if(a==null)a=m}
+      else if(a!=null){flush(a,m-1);a=null}
+    }
+    if(a!=null)flush(a,TOTAL);
   }
   // Center text: status + optional total rain estimate
   // v4.49: text view (toggled by tapping the dial center) builds richer
@@ -2599,6 +2676,13 @@ function renderRainClock(){
   // readiness — radar may be "ready" but show nothing, in which case the dial is
   // showing the hourly forecast and must say so.
   const sourceTag=data.forecast?'FORECAST':data.radarReady?'RADAR':data.forecastReady?'FORECAST (fallback)':'';
+  // v5.x: legend for the dual-ring dial — solid outer = observed radar, dashed
+  // inner = hourly forecast. Only shown in dial view when the forecast ring is drawn.
+  const _spanModeNow=(typeof _rcSpanMode==='function')?_rcSpanMode():'forecast';
+  const _spanChip=`<span onclick="_rcToggleSpanMode()" title="Dial span: ${_spanModeNow==='forecast'?'grows to keep forecast rain in view':'follows the nearest radar storm'} — tap to switch" style="cursor:pointer;border:1px solid var(--text-muted);border-radius:5px;padding:1px 7px">Span: ${_spanModeNow==='forecast'?'fits forecast':'radar'} ⇄</span>`;
+  const fcLegend=(!S._rainClockTextView&&data.ready&&data.fcReady)
+    ?`<div style="display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:14px;font-size:0.6em;color:var(--text-muted);margin-top:6px"><span><span style="display:inline-block;width:18px;border-top:3px solid #7fb0e0;vertical-align:middle;margin-right:5px"></span>Radar (observed)</span><span><span style="display:inline-block;width:18px;border-top:3px dashed #7fb0e0;vertical-align:middle;margin-right:5px"></span>Forecast</span>${_spanChip}</div>`
+    :'';
   // Header tag uses secBtns when the helper exists, so the rain clock card
   // joins the up/down reorder system used by the other Weather sections.
   const reorder=(typeof secBtns==='function')?secBtns('rainclock'):'';
@@ -2625,7 +2709,7 @@ function renderRainClock(){
       <div style="display:flex;justify-content:center">
         <svg viewBox="0 0 ${SIZE} ${SIZE}" width="100%" style="max-width:380px;height:auto" xmlns="http://www.w3.org/2000/svg">
           <circle cx="${CX}" cy="${CY}" r="${R_OUTER}" fill="rgba(10,16,32,0.55)" stroke="#1e2a3c" stroke-width="1"/>
-          ${ticks}${hourLabels}${arcs}${boundary}${segHandlers}${nowPointer}${center}${centerTap}
+          ${ticks}${fcArcs}${hourLabels}${arcs}${boundary}${segHandlers}${nowPointer}${center}${centerTap}
         </svg>
       </div>`;
   }
@@ -2640,6 +2724,7 @@ function renderRainClock(){
         </div>
       </div>
       ${viewBody}
+      ${fcLegend}
       ${sub}${foot}${hint}${accNote}${radarAgeNote}
       <div id="rain-clock-detail" style="margin-top:8px"></div>
     </div>`;

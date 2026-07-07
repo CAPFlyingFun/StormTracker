@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v5.47</title>
+<title>StormTracker v5.48</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,7 +16,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=646">
+<link rel="stylesheet" href="css/style.css?v=647">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -27,7 +27,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.47</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.48</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -649,22 +649,22 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=646" defer></script>
-<script src="js/core.js?v=646" defer></script>
-<script src="js/gauges.js?v=646" defer></script>
-<script src="js/icons.js?v=646" defer></script>
-<script src="js/geo.js?v=646" defer></script>
-<script src="js/settings.js?v=646" defer></script>
-<script src="js/thresholds.js?v=646" defer></script>
-<script src="js/weather.js?v=646" defer></script>
-<script src="js/radar.js?v=646" defer></script>
-<script src="js/storms.js?v=646" defer></script>
-<script src="js/station.js?v=646" defer></script>
-<script src="js/alerts.js?v=646" defer></script>
-<script src="js/briefingEngine.js?v=646" defer></script>
-<script src="js/ai.js?v=646" defer></script>
-<script src="js/push.js?v=646" defer></script>
-<script src="js/init.js?v=646" defer></script>
+<script src="js/radar-shared.js?v=647" defer></script>
+<script src="js/core.js?v=647" defer></script>
+<script src="js/gauges.js?v=647" defer></script>
+<script src="js/icons.js?v=647" defer></script>
+<script src="js/geo.js?v=647" defer></script>
+<script src="js/settings.js?v=647" defer></script>
+<script src="js/thresholds.js?v=647" defer></script>
+<script src="js/weather.js?v=647" defer></script>
+<script src="js/radar.js?v=647" defer></script>
+<script src="js/storms.js?v=647" defer></script>
+<script src="js/station.js?v=647" defer></script>
+<script src="js/alerts.js?v=647" defer></script>
+<script src="js/briefingEngine.js?v=647" defer></script>
+<script src="js/ai.js?v=647" defer></script>
+<script src="js/push.js?v=647" defer></script>
+<script src="js/init.js?v=647" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -674,7 +674,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=646')
+    navigator.serviceWorker.register('sw.js?v=647')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

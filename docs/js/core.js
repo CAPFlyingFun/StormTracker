@@ -867,11 +867,22 @@ function toggleLocOverlay(open){
   }
 }
 var _3dLoaded=false,_3dLoading=false;
+function _activate3DSafe(){
+  // activate3DView is async — exceptions surface as promise rejections, never
+  // sync throws, so wrap in Promise.resolve().catch() (a bare try/catch is inert).
+  try{
+    Promise.resolve(activate3DView()).catch(function(e){
+      console.error('[3D] activate error:',e);
+      var le=document.getElementById('v3d-loading');if(le)le.style.display='none';
+      var ee=document.getElementById('v3d-engine-error');if(ee)ee.style.display='flex';
+    });
+  }catch(e){console.error('[3D] activate error:',e)}
+}
 function _ensure3DLoaded(){
   // v5.40: NEVER wipe #view3d-container's innerHTML — it holds required markup
   // (v3d-loading spinner, v3d-empty-msg, v3d-engine-error, the whole HUD).
   // Toggle the existing overlays instead.
-  if(_3dLoaded){if(typeof activate3DView==='function')try{activate3DView()}catch(e){console.error('[3D] activate error:',e)}return;}
+  if(_3dLoaded){if(typeof activate3DView==='function')_activate3DSafe();return;}
   if(_3dLoading)return;
   _3dLoading=true;
   var loadEl=document.getElementById('v3d-loading');
@@ -893,7 +904,7 @@ function _ensure3DLoaded(){
         _ld('js/view3d.js'+_vq,function(){
           _3dLoaded=true;_3dLoading=false;
           var le=document.getElementById('v3d-loading');if(le)le.style.display='none';
-          if(typeof activate3DView==='function'){try{activate3DView()}catch(e){console.error('[3D] activate error:',e);var ee=document.getElementById('v3d-engine-error');if(ee)ee.style.display='flex'}}
+          if(typeof activate3DView==='function')_activate3DSafe();
         });
       });
     });

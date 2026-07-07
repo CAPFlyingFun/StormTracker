@@ -3,6 +3,13 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.41
+
+  **Hardening: 3D activation failures now surface visibly (async rejection fix).**
+
+  - `activate3DView()` is `async`, so exceptions inside it (e.g. `new THREE.WebGLRenderer` throwing when WebGL context creation fails — older GPUs, iOS Lockdown Mode) surface as promise rejections, which a bare `try/catch` around the call can never catch. Both activation call sites in `core.js` now go through `_activate3DSafe()`, which wraps the call in `Promise.resolve(...).catch(...)` — on failure it hides `#v3d-loading` and shows `#v3d-engine-error` (Reload & Retry) instead of stranding the spinner.
+  - Cache: `stormtracker-v640`, query strings `?v=640`.
+
   ## v5.40
 
   **Fix: 3D tab stuck on "Loading 3D…" after v5.39's lazy-load change.**

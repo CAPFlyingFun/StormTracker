@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v5.36</title>
+<title>StormTracker v5.37</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
-<link rel="stylesheet" href="css/style.css?v=635">
+<link rel="stylesheet" href="css/style.css?v=636">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -28,7 +28,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.36</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.37</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -650,25 +650,25 @@
   </div>
 </div>
 
-<script src="js/core.js?v=635"></script>
-<script src="js/gauges.js?v=635"></script>
-<script src="js/icons.js?v=635"></script>
-<script src="js/geo.js?v=635"></script>
-<script src="js/settings.js?v=635"></script>
-<script src="js/thresholds.js?v=635"></script>
-<script src="js/weather.js?v=635"></script>
-<script src="js/radar.js?v=635"></script>
-<script src="js/storms.js?v=635"></script>
-<script src="js/station.js?v=635"></script>
-<script src="js/alerts.js?v=635"></script>
-<script src="js/briefingEngine.js?v=635"></script>
-<script src="js/ai.js?v=635"></script>
-<script src="js/push.js?v=635"></script>
-<script src="js/init.js?v=635"></script>
+<script src="js/core.js?v=636"></script>
+<script src="js/gauges.js?v=636"></script>
+<script src="js/icons.js?v=636"></script>
+<script src="js/geo.js?v=636"></script>
+<script src="js/settings.js?v=636"></script>
+<script src="js/thresholds.js?v=636"></script>
+<script src="js/weather.js?v=636"></script>
+<script src="js/radar.js?v=636"></script>
+<script src="js/storms.js?v=636"></script>
+<script src="js/station.js?v=636"></script>
+<script src="js/alerts.js?v=636"></script>
+<script src="js/briefingEngine.js?v=636"></script>
+<script src="js/ai.js?v=636"></script>
+<script src="js/push.js?v=636"></script>
+<script src="js/init.js?v=636"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
-<script src="js/view3d.js?v=635"></script>
+<script src="js/view3d.js?v=636"></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -678,7 +678,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=635')
+    navigator.serviceWorker.register('sw.js?v=636')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

@@ -3,6 +3,14 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.37
+
+  **Globe icon packs optimized — ~95% smaller, identical on screen.**
+
+  - **What changed** — the 🌐 Globe (PNG) and 🌐 Animated Globe (MP4) icon packs shipped full-resolution media (1024×1024 PNGs ~1.3 MB each; 1280×720 videos at ~18 Mbps, 1.5–8.7 MB each) for icons displayed at ~20–40 px. All 88 files were re-encoded to display-appropriate size: PNGs downscaled to 256×256 (45 MB → 4.5 MB), videos to 320px / CRF 30 / audio stripped (120 MB → 3.3 MB). `docs/` dropped from ~168 MB to ~3.6 MB.
+  - **Also** — old development screenshots (`attached_assets/`, ~15 MB) were removed from the repository; they were never used by the site. Repo zip download shrinks from ~183 MB to under 10 MB.
+  - **Cache bumped** — `?v=636` / `stormtracker-v636` (also flushes any previously cached full-size icon media).
+
   ## v5.36
 
   **Choose your AI provider — OpenAI or Claude (Anthropic) — for the assistant, briefings, and background alerts.**

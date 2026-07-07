@@ -3,6 +3,15 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.40
+
+  **Fix: 3D tab stuck on "Loading 3D…" after v5.39's lazy-load change.**
+
+  - **Root cause** — v5.39's `_ensure3DLoaded()` replaced `#view3d-container`'s `innerHTML` with a "Loading 3D…" indicator, destroying the container's required child markup: the `#v3d-loading` spinner, `#v3d-empty-msg`, `#v3d-engine-error`, and the entire HUD (tier filter buttons, compass tape, camera controls, info panels, storm popup). When `view3d.js` then loaded, `activate3DView()` had none of its overlay elements, so nothing could render or report status — the stale text stayed on screen forever.
+  - **Fix** — the loader no longer touches the container's markup. It shows the pre-existing `#v3d-loading` overlay while the Three.js chain downloads, hides it on completion, and shows the pre-existing `#v3d-engine-error` overlay (with its Reload & Retry button) if any script fails to load **or** if `activate3DView()` throws (now wrapped in try/catch).
+  - **Hardening** — the `?v=` cache-bust for the dynamically injected `view3d.js` is now derived from `core.js`'s own script tag instead of being hardcoded, so it can never drift out of lockstep with the page version.
+  - Cache: `stormtracker-v639`, query strings `?v=639`.
+
   ## v5.39
 
   **Startup performance: parallel script loading, 3D on-demand, Turf removed from boot.**

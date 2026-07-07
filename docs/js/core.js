@@ -868,19 +868,32 @@ function toggleLocOverlay(open){
 }
 var _3dLoaded=false,_3dLoading=false;
 function _ensure3DLoaded(){
-  if(_3dLoaded){activate3DView();return;}
+  // v5.40: NEVER wipe #view3d-container's innerHTML — it holds required markup
+  // (v3d-loading spinner, v3d-empty-msg, v3d-engine-error, the whole HUD).
+  // Toggle the existing overlays instead.
+  if(_3dLoaded){if(typeof activate3DView==='function')try{activate3DView()}catch(e){console.error('[3D] activate error:',e)}return;}
   if(_3dLoading)return;
   _3dLoading=true;
-  var c=document.getElementById('view3d-container');
-  if(c)c.innerHTML='<div style="display:flex;justify-content:center;align-items:center;height:100%;color:var(--text-secondary);font-size:1.1em;letter-spacing:0.02em">Loading 3D…</div>';
-  function _ld(src,cb){var s=document.createElement('script');s.src=src;s.onload=cb;s.onerror=function(){console.error('[3D] failed to load:',src);_3dLoading=false;var c2=document.getElementById('view3d-container');if(c2)c2.innerHTML='<div style="display:flex;justify-content:center;align-items:center;height:100%;color:var(--accent-red,#f55)">Failed to load 3D. Check connection.</div>';};document.head.appendChild(s);}
+  var loadEl=document.getElementById('v3d-loading');
+  if(loadEl)loadEl.style.display='flex';
+  function _fail(src){
+    console.error('[3D] failed to load:',src);
+    _3dLoading=false;
+    var le=document.getElementById('v3d-loading');if(le)le.style.display='none';
+    var ee=document.getElementById('v3d-engine-error');if(ee)ee.style.display='flex';
+  }
+  function _ld(src,cb){var s=document.createElement('script');s.src=src;s.onload=cb;s.onerror=function(){_fail(src)};document.head.appendChild(s);}
+  // Derive the cache-bust counter from our own script tag so it can't drift.
+  var _vq='';
+  try{var _cs=document.querySelector('script[src*="js/core.js"]');var _m=_cs&&_cs.src.match(/[?&]v=(\d+)/);if(_m)_vq='?v='+_m[1];}catch(e){}
   var CDN='https://cdn.jsdelivr.net/npm/three@0.128.0/';
   _ld(CDN+'build/three.min.js',function(){
     _ld(CDN+'examples/js/controls/OrbitControls.js',function(){
       _ld(CDN+'examples/js/utils/BufferGeometryUtils.js',function(){
-        _ld('js/view3d.js?v=638',function(){
+        _ld('js/view3d.js'+_vq,function(){
           _3dLoaded=true;_3dLoading=false;
-          if(typeof activate3DView==='function')activate3DView();
+          var le=document.getElementById('v3d-loading');if(le)le.style.display='none';
+          if(typeof activate3DView==='function'){try{activate3DView()}catch(e){console.error('[3D] activate error:',e);var ee=document.getElementById('v3d-engine-error');if(ee)ee.style.display='flex'}}
         });
       });
     });

@@ -3,6 +3,15 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.51
+
+  **Rain Clock: forecast stays on the inner ring (radar always outer); header tidy-up.**
+
+  - The dual-ring dial kept the forecast on an INNER dashed ring while radar was present, but the radar-empty fallback promoted the forecast to a SOLID OUTER ring (and hid the inner ring) — so the forecast appeared to jump between rings as radar loaded/cleared. Now the layout is always the same: OUTER = live radar (solid), INNER = forecast (dashed), on separate rings so they never overlap/conflict at the same time slot.
+  - `_rainClockProject()`: the forecast fallback no longer paints into `out.minutes` (the radar/outer layer) — it builds the center-summary windows from a local array and leaves `out.minutes` empty. `out.fcMinutes` is now always computed (dropped the `!out.forecast` gate) so the inner forecast ring renders in the fallback too. `renderRainClock()` draws the two rings accordingly.
+  - Removed the RADAR/FORECAST source tag and the TEXT/DIAL toggle from the card header (the legend already distinguishes the rings; tapping the dial centre still switches to the text summary).
+  - Cache: `?v=650`, SW `stormtracker-v650`.
+
   ## v5.50
 
   **Fix: Rain Clock forecast (inner) ring now shows light forecast rain.**

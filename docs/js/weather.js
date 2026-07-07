@@ -2338,19 +2338,21 @@ function _rainClockProject(){
       // 3 h default above).
       const fspan=_rcPickSpan(Math.min(720,fcMaxMin));
       out.span=fspan;
+      // v5.52: keep out.minutes as the RADAR layer (empty here) — the forecast is
+      // drawn on the INNER ring (out.fcMinutes), never promoted to the solid outer
+      // ring. Resize the (empty) radar array; build the center-summary windows from
+      // a LOCAL forecast array so the wording/tap-details still work.
       out.minutes=new Array(fspan+1).fill(0);
+      const fmins=new Array(fspan+1).fill(0);
       for(const f of fcHours){
         const tIn=Math.max(0,Math.floor(f.start));
         const tOut=Math.min(fspan,Math.ceil(f.end));
-        for(let t=tIn;t<=tOut;t++){if(f.dbz>out.minutes[t])out.minutes[t]=f.dbz}
+        for(let t=tIn;t<=tOut;t++){if(f.dbz>fmins[t])fmins[t]=f.dbz}
       }
-      // Build windows from contiguous painted minutes. Only minutes at/above the
-      // forecast floor (_RC_FC_MIN_DBZ) count — every painted minute already
-      // passed that floor above, so this just guards the window boundaries.
       const fwins=[];
       let fc=null;
       for(let t=0;t<=fspan;t++){
-        const v=out.minutes[t];
+        const v=fmins[t];
         if(v>=_RC_FC_MIN_DBZ){if(!fc)fc={startMin:t,endMin:t,peakDbz:v};else{fc.endMin=t;if(v>fc.peakDbz)fc.peakDbz=v}}
         else if(fc){fwins.push(fc);fc=null}
       }
@@ -2377,13 +2379,11 @@ function _rainClockProject(){
   const _fcSpan=out.span||_RC_TOTAL_MIN;
   out.fcMinutes=new Array(_fcSpan+1).fill(0);
   const _fcH=_fcHrs;
-  out.fcReady=_fcH.length>0 && !out.forecast;
-  if(out.fcReady){
-    for(const f of _fcH){
-      const tIn=Math.max(0,Math.floor(f.start));
-      const tOut=Math.min(_fcSpan,Math.ceil(f.end));
-      for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}
-    }
+  out.fcReady=_fcH.length>0;   // inner forecast ring shows whenever forecast rain exists (radar present OR fallback)
+  for(const f of _fcH){
+    const tIn=Math.max(0,Math.floor(f.start));
+    const tOut=Math.min(_fcSpan,Math.ceil(f.end));
+    for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}
   }
   out.ready=true;
   return out;
@@ -2458,20 +2458,21 @@ function renderRainClock(){
   // Per-minute gradient arc segments — each minute where dBZ ≥ 25 paints a
   // tiny colored chord at that angular position, so colors blend along the
   // arc instead of being flat per-window.
+  // v5.52: TWO rings, always the same layout — OUTER = live radar (solid),
+  // INNER = hourly forecast (dashed). Kept on SEPARATE rings so radar and forecast
+  // never overlap/conflict at the same time slot. The forecast ALSO stays on the
+  // inner ring when radar is empty (the fallback no longer promotes it to a solid
+  // outer ring), so it never appears to jump between rings as radar loads/clears.
   let arcs='';
   let segHandlers='';
   if(data.ready){
-    // v4.57: full-circle background for the radar zone (the whole dial IS
-    // the radar zone now). Drawn as a single <circle> instead of an SVG arc
-    // because at TOTAL=180 the start and end angles coincide and a path arc
-    // would degenerate to nothing.
+    // faint full-circle track
     arcs+=`<circle cx="${CX}" cy="${CY}" r="${R_ARC}" stroke="rgba(80,140,200,0.10)" stroke-width="${R_ARC_W}" fill="none"/>`;
-    // Per-minute colored segments.
+    // OUTER: live radar only (solid per-minute segments). Empty in forecast fallback,
+    // where data.minutes holds no radar — the forecast is on the inner ring instead.
     for(let m=0;m<TOTAL;m++){
       const v=data.minutes[m];
-      // Forecast dial uses the light-moderate forecast floor (_RC_FC_MIN_DBZ);
-      // the live-radar dial keeps the stricter radar-noise floor (_RC_MIN_DBZ).
-      if(v<(data.forecast?_RC_FC_MIN_DBZ:_RC_MIN_DBZ))continue;
+      if(v<_RC_MIN_DBZ)continue;
       const [x0,y0]=ptAt(m,R_ARC);
       const [x1,y1]=ptAt(m+1,R_ARC);
       const col=(typeof dbzHex==='function')?dbzHex(v):'#39ff14';
@@ -2488,10 +2489,9 @@ function renderRainClock(){
       segHandlers+=`<path d="M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R_ARC} ${R_ARC} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="rgba(0,0,0,0.001)" stroke-width="${R_ARC_W+10}" fill="none" stroke-linecap="butt" style="cursor:pointer" onclick="_rainClockSelectWindow(${wi})"><title>Tap for details · ${w.cells.length} cell${w.cells.length!==1?'s':''}</title></path>`;
     });
   }
-  // v5.x: INNER forecast ring — dimmer + dashed, drawn INSIDE the tick ring so it
-  // reads as "predicted" beneath the solid outer radar ring. Contiguous rainy
-  // forecast runs become dashed arc paths coloured by their peak dBZ. Radar (outer,
-  // solid) stays the authoritative ring; forecast (inner, dashed) is the model view.
+  // INNER forecast ring — dashed, coloured by peak dBZ. Shown whenever there's
+  // forecast rain (INCLUDING the radar-empty fallback), so the forecast is always
+  // the inner ring and never moves out to the radar ring.
   let fcArcs='';
   const R_ARC_IN=80, R_ARC_IN_W=9;
   if(data.ready&&data.fcReady&&data.fcMinutes){
@@ -2503,7 +2503,7 @@ function renderRainClock(){
       const [x1,y1]=ptAt(e,R_ARC_IN);
       const large=(((e-a)/TOTAL)>0.5)?1:0;
       const col=(typeof dbzHex==='function')?dbzHex(peak):'#39ff14';
-      fcArcs+=`<path d="M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R_ARC_IN} ${R_ARC_IN} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="${col}" stroke-width="${R_ARC_IN_W}" fill="none" stroke-linecap="butt" stroke-dasharray="5 4" opacity="0.5"/>`;
+      fcArcs+=`<path d="M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R_ARC_IN} ${R_ARC_IN} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="${col}" stroke-width="${R_ARC_IN_W}" fill="none" stroke-linecap="butt" stroke-dasharray="5 4" opacity="0.55"/>`;
     };
     let a=null;
     for(let m=0;m<=TOTAL;m++){
@@ -2718,8 +2718,6 @@ function renderRainClock(){
       <div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <span class="card-title m-0"><span class="icon">🌧️</span> Rain Clock · ${_spanLabel}</span>
         <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:0.55em;color:var(--text-muted);letter-spacing:0.04em">${sourceTag}</span>
-          ${toggleBtn}
           ${reorder}
         </div>
       </div>

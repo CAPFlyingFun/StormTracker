@@ -2049,7 +2049,7 @@ function _rainClockProject(){
     const d=p.dist!=null?p.dist:haversine(S.lat,S.lon,p.lat,p.lng);
     if(d<nearestDist){nearestDist=d;nearestBearing=bearingDeg(S.lat,S.lon,p.lat,p.lng)}
   }
-  if(nearestDist<Infinity&&nearestBearing!=null){out.nearest={mi:nearestDist,dir:degToDir(nearestBearing)}}
+  if(nearestDist<Infinity&&nearestBearing!=null){out.nearest={mi:nearestDist,dir:degToDir(nearestBearing),brg:nearestBearing}}
   const vMag=Math.sqrt(vx*vx+vy*vy);
   // === v4.68: the Rain Clock dial now mirrors the EXACT inbound storm set the
   // Storms tab shows. Previously this function ran its OWN independent pipeline —
@@ -2544,7 +2544,31 @@ function renderRainClock(){
   let sub='';
   if(data.nearest){
     const dStr=S.radarMetric?(data.nearest.mi*1.609).toFixed(0)+' km':data.nearest.mi.toFixed(0)+' mi';
-    sub=`<div style="font-size:0.7em;color:var(--text-secondary);text-align:center;margin-top:6px"><span style="color:var(--text-muted)">Nearest Precipitation:</span> <strong>${dStr}</strong> to the ${data.nearest.dir}</div>`;
+    // v5.44: when the dial is empty but rain exists in range, estimate how far
+    // out it is at the current storm speed — an empty 3H dial with storms on
+    // radar 50 mi away otherwise reads like a bug (rain is simply >3 hrs out).
+    // Honesty gate: only show the estimate when the fleet movement actually
+    // points from the precip TOWARD the user (cos of the angle between the
+    // movement heading and the precip→user bearing > 0.3, i.e. within ~72°);
+    // otherwise the rain is sliding past or receding and no ETA is honest.
+    let etaTxt='';
+    if(!(data.windows&&data.windows.length)&&data.nearest.brg!=null){
+      const _mv=(typeof getSteeringMv==='function')?getSteeringMv():null;
+      if(_mv&&_mv.speed>=2){
+        const _toUser=(data.nearest.brg+180)%360;
+        const _cos=Math.cos((_mv.direction-_toUser)*Math.PI/180);
+        if(_cos>0.3){
+          const _h=data.nearest.mi/(_mv.speed*_cos);
+          if(_h>0.1){
+            const _t=_h<1?Math.round(_h*60)+' min':(Math.round(_h*10)/10)+' hrs';
+            etaTxt=` · ≈ ${_t} out at current storm speed`;
+          }
+        }else if(_cos<-0.3){
+          etaTxt=' · moving away';
+        }
+      }
+    }
+    sub=`<div style="font-size:0.7em;color:var(--text-secondary);text-align:center;margin-top:6px"><span style="color:var(--text-muted)">Nearest Precipitation:</span> <strong>${dStr}</strong> to the ${data.nearest.dir}${etaTxt}</div>`;
   }
   let foot='';
   if(data.motionUnknown&&data.radarReady){

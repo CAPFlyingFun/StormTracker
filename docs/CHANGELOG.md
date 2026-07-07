@@ -3,6 +3,18 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.44
+
+  **UX fix: "in N storm track cones" no longer contradicts "no storms approaching".**
+
+  - The Storms tab could simultaneously show "🎯 You are currently in 30 storm track cones" (header), a green "No storms currently approaching your location" banner, an empty storm list (with "Approaching only" checked), and a 0 badge — reading like a data-refresh bug. It wasn't: cone membership means the user is inside a storm's broad 15° projected track fan (≈13 mi half-width at 50 mi range), while "approaching" requires a projected closest pass under ~6 mi (direct/near-direct tiers). All surfaces agreed; the display just never explained the distinction.
+  - `renderStorms` now publishes `S._coneStats` `{count, minMiss, scanId}` from the existing cone-count loop (min projected pass distance among in-cone storms, via `calcStormETAForBriefing().perpMissMi`).
+  - When the forecast banner is empty but the user is in ≥1 cone, `_smartStormSummary` renders an amber explainer with the closest projected pass distance instead of the flat green "nothing approaching".
+  - The "N cells hidden by filters" note now says why ("none head directly at you; uncheck 'Approaching only' to see nearby tracks") when that filter is what's hiding everything.
+  - Rain Clock: when the dial has no rain windows but precipitation exists in range, the "Nearest Precipitation" line adds "≈ X hrs out at current storm speed" (distance ÷ steering speed) so an empty 3H dial with storms 50 mi away doesn't read as broken.
+  - Display-only change — no alert, push, or classification behavior touched.
+  - Cache: `?v=643`, SW `stormtracker-v643`.
+
   ## v5.43
 
   **Refactor (Phase 1 of scan-pipeline consolidation): one shared radar module for app + scanner.**

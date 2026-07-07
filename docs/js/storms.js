@@ -2836,7 +2836,18 @@ function buildStormForecastLines(plain){
 if(typeof window!=='undefined')window.buildStormForecastLines=buildStormForecastLines;
 function _smartStormSummary(storms){
   const r=buildStormForecastLines(false);
-  if(r.empty)return'<div style="padding:8px 12px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:8px;font-size:0.8em;color:#4ade80;margin-bottom:8px">No storms currently approaching your location.</div>';
+  if(r.empty){
+    // v5.44: if the user is inside storm track cones, a flat green "nothing
+    // approaching" reads like a bug (header says "you are in 30 cones").
+    // Explain the distinction instead: tracks pass NEAR you, none projected
+    // to pass within the strict "approaching" bar (~6 mi closest pass).
+    const cs=S._coneStats;
+    if(cs&&cs.count>0&&cs.scanId===S._stormScanId){
+      const missTxt=(cs.minMiss!=null&&isFinite(cs.minMiss))?(S.radarMetric?(cs.minMiss*1.609).toFixed(0)+' km':Math.round(cs.minMiss)+' mi'):null;
+      return`<div style="padding:8px 12px;background:rgba(250,204,21,0.08);border:1px solid rgba(250,204,21,0.25);border-radius:8px;font-size:0.78em;line-height:1.5;color:#facc15;margin-bottom:8px">🎯 ${cs.count} storm track${cs.count!==1?'s':''} pass${cs.count!==1?'':'es'} near your location, but none are currently projected to hit you directly${missTxt?' — closest projected pass ≈ <strong>'+missTxt+'</strong> away':''}. Storm paths can shift — keep an eye on the radar.</div>`;
+    }
+    return'<div style="padding:8px 12px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:8px;font-size:0.8em;color:#4ade80;margin-bottom:8px">No storms currently approaching your location.</div>';
+  }
   if(!r.lines.length)return'';
   return`<div style="padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.15);border-radius:8px;font-size:0.78em;line-height:1.6;margin-bottom:8px">${r.lines.join('<br>')}</div>`;
 }
@@ -2912,6 +2923,7 @@ function _renderStormsCore(){
   if(mv&&mv.speed>=2){storms.forEach(s=>{s._eta=calcStormETA(s)})}else{storms.forEach(s=>{if(!s._eta)s._eta=calcStormETA(s)})}
   let inConeCount=0;
   let inConeWorstCls=null;
+  let inConeMinMiss=null;
   if(mv&&mv.speed>=2&&S._tracksMode!=='off'){
     const uLat=S.lat,uLng=S.lon;
     const _coneFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
@@ -2933,6 +2945,7 @@ function _renderStormsCore(){
         inConeCount++;
         try{
           const b=calcStormETAForBriefing(s);
+          if(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi)&&(inConeMinMiss==null||b.perpMissMi<inConeMinMiss))inConeMinMiss=b.perpMissMi;
           if(b&&b.classification==='direct')inConeWorstCls='direct';
           else if(b&&b.classification==='near_direct'&&inConeWorstCls!=='direct')inConeWorstCls='near_direct';
           else if(b&&b.classification==='near_miss'&&inConeWorstCls!=='direct'&&inConeWorstCls!=='near_direct')inConeWorstCls='near_miss';
@@ -2940,6 +2953,12 @@ function _renderStormsCore(){
       }
     });
   }
+  // v5.44: publish cone stats so the "no storms approaching" banner and the
+  // hidden-by-filters note can EXPLAIN "in N cones but 0 approaching" instead
+  // of contradicting the header. In-cone = inside a storm's broad 15° track
+  // envelope (widens with distance — ~13 mi half-width at 50 mi out), while
+  // "approaching" = projected closest pass under ~6 mi. Very different bars.
+  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,scanId:S._stormScanId};
   const inConeColor=inConeWorstCls?stormClass(inConeWorstCls).color:'#6b7280';
   const sf=S._stormFilter||_loadStormFilter();
   const filtered=_applyStormFilter(storms,sf);
@@ -3165,7 +3184,7 @@ function _renderStormsCore(){
     </div>
     ${noWindBanner}${smartSummary}
     ${_renderFilterBar(sf)}
-    ${(()=>{const hidden=totalCount-filteredCount;if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
+    ${(()=>{const hidden=totalCount-filteredCount;if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(sf.approachOnly&&S._coneStats&&S._coneStats.count>0&&S._coneStats.scanId===S._stormScanId)?' — none head directly at you; uncheck "Approaching only" to see nearby tracks':''}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
     <div class="card"><div class="card-title"><span class="icon">🌪️</span> Storm Points</div>
       ${groupHtml}
     </div>

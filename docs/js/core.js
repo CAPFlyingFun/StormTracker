@@ -885,6 +885,17 @@ function _ensure3DLoaded(){
   if(_3dLoaded){if(typeof activate3DView==='function')_activate3DSafe();return;}
   if(_3dLoading)return;
   _3dLoading=true;
+  // v5.42: size #page-3d BEFORE showing the spinner. On mobile the page has no
+  // CSS height — resize3DPage() (in view3d.js, not loaded yet) normally sets it,
+  // so without this the container collapses to 0px and the spinner is invisible
+  // while the scripts download. Same formula as resize3DPage().
+  var _pg=document.getElementById('page-3d');
+  if(_pg&&!_pg.style.height){
+    var _hdr=document.querySelector('.app-header');
+    var _hdrH=_hdr?_hdr.offsetHeight:0;
+    var _navH=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav-height'))||60;
+    _pg.style.height=(window.innerHeight-_hdrH-_navH)+'px';
+  }
   var loadEl=document.getElementById('v3d-loading');
   if(loadEl)loadEl.style.display='flex';
   function _fail(src){

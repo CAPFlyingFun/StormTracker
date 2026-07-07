@@ -3,6 +3,14 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.42
+
+  **Fix: 3D tab showed a blank screen (no spinner) during the first-open script download.**
+
+  - On mobile, `#page-3d.visible` is `display:flex` with no CSS height — the height is normally applied by `resize3DPage()` in `view3d.js`. During the first lazy-load, `view3d.js` isn't loaded yet, so `#page-3d` had no height, `#view3d-container` (flex:1) collapsed to ~0px, and the absolutely-positioned `#v3d-loading` spinner was invisible while the Three.js chain downloaded.
+  - `_ensure3DLoaded()` now sizes `#page-3d` (same formula as `resize3DPage()`: `innerHeight − header − nav`) *before* showing the spinner, so the loading indicator appears instantly on tab press.
+  - Cache: `stormtracker-v641`, query strings `?v=641`.
+
   ## v5.41
 
   **Hardening: 3D activation failures now surface visibly (async rejection fix).**

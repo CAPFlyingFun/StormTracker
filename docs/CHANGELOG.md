@@ -3,6 +3,14 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.38
+
+  **Globe icon packs rebuilt at hero resolution — fixes v5.37 pixelation on the Weather hero showcase.**
+
+  - **What changed** — v5.37 sized the Globe pack media for small icons (20–40 px) but missed the Weather tab hero showcase, which renders the icon at 240–300 CSS px (up to ~900 device px on 3× retina). The 256 px PNGs / 320 px videos looked pixelated there. All 88 files were rebuilt from the originals (recovered from git history): PNGs at 768×768 + pngquant (45 MB → 8.6 MB), videos center-cropped square (matching the app's `object-fit:cover` circle) and scaled to 640×640 CRF 28 (120 MB → 24 MB).
+  - **Net** — packs remain ~80% smaller than pre-v5.37 while being visually indistinguishable from the originals at every display size, including the hero.
+  - **Cache bumped** — `?v=637` / `stormtracker-v637` (flushes the v5.37 low-res media from client caches).
+
   ## v5.37
 
   **Globe icon packs optimized — ~95% smaller, identical on screen.**

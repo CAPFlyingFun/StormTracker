@@ -1995,6 +1995,10 @@ function isOverheadPollEnabled(){
   try{return localStorage.getItem('st_overheadPoll')!=='0'}catch(e){return true}
 }
 function _getOverheadPollMs(){
+  // v5.53: adaptive — poll the overhead radar less often on slow links (the speed
+  // monitor's netTier), on top of the browser Network Info API + Data Saver checks.
+  try{ if(typeof netIsVerySlow==='function'&&netIsVerySlow())return 300000; }catch(e){}
+  try{ if(typeof netIsSlow==='function'&&netIsSlow())return 180000; }catch(e){}
   try{
     const c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
     if(c){

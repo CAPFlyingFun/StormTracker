@@ -178,7 +178,7 @@ async function _runConnectionSpeedTest(){
   const t0=performance.now();
   try{
     const ctrl=new AbortController();
-    const to=setTimeout(()=>ctrl.abort(),8000);
+    const to=setTimeout(()=>ctrl.abort(),12000);   // v5.53: was 8s — give slow links a chance to finish before we give up
     const r=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:ctrl.signal,cache:'no-store'});
     clearTimeout(to);
     if(!r.ok)throw new Error('HTTP '+r.status);
@@ -190,11 +190,64 @@ async function _runConnectionSpeedTest(){
     if(typeof _bootStepDone==='function')_bootStepDone('net',`Connection: ${ms}ms · ${S._netSpeed}`);
     return ms;
   }catch(e){
-    S._netRttMs=null;S._netSpeed='offline';
-    console.log('[Net] Speed test failed:',e.message);
-    if(typeof _bootStepFail==='function')_bootStepFail('net','Connection check failed');
+    // v5.53: a timeout/abort on a link the browser still reports as ONLINE means
+    // SLOW, not offline — say so instead of the alarming "Connection check failed".
+    // The app runs fine slow (cache-first + graceful data fetches); only flag a
+    // real failure when navigator.onLine is actually false.
+    const online=(typeof navigator!=='undefined')?navigator.onLine!==false:true;
+    S._netRttMs=null;
+    S._netSpeed=online?'verySlow':'offline';
+    console.log('[Net] Speed test:',online?'slow (timed out, still online)':'offline','—',e.message);
+    if(online){ if(typeof _bootStepDone==='function')_bootStepDone('net','Connection: slow'); }
+    else { if(typeof _bootStepFail==='function')_bootStepFail('net','Offline — using cached data'); }
     return null;
   }
+}
+
+// ==========================================
+// ADAPTIVE NETWORK MONITOR (v5.53) — re-checks speed every 60s (visibility-aware)
+// and adjusts what loads/shows: background radar-poll cadence, a live connection-
+// mode chip in the header, and netIsSlow()/netIsVerySlow() gates other features can
+// hang off. Before this, the boot speed test computed _netSpeed but nothing read it.
+// ==========================================
+let _netPrevTier=null, _netMonitorTimer=null;
+function netTier(){ return (typeof S!=='undefined'&&S._netSpeed)?S._netSpeed:'unknown'; }
+function netIsSlow(){ const t=netTier(); return t==='slow'||t==='verySlow'||t==='offline'; }
+function netIsVerySlow(){ const t=netTier(); return t==='verySlow'||t==='offline'; }
+function _netModeChipInfo(t){
+  if(t==='offline') return {txt:'📡 Offline',col:'#ff5a6a'};
+  if(t==='verySlow')return {txt:'🐌 Very slow',col:'#ffa500'};
+  if(t==='slow')    return {txt:'🐢 Slow',col:'#ffd23a'};
+  return null;   // fast / medium / unknown -> hide the chip
+}
+function _updateNetModeChip(t){
+  const el=document.getElementById('net-mode'); if(!el)return;
+  const m=_netModeChipInfo(t);
+  if(m){ el.textContent=m.txt; el.style.color=m.col; el.style.borderColor=m.col; el.style.display=''; }
+  else { el.style.display='none'; }
+}
+function _applyNetAdaptations(){
+  const t=netTier();
+  _updateNetModeChip(t);
+  // re-arm the background radar poll so the new (tier-aware) interval applies now
+  if(typeof _rearmOverheadPoll==='function'){try{_rearmOverheadPoll()}catch(e){}}
+  // announce only meaningful slow<->normal transitions, not every 60s tick
+  if(_netPrevTier!==null&&t!==_netPrevTier){
+    const slowNow=(t==='slow'||t==='verySlow'||t==='offline');
+    const slowBefore=(_netPrevTier==='slow'||_netPrevTier==='verySlow'||_netPrevTier==='offline');
+    if(slowNow&&!slowBefore){ if(typeof toast==='function')toast('🐢 Slow connection — easing off background updates'); }
+    else if(!slowNow&&slowBefore){ if(typeof toast==='function')toast('⚡ Connection back to normal'); }
+  }
+  _netPrevTier=t;
+}
+function _recheckNet(){ return _runConnectionSpeedTest().then(()=>{_applyNetAdaptations();}); }
+function _netMonitorStart(){
+  if(_netMonitorTimer)return;
+  _applyNetAdaptations();                                   // reflect the boot reading immediately
+  _netMonitorTimer=setInterval(()=>{ if(!document.hidden)_recheckNet(); },60000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden)_recheckNet(); });
+  window.addEventListener('online', ()=>_recheckNet());
+  window.addEventListener('offline',()=>{ if(typeof S!=='undefined')S._netSpeed='offline'; _applyNetAdaptations(); });
 }
 
 async function init(){
@@ -206,7 +259,7 @@ async function init(){
   _initPWAInstallPrompt();
   _initOfflineDetection();
   S._bootInProgress=true;
-  _runConnectionSpeedTest();
+  _runConnectionSpeedTest().then(()=>_netMonitorStart());
   try{
     const saved=JSON.parse(localStorage.getItem('st_loc'));
     if(saved&&saved.lat&&saved.lon){

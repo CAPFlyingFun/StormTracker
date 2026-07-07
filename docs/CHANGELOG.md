@@ -3,6 +3,16 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.53
+
+  **Adaptive network: a live speed monitor that actually adjusts loading.**
+
+  - The boot connection speed test computed `_netSpeed` but nothing ever read it — the "adjust based on speed" was scaffolded, never wired. It now drives real behavior.
+  - New adaptive monitor (`init.js`): measures at boot and re-checks every 60 s (paused while the tab is hidden; also re-checks on focus and on online/offline events). Maintains `netTier()` with `netIsSlow()` / `netIsVerySlow()` gates for future trims.
+  - Adaptations: the background overhead-radar poll cadence scales with the tier (90 s normal → 180 s slow → 300 s very-slow/offline, on top of the existing Network-Info / Data-Saver checks). A live connection-mode chip appears in the header on slow / very-slow / offline (hidden when fast, so no clutter), and a toast fires on meaningful slow↔normal transitions.
+  - Honest detection: a slow-but-online link that times out now reads as "slow" (`verySlow` tier + chip), not the alarming "Connection check failed" / offline. Give-up timeout raised 8 s → 12 s.
+  - Cache: `?v=652`, SW `stormtracker-v652`.
+
   ## v5.52
 
   **Perf: faster first paint — defer Leaflet, add preconnect hints.**

@@ -3,6 +3,17 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.47
+
+  **Phase 4 (final) of scan-pipeline consolidation: canonical `dbzAtLocation()` oracle (BEHAVIOR CHANGE).**
+
+  - New `dbzAtLocation(lat, lon)` in `docs/js/radar.js` — the one canonical "what dBZ is at this spot right now" answer. Hex-bins the live raw scan points around any location (center cell, else the 6 neighbor cells with centers ≤5 mi). `checkUserInZone()` is now a thin wrapper over it, preserving its array shape for the Storms-tab zone banner; `rainOverUserNow()` (hero card, rain-clock minute 0, rain-overhead/drizzle alerts) is unchanged on top.
+  - Perf: the oracle bins with an 8 mi radius instead of the full scan radius — bit-identical results (a point >4.8 mi from the query center can't land in a relevant cell: neighbor centers ≈3.0 mi + hex circumradius ≈1.73 mi) while skipping the hex math for most points.
+  - **Behavior change:** the Rain Clock's minute-0 intensity now comes ONLY from the hex-grid oracle. Previously it was raised to `max(zone dBZ, best overhead storm cell dBZ)`, so the clock could paint a heavier band than the hero card showed. Now hero card, clock minute 0, and overhead-alert dBZ are always the same number. The overhead storm cell is still used for motion (pass-duration speed) and now-cell position/pixels.
+  - Secondary effect: the "Rain until …" estimate can end earlier — pass duration is sized from the (possibly lower) at-your-spot dBZ cell radius rather than the storm cell's clustered dBZ.
+  - Advection remains future-only (inbound `_eta` projection); the minute-0 raise was the last "second opinion" for the current moment. Increases app↔scanner parity: the push scanner's rain clock never had the storm-cell raise.
+  - Cache: `?v=646`, SW `stormtracker-v646`.
+
   ## v5.46
 
   **Refactor (Phase 3 of scan-pipeline consolidation): one post-scan commit pipeline.**

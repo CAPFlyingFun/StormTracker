@@ -1960,19 +1960,33 @@ function autoActivateZones(){
   }
   if(S.map)buildStormZones(S.map,S._rawScanPts);
 }
-function checkUserInZone(){
-  if(!S._rawScanPts||!S._rawScanPts.length)return null;
-  const cells=hexGridBin(S._rawScanPts,S.lat,S.lon,S.scanRadius||80);
+// v5.47: ONE canonical "what dBZ is at this spot right now" oracle (Phase 4 of
+// the scan-pipeline consolidation). Hex-bins the live raw scan points around ANY
+// location and reads the center cell, else the 6 immediate neighbors (cell
+// centers ≤5mi). Every "now" surface — hero card, rain-clock minute 0,
+// overhead/drizzle alerts, Storms-tab zone banner — derives from THIS (via
+// rainOverUserNow / checkUserInZone); advection is only ever used for FUTURE
+// projection. maxRadiusMi=8: a point >4.8mi from the query center can't land in
+// hex0 or a ≤5mi-neighbor cell (neighbor centers ≈3.0mi + hex circumradius
+// ≈1.73mi), so results are identical to binning the full scan radius while
+// skipping the hex math for the vast majority of points.
+function dbzAtLocation(lat,lon){
+  if(!S._rawScanPts||!S._rawScanPts.length||lat==null||lon==null)return null;
+  const cells=hexGridBin(S._rawScanPts,lat,lon,8);
   const center=cells.get('0,0');
-  if(center)return[Object.assign({},dbzColor(center.maxDbz),{maxDbz:center.maxDbz,source:'hex0'})];
+  if(center)return{maxDbz:center.maxDbz,source:'hex0'};
   const neighbors=['1,0','-1,0','0,1','0,-1','1,-1','-1,1'];
   let nMax=-999;
   for(const k of neighbors){
     const c=cells.get(k);
     if(c&&c.dist<=5&&c.maxDbz>nMax)nMax=c.maxDbz;
   }
-  if(nMax>-999)return[Object.assign({},dbzColor(nMax),{maxDbz:nMax,source:'hexN'})];
+  if(nMax>-999)return{maxDbz:nMax,source:'hexN'};
   return null;
+}
+function checkUserInZone(){
+  const z=dbzAtLocation(S.lat,S.lon);
+  return z?[Object.assign({},dbzColor(z.maxDbz),{maxDbz:z.maxDbz,source:z.source})]:null;
 }
 function isOverheadPollEnabled(){
   try{return localStorage.getItem('st_overheadPoll')!=='0'}catch(e){return true}

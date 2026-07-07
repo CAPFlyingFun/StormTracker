@@ -2181,12 +2181,16 @@ function _rainClockProject(){
   const nowRain=(typeof rainOverUserNow==='function')?rainOverUserNow():null;
   out.rainingNow=!!nowRain;
   if(nowRain){
-    // Prefer a real overhead storm cell (it carries dbz + a speed we can use for a
-    // pass-duration estimate); fall back to the zone dBZ when no card qualified.
+    // v5.47 (Phase 4): the hex-grid oracle (rainOverUserNow → dbzAtLocation) is
+    // the ONLY source of the minute-0 INTENSITY, so the clock's now band always
+    // equals the hero card and the overhead-alert dBZ — three surfaces, one
+    // number. The best overhead storm cell is kept ONLY for motion (pass-duration
+    // speed) and position/pixels of the now-cell dot; its clustered dBZ no longer
+    // raises the intensity above what radar shows on the user's exact spot.
     const ovList=(S._topStormAnalysis&&Array.isArray(S._topStormAnalysis.overhead))?S._topStormAnalysis.overhead:[];
     let ovStorm=null;
     for(const s of ovList){if(s&&(!ovStorm||(s.dbz||0)>(ovStorm.dbz||0)))ovStorm=s}
-    const nowDbz=Math.max(nowRain.maxDbz||0,ovStorm?(ovStorm.dbz||0):0);
+    const nowDbz=nowRain.maxDbz||0;
     if(nowDbz>0){
       // Duration over the user = cell DIAMETER / storm speed (same model as the
       // inbound loop). Default to 6 min when motion is unknown / the cell is stalled.

@@ -1975,7 +1975,7 @@ const _RC_MIN_DBZ=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15;
 // read "raining for hours" even for trace/drizzle. This floor (~28 dBZ ≈
 // 0.08 in/hr, light-moderate) hides drizzle while still showing real rain.
 // Forecast-only — the live-radar dial keeps the stricter _RC_MIN_DBZ floor.
-const _RC_FC_MIN_DBZ=12;   // v5.50: light-rain floor for the FORECAST ring (~0.008 in/hr). Was 28 (moderate), which hid the light forecast rain the 36-hr bar chart plots, so the dual-ring/forecast ring almost never appeared.
+const _RC_FC_MIN_DBZ=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:25;   // v5.54: forecast ring now shares the SAME 25 dBZ floor as the radar dial (was a separate 12), so the clock's two rings and the 36h graph all filter identically.
 // v4.66: intensity-scaled Rain Clock cell radius. Mirrors the Storms-tab cone
 // base width clamp((dbz-20)/15,0,3) but with a 0.2 mi floor so even a light
 // ~20 dBZ cell has a small but non-zero footprint (~0.2 mi), scaling up to
@@ -2890,7 +2890,8 @@ function renderRainForecastBars(){
   for(let i=0;i<HOURS;i++){
     const idx=startIdx+i;
     if(idx>=h.time.length)break;
-    const mm=h.precipitation[idx]||0;
+    let mm=h.precipitation[idx]||0;
+    if(mm>0&&typeof _precipMmToDbz==='function'&&_precipMmToDbz(mm)<_RC_FC_MIN_DBZ)mm=0;   // v5.54: filter precip below the shared 25 dBZ floor (matches the Rain Clock)
     slots.push({t:new Date(h.time[idx]).getTime(),mm});
   }
   // v4.69: this 36-hour chart is now FULLY INDEPENDENT of the Rain Clock. It

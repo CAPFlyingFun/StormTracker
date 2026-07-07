@@ -513,7 +513,7 @@ const APPROACHING_TIER_KEYS=['direct','near_direct'];
 // with the cards instead of using a stricter, separate cutoff. (Earlier
 // v4.63/v4.64 set this to 20 and pushed the cards up to match the Rain Clock,
 // which hid inbound cards — reverted here.)
-const STORM_MIN_DBZ=15;
+const STORM_MIN_DBZ=25;   // v5.54: raised 15->25 — shared rain floor (radar scan + Rain Clock). Rain below 25 dBZ is filtered from the Rain Clock, forecast ring and 36h graph. Storm/alert 'Min strength' (getConeMinDbz, 40) is separate and unchanged.
 if(typeof window!=='undefined'){window.STORM_MIN_DBZ=STORM_MIN_DBZ}
 // v5.33: the storm-track cone floor, the in-app Storm Cell Alerts "Intensity"
 // gate, and the Background Storm Alerts push threshold are ONE SHARED NUMBER —

@@ -3,6 +3,17 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.54
+
+  **Unified 25 dBZ rain floor for the Rain Clock + 36h graph (was 15 / 12 / none).**
+
+  - `STORM_MIN_DBZ` raised 15 → 25 — the shared rain-detection floor used by the radar scan and the Rain Clock's radar dial (`_RC_MIN_DBZ` reads it).
+  - The Rain Clock forecast-ring floor now reads the same constant (`_RC_FC_MIN_DBZ = STORM_MIN_DBZ`, was a separate 12), so both rings filter identically at 25.
+  - The "Total Precipitation Next 36 hrs" graph now filters each hour below 25 dBZ (≈0.05 in/hr via Marshall-Palmer) to match the Rain Clock — it previously plotted any measurable mm with no dBZ floor.
+  - The storm/alert "Min strength" (`getConeMinDbz`, default 40, Settings → Background Storm Alerts) is deliberately separate and unchanged — it governs storm cones + alerts, not the rain floor.
+  - Note: because the raised floor is the radar SCAN floor, sub-25 dBZ echoes are no longer captured, so "Nearest Precipitation" / "raining now" also reflect the 25 dBZ floor.
+  - Cache: `?v=653`, SW `stormtracker-v653`.
+
   ## v5.53
 
   **Adaptive network: a live speed monitor that actually adjusts loading.**

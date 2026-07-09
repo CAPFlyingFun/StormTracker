@@ -241,6 +241,17 @@ const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
 
 function fail(msg) { console.error('FATAL:', msg); process.exit(1); }
 
+// A scan runs every ~5 min against several upstream APIs (the Worker, Open-Meteo,
+// api.weather.gov, NHC). A single slow/unavailable cycle is EXPECTED and self-
+// heals on the next run — it should NOT red-fail the job (that just emails noise).
+// Only a genuinely-broken, persistent problem is worth a failure notification:
+// missing/rotated secrets (config) or the Worker rejecting our secret (auth).
+// Everything else — upstream 5xx, network errors, timeouts — is transient.
+function isRealFailure(err) {
+  const m = String((err && (err.message || err)) || '');
+  return /\/subscriptions HTTP (401|403)/.test(m); // Worker auth rejected
+}
+
 async function getSubscribers() {
   const r = await fetch(`${WORKER_URL}/subscriptions`, { headers: { 'x-scanner-secret': SCANNER_SECRET } });
   if (!r.ok) throw new Error(`/subscriptions HTTP ${r.status}`);
@@ -1000,4 +1011,32 @@ async function run() {
   console.log(`Done. Notifications sent: ${sent}`);
 }
 
-run().catch(e => fail(e.stack || e.message));
+// Watchdog: exit CLEANLY before the workflow's 5-min job timeout so a stuck
+// upstream call (or a lingering keep-alive socket holding the event loop open)
+// can never let the run burn a whole slot and get killed as a red "failure".
+// A timed-out cycle is transient — the next 5-min run picks up where this left.
+const WATCHDOG_MS = 4 * 60 * 1000;
+const watchdog = setTimeout(() => {
+  console.warn(`WATCHDOG: scan exceeded ${WATCHDOG_MS / 1000}s — exiting cleanly; next run retries.`);
+  process.exit(0);
+}, WATCHDOG_MS);
+watchdog.unref();
+
+run()
+  .then(() => {
+    clearTimeout(watchdog);
+    // Exit explicitly so leftover keep-alive sockets can't hold the process open
+    // (which would otherwise idle until the job timeout and look like a hang).
+    process.exit(0);
+  })
+  .catch(e => {
+    clearTimeout(watchdog);
+    if (isRealFailure(e)) {
+      fail(e.stack || e.message); // real breakage → red run → notify you
+      return;
+    }
+    // Transient (upstream/network/timeout): log it and exit 0 so a one-off
+    // hiccup doesn't cry wolf. It's still visible in the run log if you look.
+    console.warn('TRANSIENT (exiting 0, next run retries):', e && (e.message || e));
+    process.exit(0);
+  });

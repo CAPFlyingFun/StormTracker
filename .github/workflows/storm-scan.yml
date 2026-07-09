@@ -13,7 +13,12 @@ on:
 
 concurrency:
   group: storm-scan
-  cancel-in-progress: false
+  # A fresh scan supersedes one still running instead of queuing behind it: each
+  # run is a full independent scan, so the newest is always the one we want, and
+  # this avoids dispatches piling up in a queue and then dying at the 5-min
+  # timeout (the red "failure" runs). Rare in practice — a scan finishes in well
+  # under a minute — but it removes the pileup/timeout failure mode entirely.
+  cancel-in-progress: true
 
 jobs:
   scan:

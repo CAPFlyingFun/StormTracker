@@ -234,10 +234,12 @@ const AREA_DBZ = 45;
 const AREA_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
 
-// Fixed scan cadence: the GitHub cron IS the schedule (every 5 min), so every
-// scheduled tick scans. No randomized gap, no shared due-time state — the cron's
-// interval is the only knob. Change the cadence by editing the cron in
-// .github/workflows/storm-scan.yml.
+// Adaptive scan cadence: the Cloudflare cron ticks every 5 min, but the Worker
+// only dispatches a scan when it's due. After each run we report the strongest
+// weather tier seen (see reportCadence) and the Worker times the next scan —
+// red 5 / yellow 10 / green 15 min — so calm weather scans a third as often
+// while an active storm keeps the fast cadence. Every dispatched tick still runs
+// a full scan here.
 
 function fail(msg) { console.error('FATAL:', msg); process.exit(1); }
 
@@ -250,6 +252,30 @@ function fail(msg) { console.error('FATAL:', msg); process.exit(1); }
 function isRealFailure(err) {
   const m = String((err && (err.message || err)) || '');
   return /\/subscriptions HTTP (401|403)/.test(m); // Worker auth rejected
+}
+
+// Adaptive-cadence report. After each scan we tell the Worker the strongest
+// weather tier seen anywhere across all watched locations; the Worker uses it to
+// pick when to run the NEXT scan (red=5, yellow=10, green=15 min) instead of a
+// fixed 5-min cadence. Best-effort — a failed report just leaves the Worker on
+// its previous cadence, so it never breaks the scan.
+async function reportCadence(tier) {
+  if (!WORKER_URL || !SCANNER_SECRET) return;
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(`${WORKER_URL}/scan-cadence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-scanner-secret': SCANNER_SECRET },
+      body: JSON.stringify({ tier }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    const d = await r.json().catch(() => ({}));
+    console.log(`Adaptive cadence: tier=${tier} → next scan in ${d.cadenceMin || '?'} min`);
+  } catch (e) {
+    console.warn(`cadence report failed: ${e && e.message}`);
+  }
 }
 
 async function getSubscribers() {
@@ -485,7 +511,7 @@ async function run() {
 
   const subs = await getSubscribers();
   console.log(`Subscribers: ${subs.length}`);
-  if (!subs.length) return;
+  if (!subs.length) return 'green';
 
   const now = Date.now();
   let sent = 0;
@@ -514,7 +540,7 @@ async function run() {
     }
   }
   console.log(`Watched locations: ${entries.length}`);
-  if (!entries.length) return;
+  if (!entries.length) return 'green';
 
   // Per-ENDPOINT dedupe state. All of a device's locations share one last_alert
   // map (keys namespaced by locId) that we merge across locations and flush
@@ -561,6 +587,10 @@ async function run() {
 
   // Group watched locations by coarse location (~0.7 mi) so co-located entries
   // share one radar / conditions / NWS fetch.
+  // Strongest weather tier seen this scan, for the adaptive cadence (reported to
+  // the Worker at the end): 0 green, 1 yellow (rain in radius), 2 red (inbound).
+  let maxThreat = 0;
+
   const groups = new Map();
   for (const e of entries) {
     const key = `${e.lat.toFixed(2)},${e.lon.toFixed(2)}`;
@@ -593,6 +623,16 @@ async function run() {
       console.log(`[${key}] ${scan.source}: ${cells.length} cells (raw ${scan.rawCount || 0}), steering ${mv ? mv.speed + 'mph@' + mv.direction : 'n/a'}`);
     } catch (e) { groupDegraded = true; console.warn(`  radar ${key} failed: ${e.message}`); }
 
+    // Adaptive scan cadence (lenient, group-level — err toward scanning MORE when
+    // weather is near): an inbound cell → red (5 min); any real echo inside the
+    // scanned radius → yellow (10 min). The per-user band gate below still
+    // decides actual alerts; this only sets how soon the NEXT scan runs.
+    if (cells.length) {
+      const inbound = cells.some(c => c.approaching && c.distance <= 45 && c.dbz >= 30);
+      const rainNear = cells.some(c => c.dbz >= 25 && c.distance <= radius);
+      maxThreat = Math.max(maxThreat, inbound ? 2 : (rainNear ? 1 : 0));
+    }
+
     // 2. Open-Meteo conditions — only if someone here has an enabled wx alert.
     let conditions = null;
     const wantWx = members.some(m => m.thresholds && m.thresholds.wx &&
@@ -620,6 +660,8 @@ async function run() {
       try { overheadDbz = await dbzAtPoint(o.lat, o.lon); console.log(`  overhead: ${overheadDbz} dBZ`); }
       catch (e) { console.warn(`  overhead ${key} failed: ${e.message}`); }
     }
+    // Rain directly overhead also warrants at least the yellow (mid) cadence.
+    if (overheadDbz != null && overheadDbz >= 20) maxThreat = Math.max(maxThreat, 1);
 
     for (const sub of members) {
       const st = epState.get(sub.endpoint);
@@ -1009,6 +1051,7 @@ async function run() {
     if (st.dirty) await markAlert(endpoint, st.la);
   }
   console.log(`Done. Notifications sent: ${sent}`);
+  return maxThreat >= 2 ? 'red' : maxThreat === 1 ? 'yellow' : 'green';
 }
 
 // Watchdog: exit CLEANLY before the workflow's 5-min job timeout so a stuck
@@ -1023,7 +1066,9 @@ const watchdog = setTimeout(() => {
 watchdog.unref();
 
 run()
-  .then(() => {
+  .then(async (tier) => {
+    // Tell the Worker the strongest tier seen so it can time the next scan.
+    await reportCadence(tier || 'green');
     clearTimeout(watchdog);
     // Exit explicitly so leftover keep-alive sockets can't hold the process open
     // (which would otherwise idle until the job timeout and look like a hang).

@@ -126,6 +126,74 @@ async function triggerScan(env) {
   console.warn('scan dispatch gave up after 3 attempts');
 }
 
+// ── Adaptive scan cadence ────────────────────────────────────────────────────
+// The Cloudflare cron fires every 5 min (the finest tier), but we only DISPATCH
+// a GitHub scan when it's actually due. After each scan the scanner reports the
+// strongest weather tier it saw; we translate that into how soon to run again:
+//   red (storm inbound) = 5 min · yellow (rain in radius) = 10 · green (calm) = 15
+// so calm weather scans a third as often (and stops the every-5-min churn),
+// while an active storm still gets the fast 5-min cadence.
+const TIER_MIN = { red: 5, yellow: 10, green: 15 };
+const CADENCE_STEPS = [5, 10, 15]; // fast → slow
+// The cron ticks every 5 min but a scan finishes ~1 min AFTER its tick, so we
+// anchor "next due" to the dispatch tick (not the report time) and shave a 60s
+// grace off — otherwise next-due lands just past a tick and every interval would
+// round UP to the following 5-min tick (a 5-min cadence would drift to ~10).
+const CADENCE_GRACE_MS = 60000;
+
+async function metaGet(env, key) {
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+  const row = await env.DB.prepare('SELECT value FROM meta WHERE key = ?').bind(key).first();
+  return row ? row.value : null;
+}
+async function metaSet(env, key, value) {
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+  await env.DB
+    .prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .bind(key, String(value)).run();
+}
+
+// Cron heartbeat: dispatch a scan only when the current cadence says it's due.
+async function maybeTriggerScan(env) {
+  if (!env.DB) { await triggerScan(env); return; } // no state store — behave as before
+  const now = Date.now();
+  const nextDue = parseInt((await metaGet(env, 'scan_next_due')) || '0', 10) || 0;
+  if (now < nextDue) {
+    console.log(`scan not due for ${Math.round((nextDue - now) / 1000)}s — skipping this tick`);
+    return;
+  }
+  // Provisional next-due from the current cadence so a scan that never reports
+  // back can't leave us hammering every 5 min; the /scan-cadence report corrects
+  // it to the real tier once the scan finishes.
+  const cadence = parseInt((await metaGet(env, 'scan_cadence_min')) || '15', 10) || 15;
+  await metaSet(env, 'scan_last_dispatch', String(now));
+  await metaSet(env, 'scan_next_due', String(now + cadence * 60000 - CADENCE_GRACE_MS));
+  await triggerScan(env);
+}
+
+// Apply a reported tier with hysteresis: escalate INSTANTLY to a faster cadence,
+// but relax only ONE step per report so a storm that briefly dips below the bar
+// doesn't drop us straight back to the slow tier and miss its next pulse.
+async function applyCadence(env, tier) {
+  const rawMin = TIER_MIN[tier] || TIER_MIN.green;
+  const curMin = parseInt((await metaGet(env, 'scan_cadence_min')) || '15', 10) || 15;
+  let nextMin;
+  if (rawMin < curMin) {
+    nextMin = rawMin; // ramp up instantly
+  } else if (rawMin > curMin) {
+    const i = CADENCE_STEPS.indexOf(curMin);
+    nextMin = CADENCE_STEPS[Math.min((i < 0 ? CADENCE_STEPS.length - 1 : i) + 1, CADENCE_STEPS.length - 1)];
+  } else {
+    nextMin = curMin;
+  }
+  // Anchor to the dispatch tick (not "now", which is ~1 min later after the scan
+  // reports) so intervals stay aligned to the 5-min cron.
+  const dispatchAt = parseInt((await metaGet(env, 'scan_last_dispatch')) || String(Date.now()), 10) || Date.now();
+  await metaSet(env, 'scan_cadence_min', String(nextMin));
+  await metaSet(env, 'scan_next_due', String(dispatchAt + nextMin * 60000 - CADENCE_GRACE_MS));
+  return nextMin;
+}
+
 async function proxyAWC(kind, url) {
   const params = new URLSearchParams(url.search);
   const awcUrl = `https://aviationweather.gov/api/data/${kind}?${params.toString()}`;
@@ -149,7 +217,7 @@ export default {
   // Cloudflare Cron Trigger (every 5 min) — the reliable heartbeat that kicks
   // off each background storm scan. See triggerScan() above.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(triggerScan(env));
+    ctx.waitUntil(maybeTriggerScan(env));
   },
 
   async fetch(request, env, ctx) {
@@ -629,8 +697,23 @@ Rules:
       return json({ error: 'method not allowed' }, 405);
     }
 
+    // Adaptive scan cadence. The scanner POSTs the strongest weather tier it saw
+    // this run ({ tier: 'red'|'yellow'|'green' }); we set how soon the next scan
+    // runs (5 / 10 / 15 min) with ramp-down hysteresis. Same scanner secret.
+    if (path === '/scan-cadence' && request.method === 'POST') {
+      if (!env.SCANNER_SECRET || request.headers.get('x-scanner-secret') !== env.SCANNER_SECRET) {
+        return json({ error: 'unauthorized' }, 401);
+      }
+      if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+      let b;
+      try { b = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const tier = TIER_MIN[b && b.tier] ? b.tier : 'green';
+      const cadenceMin = await applyCadence(env, tier);
+      return json({ ok: true, tier, cadenceMin });
+    }
+
     return new Response(
-      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  GET/POST /scan-due  (scanner)\n',
+      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
       { headers: { 'Content-Type': 'text/plain', ...CORS } }
     );
   },

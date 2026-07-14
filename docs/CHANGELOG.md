@@ -3,6 +3,22 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.55
+
+  **Smarter address search: messy/redundant addresses, retry ladder, wrong-area rejection.**
+
+  - New parse step (`_addrParse` in geo.js): splits on commas, de-dupes repeated segments ("Sevierville, TN, Sevierville, TN" → once), and strips junk partial postcodes ("TN 3" when "37876" appears later; "ON K1M" when "K1M 1M4" appears) — locality segments only, so European trailing house numbers ("Marienplatz 8") survive. Extracts street/house number/city/state/zip for retries and labeling.
+  - Progressive retry ladder (`smartGeoSearch`): up to 6 candidate queries from most specific to broadest (full → street+zip → street+city+state → road+locality → road+zip → locality-only), each through the existing Nominatim → Photon → Open-Meteo chain, 600 ms between rungs, 12 s overall budget. First house-level match wins immediately; best road-level hit is kept otherwise.
+  - Sanity guards: results must agree with the typed locality (zip OR state OR city — `_addrLocMatch`, with US state abbreviation↔full-name mapping) and the typed street (`_roadMatch`, longest word must appear). Fuzzy matches in the wrong state (e.g. Photon returning McKinney TX for a Sevierville TN zip) or on the wrong road are skipped — wrong location is worse than "not found" for storm alerts.
+  - US Census Bureau geocoder added as a house-level rescue (JSONP — no CORS on that API) when the input looks like a US street address (state + 5-digit zip) and OSM only got road-level.
+  - Label preservation: when only the road/area is matched, the location name keeps the user's typed street + city + state + zip (e.g. "1509 Bald Eagle Drive, Sevierville, TN 37876") instead of the geocoder's county ("Sevier County, Tennessee").
+  - Autocomplete suggestions reuse the same normalization (canonical query + street+zip retry).
+  - Guaranteed locality fallback: if the whole ladder strikes out (e.g. primary geocoder unreachable), the typed locality is resolved on its own and demoted to a city-level pin (street fields stripped so the label keeps the user's typed street) — better than "Location not found".
+  - Search diagnostics: every search records a `[geo trace]` (console) of each rung — query, per-provider outcome (hits/errors), and rejection reason. On failure, a troubleshooter panel (`#loc-search-debug` in the location overlay, `#welcome-search-debug` on the welcome screen) shows the cleaned query, each attempt, and a tip. `searchLoc` gained a re-entrancy guard (`S._searching`).
+  - Welcome-screen search unified: `_welcomeSearch` (init.js) now uses the same `smartGeoSearch` ladder + label logic (`_geoLabelFor`) as the location overlay, instead of its old single-shot lookup.
+  - Bug fix: `saveUnits()` was called in six places (unit auto-switching, presets, individual unit changes) but never defined — a `ReferenceError` crashed any search that triggered a region-based unit switch (e.g. picking a Canadian address while on US units). Now defined in core.js (persists to `st_units`).
+  - Cache: `?v=654`, SW `stormtracker-v654`.
+
   ## v5.54
 
   **Unified 25 dBZ rain floor for the Rain Clock + 36h graph (was 15 / 12 / none).**

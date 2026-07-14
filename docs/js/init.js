@@ -291,6 +291,7 @@ async function init(){
           <button onclick="_welcomeSearch()" style="padding:10px 18px;background:rgba(0,229,255,0.15);color:var(--accent-cyan);border:1px solid rgba(0,229,255,0.3);border-radius:8px;font-size:0.85em;font-weight:600;cursor:pointer;white-space:nowrap">Go</button>
         </div>
         <div id="welcome-suggestions" style="margin-top:4px"></div>
+        <div id="welcome-search-debug" style="display:none;margin-top:8px;padding:8px 10px;background:rgba(255,82,82,0.08);border:1px solid rgba(255,82,82,0.3);border-radius:8px;font-size:0.72em;line-height:1.45;max-height:200px;overflow-y:auto;text-align:left;word-break:break-word"></div>
       </div>
       <button class="welcome-btn secondary" onclick="startMapPick()" style="background:rgba(0,229,255,0.08);border-color:rgba(0,229,255,0.3)">📌 Set Location from Map</button>
       <div style="margin-top:20px;font-size:0.75em;color:var(--text-muted)">
@@ -333,17 +334,19 @@ async function _welcomeSearch(){
   if(!inp)return;
   const q=inp.value.trim();
   if(!q){toast('Please enter a location');return}
+  if(S._searching)return;
+  S._searching=true;
+  _hideGeoDebug('welcome-search-debug');
   toast('Searching...');
   try{
-    let data=await geoSearch(cleanQ(q),1);
-    if(!data.length){const simple=q.replace(/^\d+\s*/,'').replace(/\./g,'').trim();if(simple!==cleanQ(q))data=await geoSearch(simple,1)}
+    const{data,parsed}=await smartGeoSearch(q,1);
     if(data.length){
       const r=data[0];const a=r.address||{};
-      const nm=fmtLocName(a,r.display_name.split(',').slice(0,2).join(',').trim());
-      setLoc(parseFloat(r.lat),parseFloat(r.lon),nm);
+      setLoc(parseFloat(r.lat),parseFloat(r.lon),_geoLabelFor(r,parsed));
       if(typeof checkLocationUnits==='function')checkLocationUnits(a.country_code);
-    }else{toast('Location not found')}
-  }catch(e){toast('Search failed')}
+    }else{toast('Location not found');_showGeoDebug('No match found for that address','welcome-search-debug')}
+  }catch(e){toast('Search failed');_showGeoDebug('Search failed: '+((e&&e.message)||e),'welcome-search-debug');console.log('welcomeSearch error:',e)}
+  finally{S._searching=false}
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);

@@ -45,6 +45,197 @@ document.getElementById('location-input').addEventListener('keydown',e=>{
   else if(e.key==='Escape'){hideSuggestions()}
 });
 function cleanQ(q){return q.replace(/\./g,'').replace(/\s+/g,' ').trim()}
+// ---- Messy-address normalization + progressive search (v5.55) ----
+const _US_STATES={AL:1,AK:1,AZ:1,AR:1,CA:1,CO:1,CT:1,DE:1,DC:1,FL:1,GA:1,HI:1,ID:1,IL:1,IN:1,IA:1,KS:1,KY:1,LA:1,ME:1,MD:1,MA:1,MI:1,MN:1,MS:1,MO:1,MT:1,NE:1,NV:1,NH:1,NJ:1,NM:1,NY:1,NC:1,ND:1,OH:1,OK:1,OR:1,PA:1,RI:1,SC:1,SD:1,TN:1,TX:1,UT:1,VT:1,VA:1,WA:1,WV:1,WI:1,WY:1,PR:1,VI:1,GU:1,AS:1,MP:1};
+function _pcLike(s){
+  const t=String(s).replace(/\s+/g,'').toUpperCase();
+  return /^\d{5}(-\d{4})?$/.test(t)||/^\d{4,6}$/.test(t)||/^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/.test(t)||/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(t);
+}
+// Parse a free-form address: split on commas, drop exact-duplicate segments,
+// strip junk partial postcodes ("TN 3" when "37876" appears later; "ON K1M" when "K1M 1M4" appears),
+// and pull out street / house number / city / state / postcode for retries + labeling.
+function _addrParse(raw){
+  let segs=cleanQ(raw).split(',').map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const digitToks=[];
+  segs.forEach(s=>{
+    s.split(' ').forEach(t=>{if(/\d/.test(t))digitToks.push(t.toUpperCase())});
+    if(_pcLike(s))digitToks.push(s.replace(/\s+/g,'').toUpperCase());
+  });
+  // Strip junk partial postcodes from locality segments only (never the street,
+  // so European trailing house numbers like "Marienplatz 8" survive)
+  segs=segs.map((s,idx)=>{
+    if(idx===0)return s;
+    const toks=s.split(' ');
+    while(toks.length>1){
+      const last=toks[toks.length-1].toUpperCase();
+      if(/\d/.test(last)&&digitToks.some(t=>t!==last&&t.length>last.length&&t.startsWith(last)))toks.pop();
+      else break;
+    }
+    return toks.join(' ');
+  });
+  const seen={};segs=segs.filter(s=>{const k=s.toUpperCase();if(seen[k])return false;seen[k]=1;return true});
+  const street=segs.length>1?segs[0]:'';
+  let houseNum='',roadOnly=street,m;
+  if((m=street.match(/^(\d+[A-Za-z]?)\s+(.+)$/))){houseNum=m[1];roadOnly=m[2]}
+  else if((m=street.match(/^(.+?)\s+(\d+[A-Za-z]?)$/))&&!/\b(highway|hwy|route|rte|rt|interstate|loop|county road|state road|cr|fm|sr)$/i.test(m[1])){houseNum=m[2];roadOnly=m[1]}
+  const rest=segs.slice(1);
+  let zip='',state='',city='';
+  for(const s of rest){
+    if(!zip&&_pcLike(s)){zip=s;continue}
+    const toks=s.split(' '),cityToks=[];
+    for(const t of toks){
+      const u=t.toUpperCase();
+      if(!zip&&_pcLike(t))zip=t;
+      else if(!state&&t.length===2&&_US_STATES[u])state=u;
+      else cityToks.push(t);
+    }
+    if(!city&&cityToks.length)city=cityToks.join(' ');
+  }
+  const isUS=!!(state&&zip&&/^\d{5}(-\d{4})?$/.test(zip))||/\b(USA|United States)\b/i.test(raw);
+  return{segs,street,roadOnly,houseNum,rest,zip,state,city,isUS};
+}
+// Ordered retry queries, from most specific to broadest. Max 6.
+function _addrCandidates(p){
+  const out=[];
+  const push=q=>{q=(q||'').replace(/\s+/g,' ').trim();if(q&&!out.some(x=>x.toUpperCase()===q.toUpperCase()))out.push(q)};
+  push(p.segs.join(', '));
+  if(p.street){
+    const loc=p.rest.filter(s=>!_pcLike(s));
+    if(p.zip)push(p.street+', '+p.zip);
+    if(loc.length)push(p.street+', '+loc.join(', '));
+    if(p.roadOnly&&p.roadOnly!==p.street){
+      if(p.rest.length)push(p.roadOnly+', '+p.rest.join(', '));
+      if(p.zip)push(p.roadOnly+', '+p.zip);
+    }
+    // Locality-only last resort — but never a bare state code or postcode alone
+    if(p.rest.some(s=>!_pcLike(s)&&!(s.length===2&&_US_STATES[s.toUpperCase()])))push(p.rest.join(', '));
+  }
+  return out.slice(0,6);
+}
+function _titleCase(s){return String(s).toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase())}
+const _US_STATE_NAMES={AL:'ALABAMA',AK:'ALASKA',AZ:'ARIZONA',AR:'ARKANSAS',CA:'CALIFORNIA',CO:'COLORADO',CT:'CONNECTICUT',DE:'DELAWARE',DC:'DISTRICT OF COLUMBIA',FL:'FLORIDA',GA:'GEORGIA',HI:'HAWAII',ID:'IDAHO',IL:'ILLINOIS',IN:'INDIANA',IA:'IOWA',KS:'KANSAS',KY:'KENTUCKY',LA:'LOUISIANA',ME:'MAINE',MD:'MARYLAND',MA:'MASSACHUSETTS',MI:'MICHIGAN',MN:'MINNESOTA',MS:'MISSISSIPPI',MO:'MISSOURI',MT:'MONTANA',NE:'NEBRASKA',NV:'NEVADA',NH:'NEW HAMPSHIRE',NJ:'NEW JERSEY',NM:'NEW MEXICO',NY:'NEW YORK',NC:'NORTH CAROLINA',ND:'NORTH DAKOTA',OH:'OHIO',OK:'OKLAHOMA',OR:'OREGON',PA:'PENNSYLVANIA',RI:'RHODE ISLAND',SC:'SOUTH CAROLINA',SD:'SOUTH DAKOTA',TN:'TENNESSEE',TX:'TEXAS',UT:'UTAH',VT:'VERMONT',VA:'VIRGINIA',WA:'WASHINGTON',WV:'WEST VIRGINIA',WI:'WISCONSIN',WY:'WYOMING',PR:'PUERTO RICO',VI:'US VIRGIN ISLANDS',GU:'GUAM',AS:'AMERICAN SAMOA',MP:'NORTHERN MARIANA ISLANDS'};
+// Does a geocoder result agree with the locality the user typed (zip OR state OR city)?
+// Guards against fuzzy matches landing in the wrong state (same street name elsewhere).
+function _addrLocMatch(p,a,dispName){
+  if(!p.zip&&!p.state&&!p.city)return true;
+  const norm=s=>String(s||'').replace(/\s+/g,'').toUpperCase();
+  if(p.zip&&a.postcode&&(norm(a.postcode)===norm(p.zip)||norm(a.postcode).indexOf(norm(p.zip))===0||norm(p.zip).indexOf(norm(a.postcode))===0))return true;
+  if(p.state&&a.state&&(norm(a.state)===p.state||norm(a.state)===norm(_US_STATE_NAMES[p.state]||'')))return true;
+  if(p.city){
+    const c=norm(p.city);
+    if([a.city,a.town,a.village,a.municipality,a.suburb,a.county].some(x=>x&&norm(x)===c))return true;
+    if(dispName&&norm(dispName).indexOf(c)!==-1)return true;
+  }
+  return false;
+}
+// Does the result's road resemble the street the user typed? (longest word must appear)
+function _roadMatch(p,a){
+  if(!p.roadOnly||!a.road)return true;
+  const toks=p.roadOnly.toUpperCase().split(/[^A-Z0-9]+/).filter(t=>t.length>2);
+  if(!toks.length)return true;
+  const t=toks.reduce((x,y)=>y.length>x.length?y:x);
+  return String(a.road).toUpperCase().indexOf(t)!==-1;
+}
+// US Census Bureau geocoder via JSONP (no CORS support). US house-level rescue only.
+let _censusSeq=0;
+function censusSearch(q){
+  return new Promise((resolve,reject)=>{
+    const cb='__stCensusCb'+(++_censusSeq);
+    const s=document.createElement('script');
+    const t=setTimeout(()=>{cleanup();reject(new Error('Census timeout'))},6000);
+    function cleanup(){clearTimeout(t);try{delete window[cb]}catch(e){window[cb]=undefined}if(s.parentNode)s.parentNode.removeChild(s)}
+    window[cb]=d=>{
+      cleanup();
+      const ms=(d&&d.result&&d.result.addressMatches)||[];
+      resolve(ms.filter(mm=>mm.coordinates).map(mm=>{
+        const co=mm.coordinates,a=mm.addressComponents||{};
+        const road=_titleCase([a.preQualifier,a.preDirection,a.preType,a.streetName,a.suffixType,a.suffixDirection,a.suffixQualifier].filter(Boolean).join(' '));
+        const hn=(mm.matchedAddress||'').match(/^(\d+[A-Za-z]?)[\s,]/);
+        return{lat:String(co.y),lon:String(co.x),display_name:_titleCase(mm.matchedAddress||''),
+          address:{house_number:hn?hn[1]:'',road:road,city:_titleCase(a.city||''),state:a.state||'',postcode:a.zip||'',country:'United States',country_code:'us'}};
+      }));
+    };
+    s.onerror=()=>{cleanup();reject(new Error('Census load failed'))};
+    s.src='https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address='+encodeURIComponent(q)+'&benchmark=Public_AR_Current&format=jsonp&callback='+cb;
+    document.head.appendChild(s);
+  });
+}
+// ── Search diagnostics: every smartGeoSearch records a step-by-step trace of
+//    what was tried and why results were rejected. Shown in the location
+//    overlay when a search fails; always logged to the console as [geo trace].
+let _geoTrace=null,_geoStep=null;
+function _geoBrief(r){
+  const a=(r&&r.address)||{};
+  return [a.house_number&&a.road?a.house_number+' '+a.road:a.road,a.city||a.town||a.village,a.state,a.postcode].filter(Boolean).join(', ')||(r&&r.display_name)||'?';
+}
+// Walk the candidate ladder: return the first house-level match immediately,
+// otherwise remember the best road/place-level hit. For US street addresses,
+// try the Census geocoder as a house-level rescue before settling.
+async function smartGeoSearch(raw,limit){
+  const p=_addrParse(raw);
+  const cands=_addrCandidates(p);
+  const t0=Date.now();
+  _geoTrace={raw:raw,cleaned:p.segs.join(', '),steps:[]};
+  const done=res=>{
+    _geoTrace.tookMs=Date.now()-t0;
+    _geoTrace.found=!!(res.data&&res.data.length);
+    try{console.log('[geo trace]',JSON.stringify(_geoTrace,null,1))}catch(e){}
+    return res;
+  };
+  let best=null,bestScore=-1;
+  for(let i=0;i<cands.length;i++){
+    const q=cands[i];
+    const step={q:q,providers:[],outcome:''};_geoTrace.steps.push(step);
+    if(Date.now()-t0>12000){step.outcome='skipped — ran out of time';continue}
+    // Once we have a road-level hit, only candidates still containing the full street (house number) can do better
+    if(bestScore>=2&&p.street&&q.toUpperCase().indexOf(p.street.toUpperCase())===-1){step.outcome='skipped — already have a road-level match';continue}
+    if(i>0)await new Promise(r=>setTimeout(r,600));
+    let data=[];
+    _geoStep=step;
+    try{data=await geoSearch(q,limit)}catch(e){}
+    _geoStep=null;
+    if(!data.length){step.outcome='no results';continue}
+    const r=data[0],a=r.address||{};
+    // Reject fuzzy matches in the wrong area (same street name in another state/country)
+    // or on the wrong street (geocoder "nearest guess" in the right city) — a wrong
+    // location is worse than "not found" for storm alerts
+    if(!_addrLocMatch(p,a,r.display_name)){step.outcome='rejected — wrong area: got "'+_geoBrief(r)+'"';continue}
+    if(!_roadMatch(p,a)){step.outcome='rejected — different street: got "'+_geoBrief(r)+'"';continue}
+    const score=(a.house_number&&a.road)?3:(a.road?2:1);
+    step.outcome=(score===3?'exact match':score===2?'road-level match':'place-level match')+': "'+_geoBrief(r)+'"';
+    if(score===3)return done({data,parsed:p});
+    if(score>bestScore){best=data;bestScore=score}
+  }
+  if(p.isUS&&p.houseNum&&bestScore<3){
+    const step={q:p.segs.join(', ')+' [US Census]',providers:[],outcome:''};_geoTrace.steps.push(step);
+    try{
+      const cd=await censusSearch(p.segs.join(', '));
+      if(cd.length){step.outcome='exact match: "'+_geoBrief(cd[0])+'"';return done({data:cd,parsed:p})}
+      step.outcome='no match';
+    }catch(e){step.outcome='error: '+e.message;console.log('Census geocoder failed:',e.message)}
+  }
+  // Guaranteed last resort: if the ladder found nothing (or the deadline cut it short),
+  // resolve at least the locality the user typed — better a city-center pin with the
+  // user's street kept in the label than "Location not found"
+  if(!best&&p.street&&p.rest.length){
+    const locQ=p.rest.join(', ');
+    const step={q:locQ+' [area only]',providers:[],outcome:''};_geoTrace.steps.push(step);
+    _geoStep=step;
+    try{
+      const d=await geoSearch(locQ,limit);
+      const a0=(d.length&&d[0].address)||{};
+      if(d.length&&_addrLocMatch(p,a0,d[0].display_name)){
+        // Demote to locality level: drop whatever random street the geocoder
+        // fuzzy-matched so the label falls back to the user's own typed street
+        const clean=Object.assign({},a0);delete clean.house_number;delete clean.road;
+        best=[Object.assign({},d[0],{address:clean,display_name:locQ})];
+        step.outcome='area-level match: "'+locQ+'"';
+      }else step.outcome=d.length?'rejected — wrong area: got "'+_geoBrief(d[0])+'"':'no results';
+    }catch(e){step.outcome='error: '+e.message}
+    _geoStep=null;
+  }
+  return done({data:best||[],parsed:p});
+}
 async function nomSearch(q,limit){
   const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=${limit}&addressdetails=1`,{signal:AbortSignal.timeout(5000)});
   if(!res.ok)throw new Error('Nominatim '+res.status);
@@ -68,17 +259,23 @@ async function omGeoSearch(q,limit){
     address:{city:r.name,state:r.admin1||'',country:r.country||'',country_code:(r.country_code||'').toLowerCase()}}));
 }
 async function geoSearch(q,limit){
-  try{return await nomSearch(q,limit)}catch(e){console.log('Nominatim failed:',e.message)}
-  try{return await photonSearch(q,limit)}catch(e){console.log('Photon failed:',e.message)}
-  try{return await omGeoSearch(q,limit)}catch(e){console.log('Open-Meteo geo failed:',e.message)}
+  try{const d=await nomSearch(q,limit);if(_geoStep)_geoStep.providers.push('Nominatim: '+d.length+' hit'+(d.length===1?'':'s'));return d}
+  catch(e){console.log('Nominatim failed:',e.message);if(_geoStep)_geoStep.providers.push('Nominatim: '+e.message)}
+  try{const d=await photonSearch(q,limit);if(_geoStep)_geoStep.providers.push('Photon: '+d.length+' hit'+(d.length===1?'':'s'));return d}
+  catch(e){console.log('Photon failed:',e.message);if(_geoStep)_geoStep.providers.push('Photon: '+e.message)}
+  try{const d=await omGeoSearch(q,limit);if(_geoStep)_geoStep.providers.push('Open-Meteo: '+d.length+' hit'+(d.length===1?'':'s'));return d}
+  catch(e){console.log('Open-Meteo geo failed:',e.message);if(_geoStep)_geoStep.providers.push('Open-Meteo: '+e.message)}
   return[];
 }
 async function fetchSuggestions(q){
   try{
-    let data=await geoSearch(cleanQ(q),5);
+    const p=_addrParse(q);
+    const canon=p.segs.join(', ');
+    let data=await geoSearch(canon,5);
+    if(!data.length&&p.street&&p.zip)data=await geoSearch(p.street+', '+p.zip,5);
     if(!data.length){
       const simple=q.replace(/^\d+\s*/,'').replace(/\./g,'').trim();
-      if(simple!==cleanQ(q))data=await geoSearch(simple,5);
+      if(simple!==canon)data=await geoSearch(simple,5);
     }
     _sugResults=data;_sugIdx=-1;
     const box=document.getElementById('loc-suggestions');
@@ -118,6 +315,7 @@ function selectSuggestion(r){
   if(cc)setTimeout(()=>checkLocationUnits(cc),500);
 }
 function hideSuggestions(){
+  clearTimeout(_sugTimer);_sugTimer=null;
   const box=document.getElementById('loc-suggestions');
   box.classList.remove('active');box.innerHTML='';_sugIdx=-1;_sugResults=[];
 }
@@ -270,36 +468,57 @@ function showLocationConfirm(forceDialog){
   overlay.addEventListener('click',e=>{if(e.target===overlay){overlay.remove();if(_autoGpsPending){_autoGpsPending=false;toast('📍 Auto-locate requires GPS permission');syncSettingsPanel()}else if(_travelGpsPending){_travelGpsPending=false;toast('📍 Travel Mode requires GPS permission')}}});
 }
 
+// Build the display label for a search result, preferring the user's own typed
+// street/city/zip when the geocoder only matched the road or area
+function _geoLabelFor(r,parsed){
+  const addr=r.address||{};
+  const hasStreet=addr.house_number&&addr.road;
+  if(!hasStreet&&parsed&&parsed.houseNum&&parsed.street){
+    const place=parsed.city||addr.city||addr.town||addr.village||addr.suburb||addr.district||addr.administrative||addr.county||'';
+    const region=[parsed.state||addr.state||addr.country||'',parsed.zip].filter(Boolean).join(' ');
+    return[parsed.street,place,region].filter(Boolean).join(', ');
+  }
+  return fmtLocName(addr,r.display_name.split(',').slice(0,2).join(',').trim());
+}
+// Failure diagnostics panel (location overlay + welcome screen)
+function _hideGeoDebug(elId){const d=document.getElementById(elId||'loc-search-debug');if(d){d.style.display='none';d.innerHTML=''}}
+function _showGeoDebug(title,elId){
+  const d=document.getElementById(elId||'loc-search-debug');if(!d)return;
+  const tr=_geoTrace;
+  let h='<div style="font-weight:700;color:#ff8a80;margin-bottom:4px">⚠️ '+escHtml(title)+'</div>';
+  if(tr&&tr.steps&&tr.steps.length){
+    h+='<div style="color:var(--text-muted)">Searched for: <b>'+escHtml(tr.cleaned)+'</b>';
+    if(tr.cleaned.toUpperCase()!==String(tr.raw||'').replace(/\s+/g,' ').trim().toUpperCase())h+=' <span style="opacity:0.7">(cleaned up from “'+escHtml(tr.raw)+'”)</span>';
+    h+='</div><div style="margin-top:4px">';
+    tr.steps.forEach((s,i)=>{
+      h+='<div style="margin-top:3px"><span style="opacity:0.6">'+(i+1)+'.</span> “'+escHtml(s.q)+'” → <b>'+escHtml(s.outcome||'—')+'</b>';
+      if(s.providers&&s.providers.length)h+='<div style="opacity:0.65;padding-left:16px">'+s.providers.map(escHtml).join(' · ')+'</div>';
+      h+='</div>';
+    });
+    h+='</div><div style="margin-top:6px;color:var(--text-muted)">Took '+((tr.tookMs||0)/1000).toFixed(1)+'s. Tip: try just street + ZIP code, or city + state.</div>';
+  }else h+='<div style="color:var(--text-muted)">No search details were recorded.</div>';
+  d.innerHTML=h;d.style.display='block';
+}
 async function searchLoc(){
+  if(S._searching)return;
   hideSuggestions();
   const q=document.getElementById('location-input').value.trim();
   if(!q)return;
+  _hideGeoDebug();
+  S._searching=true;
   toast('Searching...');
   try{
-    let data=await geoSearch(cleanQ(q),1);
-    if(!data.length){
-      const simple=q.replace(/^\d+\s*/,'').replace(/\./g,'').trim();
-      if(simple!==cleanQ(q))data=await geoSearch(simple,1);
-    }
+    const{data,parsed}=await smartGeoSearch(q,1);
     if(data.length){
       const r=data[0];
       const addr=r.address||{};
-      const hasStreet=addr.house_number&&addr.road;
-      let name;
-      if(!hasStreet&&/^\d+\s/.test(q)){
-        const streetPart=q.split(',')[0].replace(/\./g,'').trim();
-        const place=addr.city||addr.town||addr.village||addr.suburb||addr.district||addr.administrative||addr.county||'';
-        const region=addr.state||addr.country||'';
-        name=[streetPart,place,region].filter(Boolean).join(', ');
-      }else{
-        name=fmtLocName(addr,r.display_name.split(',').slice(0,2).join(',').trim());
-      }
       toggleLocOverlay(false);
-      setLoc(parseFloat(r.lat),parseFloat(r.lon),name);
+      setLoc(parseFloat(r.lat),parseFloat(r.lon),_geoLabelFor(r,parsed));
       checkLocationUnits(addr.country_code);
     }
-    else toast('Location not found');
-  }catch(e){toast('Search failed')}
+    else{toast('Location not found');_showGeoDebug('No match found for that address')}
+  }catch(e){toast('Search failed');_showGeoDebug('Search failed: '+((e&&e.message)||e));console.log('searchLoc error:',e)}
+  finally{S._searching=false}
 }
 
 async function reverseGeo(lat,lon){

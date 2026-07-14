@@ -334,6 +334,9 @@ function cycleUnit(key){
   if(typeof syncPushAlerts==='function')syncPushAlerts();
 }
 
+function saveUnits(){
+  try{localStorage.setItem('st_units',JSON.stringify({t:S.tempUnit,w:S.windUnit,p:S.presUnit,v:S.visUnit,pr:S.precipUnit}))}catch(e){}
+}
 function loadUnits(){
   const mode=localStorage.getItem('st_unitMode');
   try{

@@ -30,6 +30,7 @@ function initRadar(){
         <div class="map-ctrl-btn" id="radar-toggle-units" title="Toggle mi/km">${_ri(S.radarMetric?'units-km':'units')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-airports" title="Toggle airports">${_ri('airports')}</div>
         <div class="map-ctrl-btn" id="radar-anim-btn" title="Animate radar">${_ri('play')}</div>
+        <div class="map-ctrl-btn" id="btn-lightning" title="Toggle lightning strikes" onclick="toggleLightning()" style="opacity:${(typeof _ltgShown==='function'&&!_ltgShown())?0.4:1};font-size:15px;display:flex;align-items:center;justify-content:center">⚡</div>
       </div>
       <div class="map-controls map-controls-right">
         <div class="map-ctrl-btn" id="btn-zones" title="Toggle storm zones" onclick="toggleStormZones()">${_ri('zones')}</div>
@@ -824,10 +825,23 @@ async function commitScanResults(rawPoints,opts){
 // <5 min, orange 5-10, dim 10-15); capped at 400 for mobile perf. Cleared and
 // redrawn on every scan commit + every successful strike fetch. When live data
 // is fresh, the radar-derived ⚡ estimates on storm cells are suppressed.
+// v5.73: lightning layer toggle (⚡ button, left radar controls). Default ON.
+function _ltgShown(){try{return localStorage.getItem('st_showLtg')!=='0'}catch(e){return true}}
+function toggleLightning(){
+  const on=!_ltgShown();
+  try{localStorage.setItem('st_showLtg',on?'1':'0')}catch(e){}
+  const btn=document.getElementById('btn-lightning');if(btn)btn.style.opacity=on?1:0.4;
+  if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
+  if(typeof plotStormMarkers==='function'&&S.map)plotStormMarkers(S.map);
+  if(typeof drawMiniSonar==='function')drawMiniSonar();
+  if(typeof toast==='function')toast(on?'⚡ Lightning shown':'⚡ Lightning hidden');
+}
+if(typeof window!=='undefined'){window.toggleLightning=toggleLightning;window._ltgShown=_ltgShown;}
 function plotLightningStrikes(map){
   if(!S.ltgMarkers)S.ltgMarkers=[];
   S.ltgMarkers.forEach(m=>{try{map.removeLayer(m)}catch(e){}});
   S.ltgMarkers=[];
+  if(typeof _ltgShown==='function'&&!_ltgShown())return;
   if(typeof ltgLive!=='function'||!ltgLive())return;
   // v5.70: draw on a dedicated top pane (z above the hex/zone overlay so strikes
   // are never buried), and make the dots bigger with a dark halo so they read
@@ -1217,7 +1231,7 @@ function plotStormMarkers(map){
       const ringRadiusM=Math.max(800,Math.min(5000,(storm.dbz-15)*80));
       pending.push({type:'ring',lat:storm.lat,lng:storm.lng,ringRadiusM,color,dbz:storm.dbz,stormRef,_dbz:storm.dbz});
     }
-    if(storm.dbz>=40&&!(typeof ltgLive==='function'&&ltgLive())){
+    if(storm.dbz>=40&&(typeof _ltgShown!=='function'||_ltgShown())&&!(typeof ltgLive==='function'&&ltgLive())){
       // radar-derived ⚡ estimate — suppressed while real WarPulse strikes are fresh
       pending.push({type:'lightning',lat:storm.lat,lng:storm.lng,stormRef,_dbz:storm.dbz});
     }

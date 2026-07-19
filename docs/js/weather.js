@@ -1169,7 +1169,7 @@ function drawMiniSonar(){
       allLightningDots.push({x:cx+Math.cos(aMid)*rMid,y:cy+Math.sin(aMid)*rMid});
     }
   }
-  if(_sonarCfg.showLightning&&allLightningDots.length){
+  if(_sonarCfg.showLightning&&allLightningDots.length&&(typeof _ltgShown!=='function'||_ltgShown())){
     const clR=Math.max(15,size*0.06);
     const lGroups=[];
     for(const d of allLightningDots){

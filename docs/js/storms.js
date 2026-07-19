@@ -2833,6 +2833,16 @@ function clearStormFilters(){
   if(typeof updateThreatTicker==='function')updateThreatTicker();
   renderStorms();
 }
+// v5.68: tap the "🎯 In N storm tracks" header line to FOCUS the list on just
+// the cells whose forecast cone actually covers you (Direct + Nearby + Passing),
+// bypassing "Approaching only" so the wider ones you're inside are visible too.
+// Tap again to reset. Session-only (not persisted).
+function toggleConeFocus(){
+  S._coneFocus=!S._coneFocus;
+  if(S._coneFocus&&typeof toast==='function')toast('🎯 Showing the storm cells whose cone covers you — tap again to reset');
+  renderStorms();
+}
+if(typeof window!=='undefined')window.toggleConeFocus=toggleConeFocus;
 function stormThreatScore10(s){
   // v5.64: threat is purely how DIRECTLY the cell's track crosses you — the
   // cross-track (X-TRK) distance, −4 points per mile: 10 at a bullseye, 9.2 at
@@ -2908,14 +2918,25 @@ function _applyStormFilter(storms,f){
   const _fHasMv=S.stormMovement&&S.stormMovement.speed&&S.stormMovement.speed>=2;
   const _fHasAl=S._upperWindDir!=null;
   const noMv=!_fHasMv&&!_fHasAl;
-  if(f.approachOnly&&!noMv)out=out.filter(s=>{
+  if(S._coneFocus&&S.lat!=null&&S.lon!=null){
+    // v5.68: cone-focus mode (tap the 🎯 header line) — show every cell whose
+    // forecast cone covers you, regardless of X-TRK tier, overriding
+    // "Approaching only". Uses the same in-cone test + dBZ floor as the count.
+    const _cFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
+    out=out.filter(s=>{
+      if((s.dbz||0)<_cFloor)return false;
+      const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||S.stormMovement;
+      if(!_smv||!(_smv.speed>=2))return false;
+      try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(e){return false}
+    });
+  }else if(f.approachOnly&&!noMv)out=out.filter(s=>{
     const e=s._eta;if(!(e&&e.approaching&&e.eta!=null))return false;
     // v5.63: "Approaching only" now means heading DIRECTLY at you — cross-track
     // miss ≤ 1.5 mi (the DIRECT tier), matching the card badge. Was the old
     // 6-tier direct/near_direct/near_miss (≤12 mi).
     try{if(!s._brief)s._brief=calcStormETAForBriefing(s);const pm=s._brief&&s._brief.perpMissMi;return pm!=null&&pm<=1.5;}catch(err){return false}
   });
-  S._filterApproachBypassed=f.approachOnly&&noMv;
+  S._filterApproachBypassed=!S._coneFocus&&f.approachOnly&&noMv;
   if(f.threatsOnly){
     out=out.filter(s=>{
       try{
@@ -3144,7 +3165,16 @@ function _renderStormsCore(){
   if(coneDirect>0)_coneBreak.push('Direct: '+coneDirect);
   if(coneNearby>0)_coneBreak.push('Nearby: '+coneNearby);
   if(conePassing>0)_coneBreak.push('Passing: '+conePassing);
-  const _coneLineHtml=(mv&&mv.speed>=2)?`<br><span style="color:${inConeColor}">🎯 In ${inConeCount} storm track${inConeCount!==1?'s':''}${_coneBreak.length?' · '+_coneBreak.join(', '):''}</span>`:'';
+  // v5.68: the cone line is tappable when you're inside ≥1 cone — it focuses the
+  // list on just those cells (see toggleConeFocus). Cyan "reset" state while active.
+  const _coneTappable=(inConeCount>0)||S._coneFocus;
+  const _coneInner=S._coneFocus
+    ? `🎯 Showing the cells whose cone covers you — tap to reset ✕`
+    : `🎯 In ${inConeCount} storm track${inConeCount!==1?'s':''}${_coneBreak.length?' · '+_coneBreak.join(', '):''}${_coneTappable?' ›':''}`;
+  const _coneSpanAttrs=_coneTappable
+    ? `onclick="event.stopPropagation();toggleConeFocus()" style="cursor:pointer;color:${S._coneFocus?'#22d3ee':inConeColor};text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px"`
+    : `style="color:${inConeColor}"`;
+  const _coneLineHtml=(mv&&mv.speed>=2)?`<br><span ${_coneSpanAttrs}>${_coneInner}</span>`:'';
   const sf=S._stormFilter||_loadStormFilter();
   const filtered=_applyStormFilter(storms,sf);
   const prevOpen={};
@@ -3376,7 +3406,7 @@ function _renderStormsCore(){
     </div>
     ${noWindBanner}${smartSummary}
     ${_renderFilterBar(sf)}
-    ${(()=>{const hidden=totalCount-filteredCount;if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(()=>{const _c=S._coneStats;if(!(sf.approachOnly&&_c&&_c.count>0&&_c.scanId===S._stormScanId))return'';return _c.direct>0?` — ${_c.direct} heading directly, ${_c.count-_c.direct} passing wider; uncheck "Approaching only" to see the rest`:' — none heading directly at you; uncheck "Approaching only" to see nearby tracks'})()}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
+    ${(()=>{const hidden=totalCount-filteredCount;if(S._coneFocus){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.3);border-radius:6px;font-size:0.75em;color:#22d3ee"><span>🎯 Focused on the ${filteredCount} cell${filteredCount!==1?'s':''} whose cone covers you</span><a href="#" onclick="event.preventDefault();toggleConeFocus()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Reset ✕</a></div>`}if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(()=>{const _c=S._coneStats;if(!(sf.approachOnly&&_c&&_c.count>0&&_c.scanId===S._stormScanId))return'';return _c.direct>0?` — ${_c.direct} heading directly, ${_c.count-_c.direct} passing wider; uncheck "Approaching only" to see the rest`:' — none heading directly at you; uncheck "Approaching only" to see nearby tracks'})()}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
     <div class="card"><div class="card-title"><span class="icon">🌪️</span> Storm Points</div>
       ${groupHtml}
     </div>

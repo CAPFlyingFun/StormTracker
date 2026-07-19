@@ -1120,12 +1120,13 @@ function calcStormETAForBriefing(storm){
     coneConfidence=0.30+0.70*rawConf;
   }
   const m=perpMiss;
-  let closeness;
-  if(m<=1)closeness=1.00;
-  else if(m<=3)closeness=1.00-(m-1)/2*0.15;
-  else if(m<=6)closeness=0.85-(m-3)/3*0.40;
-  else if(m<=10)closeness=0.45-(m-6)/4*0.30;
-  else closeness=0.10;
+  // v5.63: closeness anchored to the 1.5-mi DIRECT range (per user spec) —
+  //   0.0mi=100% · 0.5mi=80% · 1.0mi=60% · 1.5mi=40%  (linear 100%−40%·miles),
+  // reaching 0 by 2.5 mi. estDbzAtUser = peak dBZ × closeness, so a cell whose
+  // track passes well to your side estimates little/no rain ON you (it used to
+  // read near-full strength). The badge, the "Est. at you" dBZ and the threat
+  // score now all key off this same cross-track distance.
+  let closeness=Math.max(0,1-0.4*m);
   const intensityFactor=Math.max(0,Math.min(1,(storm.dbz-20)/55));
   const inboundLive=userInCone&&closing>0;
   const isClosing=closing>0;
@@ -1208,8 +1209,8 @@ if(typeof window!=='undefined'){
       const r5=calcStormETAForBriefing({lat:0,lng:0,distance:10,bearing:90,dbz:55});
       console.log('[briefing-test] Hawkinsville (10mi E, motion 280°@30mph, perpMiss≈1.7) →',r5);
       console.assert(r5.classification==='direct'||r5.classification==='near_miss','expected direct/near_miss, got '+r5.classification);
-      console.assert(r5.impactScore>=0.55&&r5.impactScore<=0.65,'expected impactScore≈0.60, got '+r5.impactScore);
-      console.assert(r5.estDbzAtUser>=50&&r5.estDbzAtUser<=53,'expected estDbz≈52, got '+r5.estDbzAtUser);
+      console.assert(r5.impactScore>=0.16&&r5.impactScore<=0.24,'expected impactScore≈0.20 (v5.63 curve), got '+r5.impactScore);
+      console.assert(r5.estDbzAtUser>=16&&r5.estDbzAtUser<=20,'expected estDbz≈18 (v5.63 curve), got '+r5.estDbzAtUser);
       S._lastStormClass={};
       S.stormMovement={direction:19,speed:18};
       const r6=calcStormETAForBriefing({lat:0,lng:0,distance:75,bearing:199,dbz:42});
@@ -2771,7 +2772,14 @@ function clearStormFilters(){
 }
 function _threatScoreRaw(s){
   const e=s._eta;
-  return Math.pow(s.dbz||0,2)*(e&&e.approaching?2:0.5)/Math.sqrt(Math.max(s.distance,0.5));
+  // v5.63: threat scales with cross-track closeness (how directly the cell's
+  // path crosses your location) rather than a flat approaching/not multiplier —
+  // the same-intensity cell passing wide is less of a threat than one heading
+  // over you. closeness is 1 at a direct hit and 0 by ~2.5 mi off-track.
+  const b=s._brief;
+  const cl=(b&&b.closeness!=null)?Math.max(0,Math.min(1,b.closeness)):(e&&e.approaching?1:0.25);
+  const closeFactor=0.5+1.5*cl; // 0.5 (wide) … 2.0 (direct) — same range as the old flag
+  return Math.pow(s.dbz||0,2)*closeFactor/Math.sqrt(Math.max(s.distance,0.5));
 }
 function stormThreatScore10(s){
   const raw=_threatScoreRaw(s);
@@ -2811,9 +2819,14 @@ function _applyStormFilter(storms,f){
   // Rain Clock) rather than the cards being forced up to the Rain Clock's
   // old threshold.
   out=out.filter(s=>{
-    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);}catch(e){return true;}
-    const est=s._brief&&s._brief.estDbzAtUser;
-    return!(est!=null&&est<15);
+    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);}catch(e){}
+    // v5.63: keep/drop on the cell's PEAK dBZ (is it a real cell), NOT its
+    // closeness-weighted est-at-you. The steeper v5.63 closeness curve makes a
+    // cell that merely passes to your side estimate near-0 dBZ at you; gating on
+    // est would then make those nearby cells vanish instead of showing as low.
+    // All scanned cells are already ≥ the radar floor, so this stays the light
+    // safety net it always was.
+    return!(s.dbz!=null&&s.dbz<15);
   });
   if(f.minDbz>0)out=out.filter(s=>s.dbz>=f.minDbz);
   if(f.maxDist>0)out=out.filter(s=>s.distance<=f.maxDist);
@@ -2822,7 +2835,10 @@ function _applyStormFilter(storms,f){
   const noMv=!_fHasMv&&!_fHasAl;
   if(f.approachOnly&&!noMv)out=out.filter(s=>{
     const e=s._eta;if(!(e&&e.approaching&&e.eta!=null))return false;
-    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);const c=s._brief&&s._brief.classification;return c==='direct'||c==='near_direct'||c==='near_miss';}catch(err){return false}
+    // v5.63: "Approaching only" now means heading DIRECTLY at you — cross-track
+    // miss ≤ 1.5 mi (the DIRECT tier), matching the card badge. Was the old
+    // 6-tier direct/near_direct/near_miss (≤12 mi).
+    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);const pm=s._brief&&s._brief.perpMissMi;return pm!=null&&pm<=1.5;}catch(err){return false}
   });
   S._filterApproachBypassed=f.approachOnly&&noMv;
   if(f.threatsOnly){

@@ -2449,6 +2449,41 @@ function _xtrkTier(missMi){
   if(missMi<=6)  return{key:'nearby', label:'NEARBY', emoji:'🟠', color:'#f97316'};
   return{key:'passing', label:'PASSING', emoji:'⚪', color:'#94a3b8'};
 }
+// v5.64: storm-card view mode — 'hybrid' (plain-English line above the boxes,
+// default) · 'text' (readout only) · 'cards' (boxes only, the pre-v5.64 look).
+function _stormView(){try{const v=localStorage.getItem('st_stormView');return(v==='text'||v==='cards')?v:'hybrid'}catch(e){return'hybrid'}}
+function cycleStormView(){const cur=_stormView();const nx=cur==='hybrid'?'text':cur==='text'?'cards':'hybrid';try{localStorage.setItem('st_stormView',nx)}catch(e){}if(typeof renderStorms==='function')renderStorms()}
+if(typeof window!=='undefined')window.cycleStormView=cycleStormView;
+// v5.64: one plain-English sentence tying a cell's sections together, e.g.
+// "⛈️ Strong storm — 26.7 mi to your N (12°), moving S (188°) at 12 mph.
+//  🎯 Direct impact, XTK 0.2 mi, arriving ~3:23 PM · Heavy rain (~48 dBZ) expected."
+function _stormTextSummary(s,_b,_sMv,eta){
+  const icon=s._rotation?'🌪️':s.dbz>=60?'🚨':s.dbz>=52?'⛈️':s.dbz>=41?'🌧️':'🌦️';
+  const strength=s._rotation?'Rotating storm':s.dbz>=65?'Extreme storm':s.dbz>=60?'Severe storm':s.dbz>=52?'Strong storm':s.dbz>=41?'Storm':'Rain cell';
+  const distStr=fmtStormDist(s.distance);
+  const posDir=degToDir(s.bearing);
+  const hasMv=!!(_sMv&&_sMv.speed>=2);
+  const moveClause=hasMv?`moving ${degToDir(_sMv.direction)} (${Math.round(_sMv.direction)}°) at ${S.radarMetric?Math.round(_sMv.speed*1.60934)+' km/h':_sMv.speed+' mph'}`:'motion unknown';
+  const closing=!!(_b&&_b.closingMph>0&&_b.classification!=='moving_away');
+  let impact;
+  if(_b&&_b.classification==='moving_away'){
+    impact='🟢 Drifting away — not a threat to you.';
+  }else if(closing&&_b.perpMissMi!=null){
+    const t=_xtrkTier(_b.perpMissMi);
+    const word=t.key==='direct'?'Direct impact':t.key==='nearby'?'Nearby pass':'Passing wide';
+    const missStr=S.radarMetric?(_b.perpMissMi*1.60934).toFixed(1)+' km':_b.perpMissMi.toFixed(1)+' mi';
+    const tgt=eta&&eta._targetMs;
+    let arr='';
+    if(tgt&&tgt>Date.now())arr=`, arriving ~${fmtArrivalTime((tgt-Date.now())/60000)}`;
+    else if(eta&&eta.eta!=null)arr=`, arriving ~${fmtArrivalTime(eta.eta)}`;
+    const est=_b.estDbzAtUser;
+    const rain=(est!=null&&est>=15)?`${stormCat(est).label} (~${est} dBZ) expected`:'little/no rain expected at you';
+    impact=`${t.emoji} ${word}, XTK ${missStr}${arr} · ${rain}.`;
+  }else{
+    impact='Track uncertain — watching.';
+  }
+  return `${icon} ${strength} — ${distStr} to your ${posDir} (${Math.round(s.bearing)}°), ${moveClause}. ${impact}`;
+}
 function _renderTropicalSection() {
   const allSystems = _nhcData.systems;
   if (allSystems === null) {
@@ -2770,25 +2805,30 @@ function clearStormFilters(){
   if(typeof updateThreatTicker==='function')updateThreatTicker();
   renderStorms();
 }
-function _threatScoreRaw(s){
-  const e=s._eta;
-  // v5.63: threat scales with cross-track closeness (how directly the cell's
-  // path crosses your location) rather than a flat approaching/not multiplier —
-  // the same-intensity cell passing wide is less of a threat than one heading
-  // over you. closeness is 1 at a direct hit and 0 by ~2.5 mi off-track.
-  const b=s._brief;
-  const cl=(b&&b.closeness!=null)?Math.max(0,Math.min(1,b.closeness)):(e&&e.approaching?1:0.25);
-  const closeFactor=0.5+1.5*cl; // 0.5 (wide) … 2.0 (direct) — same range as the old flag
-  return Math.pow(s.dbz||0,2)*closeFactor/Math.sqrt(Math.max(s.distance,0.5));
-}
 function stormThreatScore10(s){
-  const raw=_threatScoreRaw(s);
-  let scaled=Math.log10(Math.max(raw,1))/Math.log10(12100)*10;
-  if(s._rotation)scaled=scaled*1.25;
-  return Math.max(1,Math.min(10,Math.round(scaled*10)/10));
+  // v5.64: threat is purely how DIRECTLY the cell's track crosses you — the
+  // cross-track (X-TRK) distance, −4 points per mile: 10 at a bullseye, 9.2 at
+  // 0.2 mi, 6 at 1.0 mi, 4 at 1.5 mi, 0 by 2.5 mi. Intensity is conveyed
+  // separately (the rain word, Peak dBZ, and the SEVERE/EXTREME cell name).
+  let b=s._brief;
+  if(!b){try{b=calcStormETAForBriefing(s);s._brief=b}catch(e){}}
+  const closing=!!(b&&b.closingMph>0&&b.classification!=='moving_away');
+  const pm=(b&&b.perpMissMi!=null)?b.perpMissMi:null;
+  let score;
+  if(closing&&pm!=null)score=10-4*pm;
+  else if(pm==null)score=Math.max(0,Math.min(8,(s.dbz-20)/5)); // track unknown → intensity proxy
+  else score=0; // computed, but moving away / not closing on you
+  if(s._rotation)score=Math.max(score,8); // rotation (hook echo) is always a flag
+  return Math.max(0,Math.min(10,Math.round(score*10)/10));
 }
 function _stormSortFn(a,b,key){
-  if(key==='dbz')return b.dbz-a.dbz;
+  if(key==='dbz'){
+    // v5.64: "Strongest" ranks by the ESTIMATED dBZ at you (track-aware),
+    // falling back to peak when there's no closing track — so a strong cell
+    // passing wide no longer outranks a moderate one heading over you.
+    const estOf=x=>{const bx=x._brief;const e=(bx&&bx.estDbzAtUser!=null)?bx.estDbzAtUser:null;return e!=null?e:(x.dbz||0)};
+    return estOf(b)-estOf(a);
+  }
   if(key==='dist')return a.distance-b.distance;
   if(key==='eta'){
     const ea=a._eta&&a._eta.approaching&&a._eta.eta!=null?a._eta.eta:99999;
@@ -2828,7 +2868,14 @@ function _applyStormFilter(storms,f){
     // safety net it always was.
     return!(s.dbz!=null&&s.dbz<15);
   });
-  if(f.minDbz>0)out=out.filter(s=>s.dbz>=f.minDbz);
+  if(f.minDbz>0)out=out.filter(s=>{
+    // v5.64: "Min dBZ" is the floor on ESTIMATED dBZ at you (what actually
+    // reaches you), not the cell's peak — so it hides cells whose track passes
+    // too wide to matter. Falls back to peak for cells with no closing track.
+    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);}catch(e){}
+    const est=(s._brief&&s._brief.estDbzAtUser!=null)?s._brief.estDbzAtUser:s.dbz;
+    return est>=f.minDbz;
+  });
   if(f.maxDist>0)out=out.filter(s=>s.distance<=f.maxDist);
   const _fHasMv=S.stormMovement&&S.stormMovement.speed&&S.stormMovement.speed>=2;
   const _fHasAl=S._upperWindDir!=null;
@@ -2960,6 +3007,7 @@ function _renderFilterBar(f){
       <select id="sf-sort1" onchange="updateStormFilter()" oninput="updateStormFilter()" style="background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:4px;padding:2px 4px;font-size:1em">${mkOpts(f.sort1)}</select>
       <span class="c-muted">then</span>
       <select id="sf-sort2" onchange="updateStormFilter()" oninput="updateStormFilter()" style="background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:4px;padding:2px 4px;font-size:1em">${mkOpts(f.sort2)}</select>
+      <button type="button" onclick="cycleStormView()" title="Card view: Hybrid (text + boxes) · Text only · Boxes only" style="margin-left:auto;background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border-subtle);border-radius:999px;padding:2px 10px;font-size:1em;font-weight:700;cursor:pointer;white-space:nowrap">${_stormView()==='hybrid'?'▤ Hybrid':_stormView()==='text'?'☰ Text':'▦ Cards'}</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.72em;margin-top:6px">
       <span style="font-weight:700;color:var(--text-secondary)">Filter:</span>
@@ -3146,17 +3194,25 @@ function _renderStormsCore(){
       }
       const _cr=getStormConeRain(s);
       const _coneRainLine=(_cr&&_cr.count>0)?`<div title="${tStr('Rain returns inside the projected track path')}" style="margin-top:5px;font-size:0.68em;color:#5bc0ff;display:flex;align-items:center;gap:5px"><span>💧</span><span style="font-weight:600;color:var(--text-secondary)">${tStr('In path')}:</span><span style="font-weight:700">${_cr.count}</span><span style="color:var(--text-secondary)">${tStr('returns')}</span>${_cr.maxDbz?`<span style="color:var(--text-secondary)">·</span><span style="font-weight:700">${_cr.maxDbz} dBZ</span><span style="color:var(--text-secondary)">${tStr('max')}</span>`:''}</div>`:'';
-      return`<div class="storm-cell-card ${pulse}" style="border-color:${borderColor};--pulse-color:${borderColor}${isHook?';animation:tornado-pulse 1.8s ease-in-out infinite,storm-pulse-severe 2s ease-in-out infinite':''}">
-        <div class="storm-header"><span style="font-weight:700">${cellIcon} ${cellName}</span>${hookBadge}${clsBadge}<span class="storm-badge" style="background:${hex}22;color:${hex};border:1px solid ${hex}44">${tStr(cat.label)}</span></div>
-        <div style="display:flex;align-items:center;gap:6px;margin:4px 0 2px;font-size:0.7em"><span style="font-weight:700;color:var(--text-secondary)">Threat:</span><span style="color:${tsColor};font-weight:700;font-size:1.1em">${ts10.toFixed(1)}</span><span style="color:${tsColor};font-size:0.85em;font-weight:600">/10 ${tsLabel}</span></div>
-        <div class="storm-detail-grid">
+      // v5.64: hybrid view — plain-English readout above, boxes below. The view
+      // toggle (filter bar) flips between hybrid / text-only / boxes-only.
+      const _viewMode=_stormView();
+      const _summary=_stormTextSummary(s,_b,_sMv,eta);
+      const _textBlock=_viewMode!=='cards'
+        ?`<div class="storm-summary" style="font-size:0.8em;line-height:1.5;color:var(--text-primary);margin:6px 0${_viewMode==='hybrid'?';padding-bottom:6px;border-bottom:1px solid var(--border-subtle)':''}">${_summary}</div>`
+        :'';
+      const _threatLine=`<div style="display:flex;align-items:center;gap:6px;margin:4px 0 2px;font-size:0.7em" title="Threat = how directly the track crosses you (X-TRK): 10 at a bullseye, −4 per mile"><span style="font-weight:700;color:var(--text-secondary)">Threat:</span><span style="color:${tsColor};font-weight:700;font-size:1.1em">${ts10.toFixed(1)}</span><span style="color:${tsColor};font-size:0.85em;font-weight:600">/ 10 · ${tsLabel}</span></div>`;
+      const _gridBlock=`<div class="storm-detail-grid">
           <div class="storm-detail"><div class="storm-detail-label">${tStr('Peak dBZ')}</div><div class="storm-detail-val" style="color:${cat.color}">${s.dbz}</div></div>
           <div class="storm-detail tappable-unit" onclick="toggleStormUnits()"><div class="storm-detail-label">${tStr('Rain Rate')}</div><div class="storm-detail-val">${cat.rain}</div><div class="tile-tap">tap</div></div>
           <div class="storm-detail tappable-unit" onclick="toggleStormUnits()"><div class="storm-detail-label">${tStr('Distance')}</div><div class="storm-detail-val"><span data-dist-mi="${s.distance}" data-closing-mph="${eta&&eta.closingSpeed?eta.closingSpeed:0}" data-target-ms="${eta&&eta._targetMs?eta._targetMs:0}">${(()=>{const cs=eta&&eta.closingSpeed?eta.closingSpeed:0;const tgt=eta&&eta._targetMs?eta._targetMs:0;if(cs>0&&tgt>Date.now()){const rh=Math.max(0,(tgt-Date.now())/3600000);return fmtStormDist(rh*cs)}return fmtStormDist(s.distance)})()}</span> · ${degToDir(s.bearing)} (${String(Math.round(s.bearing)).padStart(3,'0')}°)</div><div class="tile-tap">tap</div></div>
           ${mvLine}
-        </div>
-        ${estLine}
-        ${_coneRainLine}
+        </div>`;
+      const _detailBlock=_viewMode!=='text'?`${_threatLine}${_gridBlock}${_viewMode==='cards'?estLine:''}${_coneRainLine}`:'';
+      return`<div class="storm-cell-card ${pulse}" style="border-color:${borderColor};--pulse-color:${borderColor}${isHook?';animation:tornado-pulse 1.8s ease-in-out infinite,storm-pulse-severe 2s ease-in-out infinite':''}">
+        <div class="storm-header"><span style="font-weight:700">${cellIcon} ${cellName}</span>${hookBadge}${clsBadge}<span class="storm-badge" style="background:${hex}22;color:${hex};border:1px solid ${hex}44">${tStr(cat.label)}</span></div>
+        ${_textBlock}
+        ${_detailBlock}
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
           <span class="text-hint">
             ${s.lat.toFixed(3)}°N, ${Math.abs(s.lng).toFixed(3)}°${s.lng<0?'W':'E'} &middot; ${s.pixels} returns

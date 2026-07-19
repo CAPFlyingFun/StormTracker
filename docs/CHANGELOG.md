@@ -3,6 +3,18 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.69
+
+  **Real lightning strikes (WarPulse) — live observed data on map + sonar.**
+
+  - New Cloudflare worker route `GET /lightning` (worker/index.js): pure pass-through to `api.warpulse.com/v1/flashes`. WarPulse sends no CORS headers, so browsers can't call it directly; the worker adds CORS, forwards the user's key from the `X-API-Key` request header (never stored/logged server-side), whitelists the bbox/since_minutes/limit params, and relays the `x-quota-cost` response header (exposed via `Access-Control-Expose-Headers`).
+  - Client fetch (`refreshLightningStrikes()` in storms.js): rides the scan pipeline via `commitScanResults` (non-blocking), throttled to ≥60 s between calls, `since_minutes=15`, `limit=500` (free-plan cap). Bbox = scan radius (min 60 mi) around the user's location. Quota math: free plan 50 k units/month, cost = ceil(flashes/100) min 1 → worst case ~5 units/scan, well within budget.
+  - Error handling: 401/403 → 30-min backoff + one-time "key rejected" toast (cleared when the key is re-saved); 429 → 10-min backoff; timestamps arrive as `"YYYY-MM-DD HH:MM:SS.ffffff"` UTC with no zone marker — normalized to ISO+Z before `Date.parse`.
+  - Map rendering (`plotLightningStrikes()` in radar.js): up to 400 age-faded circle markers — bright yellow <5 min, orange 5-10, dim 10-15; redrawn on every scan commit and fetch.
+  - Live data suppresses the radar-derived estimates while fresh (<10 min, `ltgLive()`): the ≥40 dBZ ⚡ map markers and the sonar's ≥48 dBZ flash dots are gated off, and the sonar instead plots real strikes through the same flash-cluster animation. Storms-tab footnote switches to "N live strikes (last 15 min) · Observed via WarPulse". Everything falls back to estimates automatically when data goes stale or no key is set.
+  - Settings hint, tutorial (⚡ Lightning Indicators), and changelog updated to explain the live-vs-estimated distinction.
+  - Cache: `?v=666`, SW `stormtracker-v666`.
+
   ## v5.55
 
   **Smarter address search: messy/redundant addresses, retry ladder, wrong-area rejection.**

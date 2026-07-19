@@ -919,7 +919,7 @@ function drawMiniSonar(){
     allLightningDots=[];
     for(const d of dots){
       if(d.dbz<dbzFloor)continue;
-      if(d.dbz>=48&&cfg.showLightning)allLightningDots.push(d);
+      if(d.dbz>=48&&cfg.showLightning&&!(typeof ltgLive==='function'&&ltgLive()))allLightningDots.push(d);
       const frac=Math.min(1,d.dist/maxR);
       const dbzCls=_dbzEntry(d.dbz).cls;
       const dbzSc=_getDbzScale(dbzCls);
@@ -1158,6 +1158,17 @@ function drawMiniSonar(){
   ctx.restore();
   ctx.beginPath();ctx.arc(cx,cy,11,0,Math.PI*2);ctx.strokeStyle='rgba(0,220,255,0.6)';ctx.lineWidth=2;ctx.stroke();
   ctx.beginPath();ctx.arc(cx,cy,16,0,Math.PI*2);ctx.strokeStyle='rgba(0,220,255,0.25)';ctx.lineWidth=1;ctx.stroke();
+  // v5.69: real WarPulse strikes replace the ≥48 dBZ radar estimate on the
+  // sonar when fresh (the estimate collection above is gated off via ltgLive()).
+  if(_sonarCfg.showLightning&&typeof ltgLive==='function'&&ltgLive()){
+    for(const f of S._ltgStrikes.flashes){
+      const distMi=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
+      if(distMi>viewR)continue;
+      const bear=(f.bear!=null)?f.bear:(bearingDeg(S.lat,S.lon,f.lat,f.lon)+360)%360;
+      const aMid=(bear-90)*Math.PI/180,rMid=maxR*(distMi/viewR);
+      allLightningDots.push({x:cx+Math.cos(aMid)*rMid,y:cy+Math.sin(aMid)*rMid});
+    }
+  }
   if(_sonarCfg.showLightning&&allLightningDots.length){
     const clR=Math.max(15,size*0.06);
     const lGroups=[];

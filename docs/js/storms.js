@@ -189,12 +189,79 @@ function getLightningKey(){try{return localStorage.getItem('st_lightningKey')||'
 function saveLightningKey(v){
   const t=(v||'').trim();
   try{localStorage.setItem('st_lightningKey',t)}catch(e){}
+  // Fresh key = fresh start: clear any bad-key backoff and cached strikes,
+  // then fetch immediately so the user sees live data without waiting a scan.
+  _ltgBackoffUntil=0;_ltgBadKeyWarned=false;_ltgLastAt=0;
+  if(!t){S._ltgStrikes=null;if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof drawMiniSonar==='function')drawMiniSonar();}
+  else refreshLightningStrikes(true);
   if(typeof toast==='function')toast(t?'✓ Lightning key saved':'Lightning key cleared');
 }
 function toggleLightningKeyVis(){
   const inp=document.getElementById('settings-lightning-key');
   if(!inp)return;
   inp.type=inp.type==='password'?'text':'password';
+}
+// --- Live lightning strikes (WarPulse via the Cloudflare worker proxy) ---
+// WarPulse blocks browser CORS, so the fetch goes through the worker's
+// /lightning pass-through route; the key travels per-request in X-API-Key and
+// is never stored server-side. Quota safety (free plan = 50k units/month,
+// cost = ceil(flashes/100) per call, min 1): calls ride the scan pipeline,
+// throttled to one per 60s, since_minutes=15, limit=500 (free-plan cap).
+const LTG_FRESH_MS=10*60000;   // strikes older than this = fall back to radar estimate
+const LTG_MIN_GAP_MS=60000;    // min spacing between API calls
+let _ltgLastAt=0,_ltgBackoffUntil=0,_ltgBadKeyWarned=false;
+function ltgLive(){return !!(S._ltgStrikes&&S._ltgStrikes.flashes.length&&Date.now()-S._ltgStrikes.ts<LTG_FRESH_MS)}
+async function refreshLightningStrikes(force){
+  const key=getLightningKey();
+  if(!key||S.lat==null||S.lon==null)return;
+  const now=Date.now();
+  if(now<_ltgBackoffUntil)return;
+  if(!force&&now-_ltgLastAt<LTG_MIN_GAP_MS)return;
+  if(S._ltgFetching)return;
+  S._ltgFetching=true;_ltgLastAt=now;
+  try{
+    const radMi=Math.max(S.scanRadius||80,60);
+    const latPad=radMi/69;
+    const lonPad=radMi/(69*Math.max(0.2,Math.cos(S.lat*Math.PI/180)));
+    const base=(typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';
+    const u=base+'/lightning?since_minutes=15&limit=500'
+      +'&min_lat='+(S.lat-latPad).toFixed(3)+'&max_lat='+(S.lat+latPad).toFixed(3)
+      +'&min_lon='+(S.lon-lonPad).toFixed(3)+'&max_lon='+(S.lon+lonPad).toFixed(3);
+    const opts={headers:{'X-API-Key':key}};
+    if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
+    const r=await fetch(u,opts);
+    if(r.status===401||r.status===403){
+      _ltgBackoffUntil=now+30*60000;
+      if(!_ltgBadKeyWarned){_ltgBadKeyWarned=true;if(typeof toast==='function')toast('⚡ Lightning key rejected — check Settings → Lightning')}
+      return;
+    }
+    if(r.status===429){_ltgBackoffUntil=now+10*60000;console.warn('[ltg] quota/rate limited — backing off 10 min');return}
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const flashes=[];
+    for(const f of (j&&j.flashes)||[]){
+      if(typeof f.lat!=='number'||typeof f.lon!=='number')continue;
+      let t=0;
+      if(f.flash_timestamp_utc){
+        // API returns "2026-07-19 20:21:57.797745" (UTC, space, no zone marker)
+        let s=String(f.flash_timestamp_utc).replace(' ','T');
+        if(!/[zZ]$|[+-]\d\d:?\d\d$/.test(s))s+='Z';
+        t=Date.parse(s)||0;
+      }
+      // Precompute polar coords relative to the fetch location once, so the
+      // sonar (redrawn every animation frame) doesn't haversine 500 strikes
+      // per frame. The bbox is centered on this same location, so these stay
+      // consistent with the data itself.
+      const distMi=haversine(S.lat,S.lon,f.lat,f.lon);
+      const bear=(bearingDeg(S.lat,S.lon,f.lat,f.lon)+360)%360;
+      flashes.push({lat:f.lat,lon:f.lon,t,distMi,bear});
+    }
+    S._ltgStrikes={ts:Date.now(),flashes};
+    console.log('[ltg] '+flashes.length+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
+    if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
+    if(typeof drawMiniSonar==='function')drawMiniSonar();
+  }catch(e){console.warn('[ltg] fetch failed:',e&&e.message||e)}
+  finally{S._ltgFetching=false}
 }
 function _ftToHPa(ft){
   // ISA: P = 1013.25 * (1 - 0.0065*h/288.15)^5.255 ; h in meters
@@ -3412,7 +3479,7 @@ function _renderStormsCore(){
     </div>
     ${gridHtml}
     <div style="font-size:0.65em;color:var(--text-muted);text-align:center;padding:4px">
-      ⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>
+      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Observed via WarPulse<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
       Impact % based on direction, distance, speed &amp; intensity via winds aloft
     </div>`;
   startEtaCountdowns();

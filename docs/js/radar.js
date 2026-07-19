@@ -807,11 +807,40 @@ async function commitScanResults(rawPoints,opts){
   const map=opts.map||S.map;
   if(map){
     plotStormMarkers(map);
+    // Unconditional: self-clears stale live-lightning dots when ltgLive() has
+    // gone false (key removed, data expired, or fetch backoff) so old strikes
+    // never coexist with the radar-derived ⚡ estimates plotted above.
+    if(typeof plotLightningStrikes==='function')plotLightningStrikes(map);
     if(rawPoints.length>0){autoActivateZones()}
     else{clearStormZones();if(S.radarLayer&&!map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(map)}catch(e){}}
   }
   updateThreatTicker();
+  // v5.69: live lightning rides the scan pipeline (non-blocking — internally
+  // throttled + no-op without a WarPulse key). Re-plots map/sonar on arrival.
+  if(typeof refreshLightningStrikes==='function')refreshLightningStrikes();
   return true;
+}
+
+// v5.69: real WarPulse strikes on the radar map. Age-faded dots (bright yellow
+// <5 min, orange 5-10, dim 10-15); capped at 400 for mobile perf. Cleared and
+// redrawn on every scan commit + every successful strike fetch. When live data
+// is fresh, the radar-derived ⚡ estimates on storm cells are suppressed.
+function plotLightningStrikes(map){
+  if(!S.ltgMarkers)S.ltgMarkers=[];
+  S.ltgMarkers.forEach(m=>{try{map.removeLayer(m)}catch(e){}});
+  S.ltgMarkers=[];
+  if(typeof ltgLive!=='function'||!ltgLive())return;
+  const now=Date.now();
+  const fl=S._ltgStrikes.flashes.slice(0,400);
+  for(const f of fl){
+    const ageMin=f.t?(now-f.t)/60000:15;
+    const col=ageMin<5?'#ffee33':ageMin<10?'#ffb833':'#ff8f33';
+    const op=ageMin<5?0.95:ageMin<10?0.6:0.32;
+    try{
+      const m=L.circleMarker([f.lat,f.lon],{radius:ageMin<5?3.5:2.5,stroke:false,fillColor:col,fillOpacity:op,interactive:false,pane:'markerPane'});
+      m.addTo(map);S.ltgMarkers.push(m);
+    }catch(e){}
+  }
 }
 
 async function scanRadarForView(){
@@ -1179,7 +1208,8 @@ function plotStormMarkers(map){
       const ringRadiusM=Math.max(800,Math.min(5000,(storm.dbz-15)*80));
       pending.push({type:'ring',lat:storm.lat,lng:storm.lng,ringRadiusM,color,dbz:storm.dbz,stormRef,_dbz:storm.dbz});
     }
-    if(storm.dbz>=40){
+    if(storm.dbz>=40&&!(typeof ltgLive==='function'&&ltgLive())){
+      // radar-derived ⚡ estimate — suppressed while real WarPulse strikes are fresh
       pending.push({type:'lightning',lat:storm.lat,lng:storm.lng,stormRef,_dbz:storm.dbz});
     }
     if(S._stormAlertHistory&&S._stormAlertHistory.length){

@@ -15,7 +15,7 @@
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, x-scanner-secret',
+  'Access-Control-Allow-Headers': 'Content-Type, x-scanner-secret, X-API-Key',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -213,6 +213,39 @@ async function proxyAWC(kind, url) {
   }
 }
 
+// ⚡ WarPulse lightning proxy — pure pass-through. The user's own API key
+// arrives in the X-API-Key request header (stored only on their device) and is
+// forwarded verbatim to api.warpulse.com; it is never logged or stored here.
+// WarPulse sends no Access-Control-Allow-Origin header, so browsers can't call
+// it directly — this route only adds CORS + relays the x-quota-cost header.
+async function proxyLightning(url, request) {
+  const key = request.headers.get('X-API-Key') || '';
+  if (!key) return json({ error: 'missing X-API-Key header' }, 400);
+  const p = new URLSearchParams();
+  for (const k of ['since_minutes', 'min_lat', 'max_lat', 'min_lon', 'max_lon', 'limit']) {
+    const v = url.searchParams.get(k);
+    if (v != null && v !== '') p.set(k, v);
+  }
+  try {
+    const resp = await fetch('https://api.warpulse.com/v1/flashes?' + p.toString(), {
+      headers: { 'X-API-Key': key, 'Accept': 'application/json' },
+    });
+    const body = await resp.text();
+    return new Response(body, {
+      status: resp.status,
+      headers: {
+        'Content-Type': resp.headers.get('Content-Type') || 'application/json',
+        'X-Quota-Cost': resp.headers.get('x-quota-cost') || '',
+        'Access-Control-Expose-Headers': 'X-Quota-Cost',
+        'Cache-Control': 'no-store',
+        ...CORS,
+      },
+    });
+  } catch (e) {
+    return json({ error: 'upstream: ' + e.message }, 502);
+  }
+}
+
 export default {
   // Cloudflare Cron Trigger (every 5 min) — the reliable heartbeat that kicks
   // off each background storm scan. See triggerScan() above.
@@ -229,6 +262,7 @@ export default {
     // ---- AWC proxy (unchanged) ----
     if (path === '/metar') return proxyAWC('metar', url);
     if (path === '/taf') return proxyAWC('taf', url);
+    if (path === '/lightning' && request.method === 'GET') return proxyLightning(url, request);
 
     // ---- Push subscription API ----
     if (path === '/subscribe' && request.method === 'POST') {

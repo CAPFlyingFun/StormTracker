@@ -2283,6 +2283,63 @@ async function _fetchJTWCStorms() {
   }
   return storms;
 }
+// ── Projected ("Future:") name for an UNNAMED depression ──────────────────────
+// NHC labels a depression "Tropical Depression <Number>" until it reaches
+// tropical-storm strength, when it takes the next name on the season's list. The
+// season's Nth cyclone gets the Nth name, so we map the storm's ATCF number to
+// the WMO rotating list for its basin and show that as a projection. It's an
+// estimate: the real name can shift if an earlier depression never got named.
+// Lists rotate on a 6-year cycle → index = (year-2019) % 6. Only the entries we
+// can state with confidence are included; a missing year simply shows no
+// projection. UPDATE / EXTEND these as the WMO retires names or the season turns.
+const _STORM_NAMES = {
+  at: {
+    0: ['Andrea','Barry','Chantal','Dexter','Erin','Fernand','Gabrielle','Humberto','Imelda','Jerry','Karen','Lorenzo','Melissa','Nestor','Olga','Pablo','Rebekah','Sebastien','Tanya','Van','Wendy'], // 2025 / 2031
+    1: ['Arthur','Bertha','Cristobal','Dolly','Edouard','Fay','Gonzalo','Hanna','Isaias','Josephine','Kyle','Leah','Marco','Nana','Omar','Paulette','Rene','Sally','Teddy','Vicky','Wilfred'], // 2026 / 2032 (Laura→Leah)
+    2: ['Ana','Bill','Claudette','Danny','Elsa','Fred','Grace','Henri','Imani','Julian','Kate','Larry','Mindy','Nicholas','Odette','Peter','Rose','Sam','Teresa','Victor','Wanda'], // 2027 (Ida→Imani)
+  },
+  ep: {
+    0: ['Alvin','Barbara','Cosme','Dalila','Erick','Flossie','Gil','Henriette','Ivo','Juliette','Kiko','Lorena','Mario','Narda','Octave','Priscilla','Raymond','Sonia','Tico','Velma','Wallis','Xina','York','Zelda'], // 2025
+    1: ['Amanda','Boris','Cristina','Douglas','Elida','Fausto','Genevieve','Hernan','Iselle','Julio','Karina','Lowell','Marie','Norbert','Odalys','Polo','Rachel','Simon','Trudy','Vance','Winnie','Xavier','Yolanda','Zeke'], // 2026
+  },
+};
+// Atlantic supplemental list (used when a season exhausts the main 21 names).
+const _STORM_NAMES_SUPP_AT = ['Adria','Braylen','Caridad','Deshawn','Emery','Foster','Gemma','Heath','Isla','Jacobus','Kenzie','Lucio','Marina','Nasir','Orlanda','Pax','Ronin','Sophie','Tayshaun','Viviana','Will'];
+const _NUM_WORDS = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20 };
+function _stormNumber(storm) {
+  const id = (storm.id || '').toUpperCase();
+  const m = id.match(/^(AL|EP|CP)(\d{2})\d{2,4}$/); // ATCF: basin + number + year
+  if (m) return parseInt(m[2], 10);
+  let nm = (storm.name || '').trim().toLowerCase().replace(/^tropical depression\s*/, '');
+  if (/^\d+$/.test(nm)) return parseInt(nm, 10);
+  const parts = nm.split(/[\s-]+/);
+  if (parts.length === 1 && _NUM_WORDS[parts[0]] != null) return _NUM_WORDS[parts[0]];
+  if (parts.length === 2 && parts[0] === 'twenty' && _NUM_WORDS[parts[1]] != null) return 20 + _NUM_WORDS[parts[1]];
+  return null;
+}
+function _isUnnamedDepression(storm) {
+  // A real name is letters (e.g. "Elida"); an unnamed depression's name field is
+  // the spelled number ("Two") or a digit — that's what we project a name for.
+  const nm = (storm.name || '').trim().toLowerCase().replace(/^tropical depression\s*/, '');
+  if (!nm) return false;
+  if (/^\d+$/.test(nm)) return true;
+  const parts = nm.split(/[\s-]+/);
+  if (parts.length === 1) return _NUM_WORDS[parts[0]] != null;
+  if (parts.length === 2) return parts[0] === 'twenty' && _NUM_WORDS[parts[1]] != null;
+  return false;
+}
+function _futureStormName(storm) {
+  if (!_isUnnamedDepression(storm)) return null;
+  const num = _stormNumber(storm);
+  if (!num || num < 1) return null;
+  const basin = (storm.basin === 'ep' || /^(EP|CP)/i.test(storm.id || '')) ? 'ep' : 'at';
+  const year = (new Date()).getFullYear();
+  const list = (_STORM_NAMES[basin] || {})[(((year - 2019) % 6) + 6) % 6];
+  if (!list) return null;
+  if (num <= list.length) return list[num - 1];
+  if (basin === 'at' && num - list.length <= _STORM_NAMES_SUPP_AT.length) return _STORM_NAMES_SUPP_AT[num - list.length - 1];
+  return null;
+}
 function _isUserInCone(storm) {
   if (!S.lat || !S.lon || !_nhcData.cones) return false;
   // Match the storm to ITS cone with the SAME strict rule the push scanner uses
@@ -2417,6 +2474,7 @@ function _renderTropicalSection() {
           <div style="font-weight:700;font-size:0.95em;color:var(--text-primary)">${s.type} ${s.name}</div>
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <span style="font-size:0.7em;color:${cat.color};font-weight:700">${cat.label}${cat.num >= 1 ? ' (Category ' + cat.num + ')' : ''}</span>
+            ${_futureStormName(s) ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:rgba(120,200,255,0.12);color:var(--accent-cyan);font-weight:700">Future: ${_futureStormName(s)}</span>` : ''}
             ${status ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${status.bg};color:${status.color};font-weight:700">${status.text}</span>` : ''}
           </div>
         </div>
@@ -2527,6 +2585,7 @@ function plotNHCTracks(map) {
     marker.bindPopup(`<div style="text-align:center;font-family:system-ui;min-width:180px">
       <div style="font-size:1.2em;font-weight:700;color:${cat.color}">🌀 ${s.type} ${s.name}</div>
       <div style="font-size:0.85em;font-weight:600;color:${cat.color}">${cat.label}</div>
+      ${_futureStormName(s) ? `<div style="font-size:0.72em;color:var(--accent-cyan);margin-top:2px">Future name: <b>${_futureStormName(s)}</b></div>` : ''}
       ${status ? `<div style="font-size:0.7em;font-weight:700;color:${status.color};margin:2px 0">${status.text}</div>` : ''}
       ${s.maxWind ? `<div style="font-size:0.8em;margin-top:4px">💨 Max Wind: <b>${s.maxWind} mph</b>${s.gusts ? ' (G' + s.gusts + ')' : ''}</div>` : ''}
       ${s.minPressure ? `<div class="text-sm">🔵 Pressure: <b>${s.minPressure} mb</b></div>` : ''}
@@ -2659,7 +2718,7 @@ function _renderNHCBanner(data) {
     <span style="font-size:1.4em">🌀</span>
     <div class="flex-1">
       <div style="font-weight:700;font-size:0.85em;color:${borderColor}">${storm.type} ${storm.name} — ${cat.label}</div>
-      <div class="text-secondary-sm">${reason}${status ? ' · ' + status.text : ''}</div>
+      <div class="text-secondary-sm">${reason}${status ? ' · ' + status.text : ''}${_futureStormName(storm) ? ' · Future: ' + _futureStormName(storm) : ''}</div>
     </div>
     <span style="font-size:0.65em;color:var(--accent-cyan)">View →</span>
   </div>`;

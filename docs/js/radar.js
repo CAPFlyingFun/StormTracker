@@ -842,8 +842,12 @@ function plotLightningStrikes(map){
     const col=ageMin<5?'#fff27a':ageMin<10?'#ffd43b':'#ffa94d';
     const op=ageMin<5?1:ageMin<10?0.85:0.55;
     const rad=ageMin<5?4.5:ageMin<10?3.5:2.8;
+    // v5.71: real (observed) strikes PULSE so they read as live and are distinct
+    // from the solid radar-derived ⚡ estimate. Only the fresh (<10 min) ones
+    // animate — keeps the pulsing-element count sane on mobile.
+    const cls=ageMin<10?'ltg-strike-real':'';
     try{
-      const m=L.circleMarker([f.lat,f.lon],{radius:rad,stroke:true,color:'#2a1e00',weight:1,fillColor:col,fillOpacity:op,interactive:false,pane:havePane?'ltgPane':'markerPane'});
+      const m=L.circleMarker([f.lat,f.lon],{radius:rad,stroke:true,color:'#2a1e00',weight:1,fillColor:col,fillOpacity:op,interactive:false,pane:havePane?'ltgPane':'markerPane',className:cls});
       m.addTo(map);S.ltgMarkers.push(m);
     }catch(e){}
   }

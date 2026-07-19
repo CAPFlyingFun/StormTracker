@@ -773,3 +773,7 @@ canvas.offscreen{display:none}
 @media(min-width:1600px){
   #page-weather,#page-alerts{column-count:3}
 }
+/* v5.71: real (observed) WarPulse lightning strikes pulse on the radar map so
+   they read as live and are distinct from the solid radar-derived estimate. */
+@keyframes ltgStrikePulse{0%,100%{opacity:1}50%{opacity:0.3}}
+.ltg-strike-real{animation:ltgStrikePulse 1.1s ease-in-out infinite}

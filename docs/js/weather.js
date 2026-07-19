@@ -1181,6 +1181,10 @@ function drawMiniSonar(){
       if(!merged)lGroups.push({sx:d.x,sy:d.y,n:1,dots:[d]});
     }
     const now=performance.now();
+    // v5.71: REAL (observed WarPulse) strikes PULSE — a flashing bolt with an
+    // expanding cyan ring — while radar-derived ESTIMATES render as a solid,
+    // steady bolt, so you can tell live data from a guess at a glance.
+    const _ltgReal=(typeof ltgLive==='function'&&ltgLive());
     if(!_lightningFlashState)_lightningFlashState=[];
     while(_lightningFlashState.length<lGroups.length)_lightningFlashState.push({on:true,nextToggle:now+100+Math.random()*700});
     _lightningFlashState.length=lGroups.length;
@@ -1192,12 +1196,21 @@ function drawMiniSonar(){
       const g=lGroups[gi];
       const gx=g.sx/g.n,gy=g.sy/g.n;
       const fs=_lightningFlashState[gi];
-      if(now>=fs.nextToggle){
-        fs.on=!fs.on;
-        fs.nextToggle=now+(fs.on?(150+Math.random()*250):(1500+Math.random()*1500));
+      let flashAlpha;
+      if(_ltgReal){
+        // real: expanding pulse ring + flashing bolt
+        const ph=(now/900+gi*0.37)%1;
+        ctx.save();ctx.shadowBlur=0;
+        ctx.beginPath();ctx.arc(gx,gy,boltSz*0.45+ph*boltSz*0.9,0,Math.PI*2);
+        ctx.strokeStyle=`rgba(120,210,255,${0.55*(1-ph)})`;ctx.lineWidth=2;ctx.stroke();
+        ctx.restore();
+        if(now>=fs.nextToggle){fs.on=!fs.on;fs.nextToggle=now+(fs.on?(150+Math.random()*250):(900+Math.random()*900));}
+        if(!fs.on)continue;
+        flashAlpha=0.7+Math.random()*0.3;
+      }else{
+        // estimated: solid steady bolt (no flashing)
+        flashAlpha=0.85;
       }
-      if(!fs.on)continue;
-      const flashAlpha=0.7+Math.random()*0.3;
       ctx.fillStyle=`rgba(255,255,50,${flashAlpha})`;ctx.fillText('⚡',gx,gy);
       if(g.n>1){
         ctx.save();ctx.shadowBlur=0;

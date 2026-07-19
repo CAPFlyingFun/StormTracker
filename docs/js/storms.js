@@ -2910,6 +2910,17 @@ function toggleConeFocus(){
   renderStorms();
 }
 if(typeof window!=='undefined')window.toggleConeFocus=toggleConeFocus;
+// v5.71: Storm Points accordion — tapping a tier header opens that one and
+// closes the other two. Remembered in S._stormGroupOpen across re-renders.
+function _toggleStormGroup(ev,key){
+  if(ev&&ev.preventDefault)ev.preventDefault();
+  S._stormGroupOpen=key;
+  document.querySelectorAll('details.storm-tier-group[data-grp]').forEach(d=>{
+    d.open=(d.getAttribute('data-grp')===key);
+  });
+  return false;
+}
+if(typeof window!=='undefined')window._toggleStormGroup=_toggleStormGroup;
 function stormThreatScore10(s){
   // v5.64: threat is purely how DIRECTLY the cell's track crosses you — the
   // cross-track (X-TRK) distance, −4 points per mile: 10 at a bullseye, 9.2 at
@@ -3382,21 +3393,35 @@ function _renderStormsCore(){
   const overhead=filtered.filter(s=>ohKeySet.has(stormKey(s)));
   const nearby=filtered.filter(s=>!inKeySet.has(stormKey(s))&&!ohKeySet.has(stormKey(s)));
   let groupHtml='';
-  const _nearbyAutoOpen=inboundCapped.length===0&&overhead.length===0&&nearby.length>0;
-  const sections=[
-    {key:'approaching',items:inboundCapped,label:'⏱️ Inbound',color:'#ef4444',open:true},
-    {key:'overhead',items:overhead,label:'⚠️ Overhead / Arrived',color:'#f97316',open:false},
-    {key:'nearby',items:nearby,label:'🟢 Nearby / Outbound',color:'#4ade80',open:_nearbyAutoOpen}
+  // v5.71: group Storm Points by the SAME 3 X-TRK tiers as the header cone
+  // breakdown (Direct ≤1.5 · Nearby 1.5–6 · Passing >6 / no closing track), so
+  // the two taxonomies match. Rendered as an accordion (one open at a time).
+  const _tierOf=s=>{const pm=_missMi(s);if(pm==null||!isFinite(pm))return 'passing';if(pm<=1.5)return 'direct';if(pm<=6)return 'nearby';return 'passing';};
+  const _byXtk=(x,y)=>{const mx=_missMi(x),my=_missMi(y);const ax=(mx==null||!isFinite(mx))?999:mx,ay=(my==null||!isFinite(my))?999:my;if(ax!==ay)return ax-ay;return (x.distance||0)-(y.distance||0);};
+  const gDirect=filtered.filter(s=>_tierOf(s)==='direct').sort(_byXtk);
+  const gNearby=filtered.filter(s=>_tierOf(s)==='nearby').sort(_byXtk);
+  const gPassing=filtered.filter(s=>_tierOf(s)==='passing').sort(_byXtk);
+  const _GRP_CAP=25;
+  const tierSecs=[
+    {key:'direct', items:gDirect, label:'🎯 Direct', color:'#ef4444'},
+    {key:'nearby', items:gNearby, label:'🟠 Nearby', color:'#f97316'},
+    {key:'passing',items:gPassing,label:'⚪ Passing',color:'#94a3b8'}
   ];
-  for(const sec of sections){
+  // Accordion open-state: keep the user's chosen group if it still has cells,
+  // else default to the first non-empty tier (Direct → Nearby → Passing).
+  const _firstNonEmpty=(tierSecs.find(t=>t.items.length)||{}).key||'direct';
+  let _openKey=S._stormGroupOpen;
+  if(!_openKey||!tierSecs.find(t=>t.key===_openKey&&t.items.length))_openKey=_firstNonEmpty;
+  S._stormGroupOpen=_openKey;
+  for(const sec of tierSecs){
     if(!sec.items.length)continue;
-    const cards=sec.items.map(buildCard).join('');
-    const isOpen=prevOpen[sec.key]!==undefined?prevOpen[sec.key]:sec.open;
-    groupHtml+=`<details class="storm-group" data-grp="${sec.key}" ${isOpen?'open':''}>
-      <summary class="storm-group-header" style="border-left:3px solid ${sec.color}">
+    const cards=sec.items.slice(0,_GRP_CAP).map(buildCard).join('');
+    const more=sec.items.length>_GRP_CAP?`<div class="text-hint" style="text-align:center;padding:6px 0">+${sec.items.length-_GRP_CAP} more — narrow with filters</div>`:'';
+    groupHtml+=`<details class="storm-group storm-tier-group" data-grp="${sec.key}" ${sec.key===_openKey?'open':''}>
+      <summary class="storm-group-header" style="border-left:3px solid ${sec.color}" onclick="return _toggleStormGroup(event,'${sec.key}')">
         ${sec.label} <span class="storm-group-count">${sec.items.length}</span>
       </summary>
-      <div class="storm-group-body">${cards}</div>
+      <div class="storm-group-body">${cards}${more}</div>
     </details>`;
   }
   let gridHtml='';
@@ -3462,7 +3487,7 @@ function _renderStormsCore(){
       </div>`;
     }
   }
-  const stormCount=inboundCapped.length+overhead.length+nearby.length;
+  const stormCount=gDirect.length+gNearby.length+gPassing.length; // v5.71: = all displayed cells across the 3 tiers
   const filteredCount=filtered.length;
   const totalCount=storms.length;
   const filterNote=filteredCount<totalCount?` <span class="c-muted-85">(showing ${filteredCount}/${totalCount})</span>`:'';

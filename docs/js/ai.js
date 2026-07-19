@@ -307,6 +307,26 @@ function buildWeatherContext(){
     }
   }
 
+  // LIGHTNING — real observed WarPulse strikes (client-side, last 15 min). Only
+  // present when the user has a key and fresh data; otherwise the AI relies on
+  // the radar-derived storm intensity for convective/lightning reasoning.
+  try{
+    if(typeof ltgLive==='function'&&ltgLive()&&S._ltgStrikes&&S._ltgStrikes.flashes.length&&S.lat!=null){
+      const fl=S._ltgStrikes.flashes;
+      let nearest=Infinity,nBrg=0,w10=0,w25=0;
+      for(const f of fl){
+        const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
+        if(d<nearest){nearest=d;nBrg=(f.bear!=null)?f.bear:(bearingDeg(S.lat,S.lon,f.lat,f.lon));}
+        if(d<=10)w10++; if(d<=25)w25++;
+      }
+      const nd=S.radarMetric?(nearest*1.60934).toFixed(1)+' km':nearest.toFixed(1)+' mi';
+      parts.push(`\nLIGHTNING (REAL observed strikes via WarPulse, last 15 min — NOT a radar estimate):`);
+      parts.push(`  Total: ${fl.length} strike${fl.length!==1?'s':''} · within 10 mi: ${w10} · within 25 mi: ${w25}`);
+      if(isFinite(nearest))parts.push(`  Nearest strike: ${nd} to the ${degToDir(nBrg)}`);
+      parts.push(`  Treat lightning within ~10 mi as an active outdoor-safety hazard (30/30 rule); prefer this observed data over radar-implied lightning when both are present.`);
+    }
+  }catch(e){}
+
   // STORM CONTEXT — consume the SAME post-filter snapshot the Storms tab cards
   // and System Briefing render from, so all three surfaces agree on the cell
   // list. This block replaces the prior raw-storm rebuild.

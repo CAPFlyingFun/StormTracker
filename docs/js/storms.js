@@ -260,6 +260,19 @@ async function refreshLightningStrikes(force){
     console.log('[ltg] '+flashes.length+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
     if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
     if(typeof drawMiniSonar==='function')drawMiniSonar();
+    // v5.77: in-app lightning proximity alert (browser notification while the app
+    // is open — background push can't use the device-local WarPulse key). At most
+    // once per 10 min when a fresh observed strike lands within ~10 mi.
+    try{
+      let _near=Infinity;
+      for(const f of flashes){const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);if(d<_near)_near=d;}
+      if(isFinite(_near)&&_near<=10&&Date.now()-(S._ltgNotifyAt||0)>10*60000){
+        S._ltgNotifyAt=Date.now();
+        const nd=S.radarMetric?(_near*1.60934).toFixed(1)+' km':_near.toFixed(1)+' mi';
+        if(typeof _sendBrowserNotification==='function')_sendBrowserNotification('⚡ Lightning nearby',`Observed strike ${nd} away — seek shelter (30/30 rule).`);
+        if(typeof toast==='function')toast(`⚡ Real lightning ${nd} away`);
+      }
+    }catch(e){}
   }catch(e){console.warn('[ltg] fetch failed:',e&&e.message||e)}
   finally{S._ltgFetching=false}
 }
@@ -3015,16 +3028,16 @@ function _applyStormFilter(storms,f){
         try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(e){return false}
       });
     }
-  }else if(f.approachOnly&&!noMv)out=out.filter(s=>{
-    // v5.76: "Approaching only" = storms whose forecast cone covers you — the
-    // same set the header breakdown counts — so the Direct / Nearby / Passing
-    // tabs all appear. Was a tight X-TRK ≤1.5 mi that collapsed to just Direct.
-    const _cFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
-    if((s.dbz||0)<_cFloor)return false;
-    const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||S.stormMovement;
-    if(!_smv||!(_smv.speed>=2))return false;
-    try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(err){return false}
-  });
+  }else if(f.approachOnly&&!noMv){
+    // v5.77: "Approaching only" = storms whose forecast cone covers you. Reuse the
+    // in-cone keys the cone loop already computed THIS render (O(1) per cell)
+    // instead of rebuilding a cone polygon for all ~1500 cells every render —
+    // that per-cell cone test made filter changes feel like they didn't refresh.
+    const _ck=(S._coneStats&&Array.isArray(S._coneStats.keys)&&S._coneStats.keys.length&&S._coneStats.scanId===S._stormScanId)?new Set(S._coneStats.keys):null;
+    if(_ck)out=out.filter(s=>_ck.has(stormKey(s)));
+    // else: cone stats not ready this render — leave unfiltered rather than run
+    // the expensive per-cell cone test.
+  }
   S._filterApproachBypassed=!S._coneFocus&&f.approachOnly&&noMv;
   if(f.threatsOnly){
     out=out.filter(s=>{

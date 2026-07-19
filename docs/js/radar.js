@@ -849,18 +849,28 @@ function plotLightningStrikes(map){
   try{if(!map.getPane('ltgPane')){map.createPane('ltgPane');const p=map.getPane('ltgPane');if(p){p.style.zIndex=620;p.style.pointerEvents='none';}}}catch(e){}
   const havePane=(()=>{try{return !!map.getPane('ltgPane')}catch(e){return false}})();
   const now=Date.now();
-  const fl=S._ltgStrikes.flashes.slice(0,400);
-  for(const f of fl){
+  // v5.74: show strikes as ⚡ bolts (not plain dots that blend into the radar).
+  // Cluster into ~0.03° (~2 mi) cells so it's one bolt per cell with a count,
+  // like the sonar — keeps it readable and the marker count low on mobile.
+  const cells=new Map();
+  for(const f of S._ltgStrikes.flashes){
+    if(typeof f.lat!=='number'||typeof f.lon!=='number')continue;
+    const qk=Math.round(f.lat/0.03)+'_'+Math.round(f.lon/0.03);
     const ageMin=f.t?(now-f.t)/60000:15;
-    const col=ageMin<5?'#fff27a':ageMin<10?'#ffd43b':'#ffa94d';
-    const op=ageMin<5?1:ageMin<10?0.85:0.55;
-    const rad=ageMin<5?4.5:ageMin<10?3.5:2.8;
-    // v5.71: real (observed) strikes PULSE so they read as live and are distinct
-    // from the solid radar-derived ⚡ estimate. Only the fresh (<10 min) ones
-    // animate — keeps the pulsing-element count sane on mobile.
+    let c=cells.get(qk);
+    if(!c){c={latSum:0,lonSum:0,n:0,minAge:ageMin};cells.set(qk,c);}
+    c.latSum+=f.lat;c.lonSum+=f.lon;c.n++;if(ageMin<c.minAge)c.minAge=ageMin;
+  }
+  const arr=[...cells.values()].sort((a,b)=>a.minAge-b.minAge).slice(0,220);
+  for(const c of arr){
+    const lat=c.latSum/c.n,lon=c.lonSum/c.n,ageMin=c.minAge;
+    const op=ageMin<5?1:ageMin<10?0.8:0.5;
+    // real strikes PULSE (fresh <10 min) so they read as live vs the solid estimate.
     const cls=ageMin<10?'ltg-strike-real':'';
+    const cnt=c.n>1?`<span style="font-size:8px;font-weight:800;color:#fff;text-shadow:0 0 2px #000,0 0 2px #000;margin-left:-1px;vertical-align:super">${c.n>99?'99+':c.n}</span>`:'';
+    const html=`<div class="${cls}" style="opacity:${op};font-size:15px;line-height:1;text-shadow:0 0 3px #000,0 0 4px #000;white-space:nowrap">⚡${cnt}</div>`;
     try{
-      const m=L.circleMarker([f.lat,f.lon],{radius:rad,stroke:true,color:'#2a1e00',weight:1,fillColor:col,fillOpacity:op,interactive:false,pane:havePane?'ltgPane':'markerPane',className:cls});
+      const m=L.marker([lat,lon],{icon:L.divIcon({className:'ltg-bolt',html,iconSize:[22,18],iconAnchor:[8,9]}),interactive:false,keyboard:false,pane:havePane?'ltgPane':'markerPane'});
       m.addTo(map);S.ltgMarkers.push(m);
     }catch(e){}
   }

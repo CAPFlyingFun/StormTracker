@@ -278,7 +278,15 @@ function buildWeatherContext(){
     if(precip!=null)parts.push(`  Precipitation: ${fmtPrecip(precip)}`);
     if(cloud!=null)parts.push(`  Cloud cover: ${cloud}%`);
     if(S._nwsVisM!=null)parts.push(`  Visibility: ${fmtVis(S._nwsVisM/1609.34)}`);
-    if(nwsDesc)parts.push(`  Conditions: ${nwsDesc}`);
+    if(nwsDesc){
+      // v5.80: nwsDesc is the nearest METAR station's present-weather (can be ~10 mi
+      // away). If it reports precip but radar shows nothing >=25 dBZ over the user,
+      // flag it as the station's report, not overhead — the "RAIN OVER YOU RIGHT NOW"
+      // line below is authoritative for the user's exact spot.
+      const _dP=/rain|snow|drizzle|thunder|storm|shower|sleet|hail|freezing/i.test(nwsDesc);
+      const _clear=(typeof rainOverUserNow==='function')&&!rainOverUserNow()&&(precip==null||precip<0.1);
+      parts.push(`  Conditions: ${nwsDesc}${(_dP&&_clear)?` (nearest station report — NOT confirmed over the user; radar shows no rain overhead)`:''}`);
+    }
     if(isDay!=null)parts.push(`  Day/Night: ${isDay?'Daytime':'Nighttime'}`);
   }else{
     parts.push('\nCurrent conditions: Data not yet loaded. Weather may still be fetching.');

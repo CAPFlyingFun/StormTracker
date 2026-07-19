@@ -202,8 +202,10 @@ export function formatRainClockPush(data, { tz, h24, nowMs = Date.now() } = {}) 
 
   // "around 1948" when the tz gives a wall clock, else "in about 48 min".
   const startAt = (m) => { const c = fmtClock(m, tz, h24, nowMs); return c ? `around ${c}` : relPhrase(m); };
-  // "in a few minutes" when imminent, else "around 2030" / a relative phrase.
-  const endAt = (m) => { if (m <= 8) return 'in a few minutes'; const c = fmtClock(m, tz, h24, nowMs); return c ? `around ${c}` : relPhrase(m); };
+  // Prefer the exact wall clock ("around 2030") whenever the subscriber's tz is
+  // known — users asked for a real ETA, not a vague "soon". Only fall back to
+  // "in a few minutes" / a relative phrase when there's no clock to show.
+  const endAt = (m) => { const c = fmtClock(m, tz, h24, nowMs); if (c) return `around ${c}`; return m <= 8 ? 'in a few minutes' : relPhrase(m); };
   // "until 2030" with a wall clock, else a plain duration ("about 22 min").
   const untilAt = (start, end) => { const c = fmtClock(end, tz, h24, nowMs); return c ? `until ${c}` : `about ${Math.max(1, Math.round(end - start))} min`; };
   // Compact token for the short digest line.
@@ -217,7 +219,11 @@ export function formatRainClockPush(data, { tz, h24, nowMs = Date.now() } = {}) 
     const peakWord = rcIntensityWord(nowWin.peakDbz);
     const rangeWord = nowWord !== peakWord ? `${nowWord} to ${peakWord}` : nowWord;
     sentences.push(`${rangeWord} rain overhead, ending ${endAt(nowWin.endMin)}.`);
-    short.push(`rain now → ${nowWin.endMin <= 8 ? 'soon' : shortClk(nowWin.endMin)}`);
+    // Compact digest token. The old "rain now → soon" read like "rain now, THEN
+    // soon" (a second, future event) — confusing, and vague. Show the real end
+    // time instead: "rain now, ends 20:31" (or "~4 min left" when tz unknown).
+    const endClk = fmtClock(nowWin.endMin, tz, h24, nowMs);
+    short.push(`rain now, ${endClk ? 'ends ' + endClk : (nowWin.endMin <= 1 ? 'ending' : '~' + Math.max(1, Math.round(nowWin.endMin)) + ' min left')}`);
   }
 
   if (next) {

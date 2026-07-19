@@ -1977,13 +1977,16 @@ const OVERHEAD_MI=1.5;   // ≤ this from your spot counts as "over you"
 function dbzAtLocation(lat,lon){
   const pts=S._rawScanPts;
   if(!pts||!pts.length||lat==null||lon==null)return null;
-  // p.dist is each echo's distance from the scan center (== the user for a
-  // user-centered scan), so skip haversine on the common path.
-  const atUser=(lat===S.lat&&lon===S.lon);
+  // Measure the TRUE distance from this spot to each echo's own lat/lng. We do
+  // NOT trust p.dist: it is each echo's distance from the scan center that
+  // produced it, and S._rawScanPts can MIX centers — the overhead-poll splice
+  // (commitScanResults) keeps far points from an earlier, differently-centered
+  // scan. A stale small p.dist on a genuinely-distant echo is exactly what made
+  // rain a few miles away read as "overhead" again. This runs only on scan
+  // commit / hero refresh (not per frame), so the extra haversines are cheap.
   let mx=-999;
   for(const p of pts){
-    const d=(atUser&&p.dist!=null)?p.dist:haversine(lat,lon,p.lat,p.lng);
-    if(d<=OVERHEAD_MI&&p.dbz>mx)mx=p.dbz;
+    if(haversine(lat,lon,p.lat,p.lng)<=OVERHEAD_MI&&p.dbz>mx)mx=p.dbz;
   }
   return mx>-999?{maxDbz:mx,source:'overhead'}:null;
 }

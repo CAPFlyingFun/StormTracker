@@ -800,7 +800,7 @@ function switchPage(page){
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
     S.activePage=page;
     if(page==='radar'&&S.lat&&S.map){
-      setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==='function')refreshLightningStrikes()},200);
+      setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes(true)},200);
     }
     if(page==='3d'){_ensure3DLoaded();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
     if(_curLang!=='en'){setTimeout(()=>quickTranslate(),200);setTimeout(()=>quickTranslate(),800)}
@@ -810,7 +810,7 @@ function switchPage(page){
   document.querySelectorAll('.section-page').forEach(p=>{p.classList.toggle('visible',p.id==='page-'+page)});
   S.activePage=page;
   if(page==='radar'&&S.lat){
-    if(S.map){setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==='function')refreshLightningStrikes()},150);if(S._nextRefreshAt)startScanRefreshTimer()}
+    if(S.map){setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes(true)},150);if(S._nextRefreshAt)startScanRefreshTimer()}
     else{initRadar()}
   }
   if(page==='weather'){startSonarSweep();if(typeof refreshRainClock==='function')refreshRainClock(true)}else{stopSonarSweep()}

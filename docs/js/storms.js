@@ -2914,9 +2914,12 @@ if(typeof window!=='undefined')window.toggleConeFocus=toggleConeFocus;
 // closes the other two. Remembered in S._stormGroupOpen across re-renders.
 function _toggleStormGroup(ev,key){
   if(ev&&ev.preventDefault)ev.preventDefault();
-  S._stormGroupOpen=key;
+  // Accordion toggle: tapping the open group closes it (all collapse); tapping a
+  // closed group opens it and closes the other two.
+  const wasOpen=S._stormGroupOpen===key;
+  S._stormGroupOpen=wasOpen?null:key;
   document.querySelectorAll('details.storm-tier-group[data-grp]').forEach(d=>{
-    d.open=(d.getAttribute('data-grp')===key);
+    d.open=(!wasOpen&&d.getAttribute('data-grp')===key);
   });
   return false;
 }
@@ -3013,11 +3016,14 @@ function _applyStormFilter(storms,f){
       });
     }
   }else if(f.approachOnly&&!noMv)out=out.filter(s=>{
-    const e=s._eta;if(!(e&&e.approaching&&e.eta!=null))return false;
-    // v5.63: "Approaching only" now means heading DIRECTLY at you — cross-track
-    // miss ≤ 1.5 mi (the DIRECT tier), matching the card badge. Was the old
-    // 6-tier direct/near_direct/near_miss (≤12 mi).
-    try{if(!s._brief)s._brief=calcStormETAForBriefing(s);const pm=s._brief&&s._brief.perpMissMi;return pm!=null&&pm<=1.5;}catch(err){return false}
+    // v5.76: "Approaching only" = storms whose forecast cone covers you — the
+    // same set the header breakdown counts — so the Direct / Nearby / Passing
+    // tabs all appear. Was a tight X-TRK ≤1.5 mi that collapsed to just Direct.
+    const _cFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
+    if((s.dbz||0)<_cFloor)return false;
+    const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||S.stormMovement;
+    if(!_smv||!(_smv.speed>=2))return false;
+    try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(err){return false}
   });
   S._filterApproachBypassed=!S._coneFocus&&f.approachOnly&&noMv;
   if(f.threatsOnly){
@@ -3390,28 +3396,35 @@ function _renderStormsCore(){
   // active storm filter, instead of the pill showing the unfiltered top-storms
   // count while the cards showed the filtered count.
   S._inboundShown=inboundCapped;
-  const overhead=filtered.filter(s=>ohKeySet.has(stormKey(s)));
-  const nearby=filtered.filter(s=>!inKeySet.has(stormKey(s))&&!ohKeySet.has(stormKey(s)));
   let groupHtml='';
-  // v5.71: group Storm Points by the SAME 3 X-TRK tiers as the header cone
-  // breakdown (Direct ≤1.5 · Nearby 1.5–6 · Passing >6 / no closing track), so
-  // the two taxonomies match. Rendered as an accordion (one open at a time).
+  // v5.76: group Storm Points by the SAME 3 X-TRK tiers as the header breakdown
+  // (Direct ≤1.5 · Nearby 1.5–6 · Passing >6). "Approaching only" now means
+  // "storms whose cone covers you" (see _applyStormFilter), so with it on the
+  // filtered set already IS the in-cone storms and all three tabs appear.
   const _tierOf=s=>{const pm=_missMi(s);if(pm==null||!isFinite(pm))return 'passing';if(pm<=1.5)return 'direct';if(pm<=6)return 'nearby';return 'passing';};
   const _byXtk=(x,y)=>{const mx=_missMi(x),my=_missMi(y);const ax=(mx==null||!isFinite(mx))?999:mx,ay=(my==null||!isFinite(my))?999:my;if(ax!==ay)return ax-ay;return (x.distance||0)-(y.distance||0);};
-  const gDirect=filtered.filter(s=>_tierOf(s)==='direct').sort(_byXtk);
-  const gNearby=filtered.filter(s=>_tierOf(s)==='nearby').sort(_byXtk);
-  const gPassing=filtered.filter(s=>_tierOf(s)==='passing').sort(_byXtk);
+  const _seenG=new Set();
+  const _fUniq=filtered.filter(s=>{const k=stormKey(s);if(_seenG.has(k))return false;_seenG.add(k);return true;});
+  const gDirect=_fUniq.filter(s=>_tierOf(s)==='direct').sort(_byXtk);
+  const gNearby=_fUniq.filter(s=>_tierOf(s)==='nearby').sort(_byXtk);
+  const gPassing=_fUniq.filter(s=>_tierOf(s)==='passing').sort(_byXtk);
+  // v5.76: header pill / Rain Clock "inbound" set = the Direct tier (cells whose
+  // track threads within 1.5 mi of you), so the badge matches the Direct tab
+  // instead of showing 0 (the old inbound set used a different approach calc).
+  inboundCapped=gDirect.slice(0,12);
+  S._inboundShown=inboundCapped;
   const _GRP_CAP=25;
   const tierSecs=[
     {key:'direct', items:gDirect, label:'🎯 Direct', color:'#ef4444'},
     {key:'nearby', items:gNearby, label:'🟠 Nearby', color:'#f97316'},
     {key:'passing',items:gPassing,label:'⚪ Passing',color:'#94a3b8'}
   ];
-  // Accordion open-state: keep the user's chosen group if it still has cells,
-  // else default to the first non-empty tier (Direct → Nearby → Passing).
+  // Accordion open-state: undefined (first render) → open Direct; null (user
+  // collapsed all) → stay collapsed; a chosen tab that emptied → first non-empty.
   const _firstNonEmpty=(tierSecs.find(t=>t.items.length)||{}).key||'direct';
   let _openKey=S._stormGroupOpen;
-  if(!_openKey||!tierSecs.find(t=>t.key===_openKey&&t.items.length))_openKey=_firstNonEmpty;
+  if(_openKey===undefined)_openKey=_firstNonEmpty;
+  else if(_openKey!==null&&!tierSecs.find(t=>t.key===_openKey&&t.items.length))_openKey=_firstNonEmpty;
   S._stormGroupOpen=_openKey;
   for(const sec of tierSecs){
     if(!sec.items.length)continue;
@@ -3487,8 +3500,8 @@ function _renderStormsCore(){
       </div>`;
     }
   }
-  const stormCount=gDirect.length+gNearby.length+gPassing.length; // v5.71: = all displayed cells across the 3 tiers
-  const filteredCount=filtered.length;
+  const stormCount=gDirect.length+gNearby.length+gPassing.length; // v5.71: = distinct cells across the 3 tiers
+  const filteredCount=stormCount; // v5.76: "showing N" = the distinct storms in the 3 tabs
   const totalCount=storms.length;
   const filterNote=filteredCount<totalCount?` <span class="c-muted-85">(showing ${filteredCount}/${totalCount})</span>`:'';
   const smartSummary=_smartStormSummary(storms);
@@ -3500,7 +3513,7 @@ function _renderStormsCore(){
     </div>
     ${noWindBanner}${smartSummary}
     ${_renderFilterBar(sf)}
-    ${(()=>{const hidden=totalCount-filteredCount;if(S._coneFocus){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.3);border-radius:6px;font-size:0.75em;color:#22d3ee"><span>🎯 Focused on the ${filteredCount} cell${filteredCount!==1?'s':''} whose cone covers you</span><a href="#" onclick="event.preventDefault();toggleConeFocus()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Reset ✕</a></div>`}if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(()=>{const _c=S._coneStats;if(!(sf.approachOnly&&_c&&_c.count>0&&_c.scanId===S._stormScanId))return'';return _c.direct>0?` — ${_c.direct} heading directly, ${_c.count-_c.direct} passing wider; uncheck "Approaching only" to see the rest`:' — none heading directly at you; uncheck "Approaching only" to see nearby tracks'})()}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
+    ${(()=>{const hidden=totalCount-filteredCount;if(S._coneFocus){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.3);border-radius:6px;font-size:0.75em;color:#22d3ee"><span>🎯 Focused on the ${filteredCount} cell${filteredCount!==1?'s':''} whose cone covers you</span><a href="#" onclick="event.preventDefault();toggleConeFocus()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Reset ✕</a></div>`}if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${sf.approachOnly?' — not on a path toward you; uncheck "Approaching only" to see every cell on radar':''}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
     <div class="card"><div class="card-title"><span class="icon">🌪️</span> Storm Points</div>
       ${groupHtml}
     </div>

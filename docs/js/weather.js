@@ -693,23 +693,27 @@ function renderWeather(data){
   if(wxNavBtn)wxNavBtn.innerHTML=neonWx(c.weather_code,isDay,20);
   const _zoneOverride=rainOverUserNow();
   const _zoneDbzToWmo={sprinkles:51,drizzle:53,trace:3,light:61,light2:63,moderate:63,moderate2:65,heavy:65,intense:65,'mod-severe':65,severe:95,severe2:96,extreme:99};
-  // v5.80: reconcile the hero headline with the 1.5 mi radar-overhead truth. The
-  // blended present-weather (_nwsDesc) is the NEAREST METAR station's report — it
-  // can read "Thunderstorms and Rain" while the user's own spot is dry (station is
-  // ~10 mi away). When radar is loaded and shows NOTHING >=25 dBZ overhead (no
-  // _zoneOverride) and local precip ~0, that rain is NEAR the user, not ON them, so
-  // the headline drops to the sky condition to match the Rain Clock's "rain
-  // starting at HH:MM" instead of claiming rain now. (Storm cards + ticker still
-  // surface the nearby/inbound convection.)
+  // v5.80/v5.81: reconcile the hero headline with the 1.5 mi radar-overhead truth.
+  // The blended present-weather (_nwsDesc) is the NEAREST METAR station's report —
+  // it can read "Thunderstorms and Rain" while the user's own spot is dry (station
+  // is ~10 mi away). Only show a rain/storm headline when it is CONFIRMED over the
+  // user: either radar shows >=25 dBZ overhead (_zoneOverride) OR the local rain
+  // gauge (precipitation) is non-zero. Otherwise — including the initial load
+  // BEFORE radar has come back — drop to the actual sky condition so we never
+  // fabricate rain that then has to be corrected. (v5.81: dropped the old
+  // "_radarLoaded" gate that let the first pre-radar render show the station's rain
+  // and then fail to clear, since refreshHeroFromZone only re-renders on an
+  // override-class change.) Storm cards + ticker still surface nearby/inbound rain.
   let _heroDesc,_heroWCode;
   if(_zoneOverride){
     _heroDesc=_zoneOverride.label;
     _heroWCode=_zoneDbzToWmo[_zoneOverride.cls]||63;
   }else{
-    const _radarLoaded=(typeof S!=='undefined'&&Array.isArray(S._rawScanPts)&&S._rawScanPts.length>0);
     const _descPrecip=c._nwsDesc&&/rain|snow|drizzle|thunder|storm|shower|sleet|hail|freezing/i.test(c._nwsDesc);
-    const _precipDry=(c.precipitation==null||c.precipitation<0.01);
-    if(_radarLoaded&&_descPrecip&&_precipDry&&c.cloud_cover!=null){
+    const _localPrecip=(c.precipitation!=null&&c.precipitation>=0.01);
+    if(_descPrecip&&!_localPrecip&&c.cloud_cover!=null){
+      // Station reports precip but nothing is confirmed on the user (radar clear or
+      // still loading, gauge dry) — show the sky, not fabricated rain.
       _heroDesc=cloudCategory(c.cloud_cover);
       _heroWCode=c.cloud_cover>=70?3:c.cloud_cover>=30?2:c.cloud_cover>10?1:0;
     }else{

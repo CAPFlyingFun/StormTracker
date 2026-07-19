@@ -1195,20 +1195,19 @@ function drawMiniSonar(){
     for(let gi=0;gi<lGroups.length;gi++){
       const g=lGroups[gi];
       const gx=g.sx/g.n,gy=g.sy/g.n;
-      const fs=_lightningFlashState[gi];
       let flashAlpha;
       if(_ltgReal){
-        // real: expanding pulse ring + flashing bolt
-        const ph=(now/900+gi*0.37)%1;
+        // v5.75: real = a SLOW expanding ring (~2.6 s) + a slow, readable alpha
+        // pulse. The bolt never fully blanks now, so it and its count stay legible
+        // instead of the fast on/off flicker that was hard to read.
+        const ph=(now/2600+gi*0.37)%1;
         ctx.save();ctx.shadowBlur=0;
         ctx.beginPath();ctx.arc(gx,gy,boltSz*0.45+ph*boltSz*0.9,0,Math.PI*2);
-        ctx.strokeStyle=`rgba(120,210,255,${0.55*(1-ph)})`;ctx.lineWidth=2;ctx.stroke();
+        ctx.strokeStyle=`rgba(120,210,255,${0.5*(1-ph)})`;ctx.lineWidth=2;ctx.stroke();
         ctx.restore();
-        if(now>=fs.nextToggle){fs.on=!fs.on;fs.nextToggle=now+(fs.on?(150+Math.random()*250):(900+Math.random()*900));}
-        if(!fs.on)continue;
-        flashAlpha=0.7+Math.random()*0.3;
+        flashAlpha=0.65+0.3*Math.sin(now/520+gi*1.3);
       }else{
-        // estimated: solid steady bolt (no flashing)
+        // estimated: solid steady bolt (no pulse)
         flashAlpha=0.85;
       }
       ctx.fillStyle=`rgba(255,255,50,${flashAlpha})`;ctx.fillText('⚡',gx,gy);

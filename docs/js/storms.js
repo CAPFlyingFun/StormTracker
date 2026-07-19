@@ -2435,6 +2435,19 @@ function _tropicalStatusLabel(storm) {
 function _escStormName(name) {
   return (name || '').replace(/['"\\<>&]/g, '');
 }
+// v5.62: the storm-cell card badge's cross-track (X-TRK) proximity scale — how
+// far a cell's projected path passes from your exact location. Three plain tiers
+// replace the old six (direct/near_direct/near_miss/miss/distant/far) plus the
+// confusing closeness-% badge:
+//   🎯 Direct  ≤1.5 mi   ·   🟠 Nearby  1.5–6 mi   ·   ⚪ Passing  >6 mi
+// (Display only — the internal 6-tier classification still drives sorting,
+// grouping, alert thresholds and the background push scanner.)
+function _xtrkTier(missMi){
+  if(missMi==null||isNaN(missMi))return null;
+  if(missMi<=1.5)return{key:'direct', label:'DIRECT', emoji:'🎯', color:'#ef4444'};
+  if(missMi<=6)  return{key:'nearby', label:'NEARBY', emoji:'🟠', color:'#f97316'};
+  return{key:'passing', label:'PASSING', emoji:'⚪', color:'#94a3b8'};
+}
 function _renderTropicalSection() {
   const allSystems = _nhcData.systems;
   if (allSystems === null) {
@@ -3046,17 +3059,13 @@ function _renderStormsCore(){
       const hasValidClosing=!!(_b&&_b.closingMph>0);
       const bImpPct=(_b&&_b.impactScore!=null)?Math.round(_b.impactScore*100):0;
       const imp=impactLabel(bImpPct);
-      const _estDbzU=(_b&&_b.estDbzAtUser!=null)?_b.estDbzAtUser:null;
-      const _peakPct=(hasValidClosing&&_estDbzU!=null&&s.dbz>0)?Math.round(_estDbzU/s.dbz*100):null;
-      const impTitle='Expected radar intensity at your location based on track closeness';
+      // v5.62: the "Strength at you" tile was removed — it duplicated the plain
+      // "Est. at you: NN dBZ (rain word)" line below and carried a confusing
+      // "% of peak". The X-TRK (cross-track miss) tile stays as the key number.
       const missMiVal=(_b&&hasValidClosing)?_b.perpMissMi:null;
       const missStr=(missMiVal!=null)?(S.radarMetric?(missMiVal*1.60934).toFixed(1)+' km':missMiVal.toFixed(1)+' mi'):null;
       const _xtrkBearing=(_b&&_b.sideBearing!=null)?degToDir(_b.sideBearing):'';
       const projMissDisp=(hasValidClosing&&missStr!=null)?`${missStr}${_xtrkBearing?' '+_xtrkBearing:''}`.trim():'—';
-      const _strPctColor=_peakPct!=null?impactLabel(_peakPct).color:'var(--text-muted)';
-      const impDispVal=(hasValidClosing&&_estDbzU!=null)?`${_estDbzU} dBZ <span style="opacity:0.75;font-size:0.85em">(${_peakPct}% ${tStr('of peak')})</span>`:'—';
-      const impDispColor=(hasValidClosing&&_estDbzU!=null)?_strPctColor:'var(--text-muted)';
-      const impTile=`<div class="storm-detail" title="${impTitle}"><div class="storm-detail-label">${tStr('Strength at you')}</div><div class="storm-detail-val" style="color:${impDispColor};font-size:0.85em">${impDispVal}</div></div>`;
       const missTile=`<div class="storm-detail"><div class="storm-detail-label">${tStr('Storm X-TRK')}</div><div class="storm-detail-val" style="font-size:0.85em">${projMissDisp}</div></div>`;
       let mvLine='';
       const _hybS=typeof getHybridMovement==='function'?getHybridMovement(s):null;
@@ -3084,7 +3093,7 @@ function _renderStormsCore(){
           const initCountdown=fmtCountdown(Math.round(remainMin*60));
           mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:${imp.color}"><span class="eta-countdown" data-eta-sec="${Math.round(targetMs)}" data-storm-key="${sk}">${initCountdown}</span></div><div style="font-size:0.65em;color:${imp.color};margin-top:1px">${tStr('Arrives')} ~${arrivalTime}</div></div>`;
         }
-        mvLine+=impTile+missTile;
+        mvLine+=missTile;
       }
       let estLine='';
       if(_sMv&&_sMv.speed>=2&&_b&&_b.estDbzAtUser!=null&&_b.estDbzAtUser>=18){
@@ -3105,16 +3114,19 @@ function _renderStormsCore(){
       const borderColor=isHook?'#ff1744':tierBorder;
       let clsBadge='';
       if(_b&&_b.classification&&_b.classification!=='unknown'){
-        const _sc=stormClass(_b.classification);
         const _cls=_b.classification;
-        const _isCloseTier=(_cls==='direct'||_cls==='near_direct'||_cls==='near_miss');
-        const _impactColor=_sc.color;
-        const _badgeLabel=_sc.badge;
-        const _pct=(_sc.showPct&&_isCloseTier&&_b.closenessPct!=null)?' '+_b.closenessPct+'%':'';
-        const _missMaxMi=_cls==='direct'?'3':_cls==='near_direct'?'6':_cls==='near_miss'?'12':_cls==='miss'?'24':_cls==='distant'?'48':'60';
         const _missMiTxt=_b.perpMissMi!=null?_b.perpMissMi.toFixed(1):'?';
-        const _bTitle=_isCloseTier?`Closeness: track passes ~${_missMiTxt} mi from you (${_sc.label.toUpperCase()} tier, ≤${_missMaxMi} mi)`:`Track passes ~${_missMiTxt} mi from you (${_sc.label.toUpperCase()} tier)`;
-        clsBadge=`<span class="storm-badge" title="${_bTitle}" style="background:${_impactColor}22;color:${_impactColor};border:1px solid ${_impactColor}66;font-weight:700">${_badgeLabel}${_pct}</span>`;
+        // v5.62: one simple cross-track scale on the badge (no closeness %).
+        // A closing cell shows how directly its projected path passes over you;
+        // a receding cell just says it's moving away.
+        if(hasValidClosing&&_cls!=='moving_away'&&_b.perpMissMi!=null){
+          const _t=_xtrkTier(_b.perpMissMi);
+          const _bTitle=`Projected to pass ~${_missMiTxt} mi from you — ${_t.label} (Direct ≤1.5 mi · Nearby 1.5–6 mi · Passing >6 mi)`;
+          clsBadge=`<span class="storm-badge" title="${_bTitle}" style="background:${_t.color}22;color:${_t.color};border:1px solid ${_t.color}66;font-weight:700">${_t.emoji} ${_t.label}</span>`;
+        }else if(_cls==='moving_away'){
+          const _sc=stormClass('moving_away');
+          clsBadge=`<span class="storm-badge" title="Moving away from you" style="background:${_sc.color}22;color:${_sc.color};border:1px solid ${_sc.color}66;font-weight:700">${_sc.badge}</span>`;
+        }
       }
       const _cr=getStormConeRain(s);
       const _coneRainLine=(_cr&&_cr.count>0)?`<div title="${tStr('Rain returns inside the projected track path')}" style="margin-top:5px;font-size:0.68em;color:#5bc0ff;display:flex;align-items:center;gap:5px"><span>💧</span><span style="font-weight:600;color:var(--text-secondary)">${tStr('In path')}:</span><span style="font-weight:700">${_cr.count}</span><span style="color:var(--text-secondary)">${tStr('returns')}</span>${_cr.maxDbz?`<span style="color:var(--text-secondary)">·</span><span style="font-weight:700">${_cr.maxDbz} dBZ</span><span style="color:var(--text-secondary)">${tStr('max')}</span>`:''}</div>`:'';

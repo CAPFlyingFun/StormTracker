@@ -2460,7 +2460,13 @@ if(typeof window!=='undefined')window.cycleStormView=cycleStormView;
 function _stormTextSummary(s,_b,_sMv,eta){
   const icon=s._rotation?'🌪️':s.dbz>=60?'🚨':s.dbz>=52?'⛈️':s.dbz>=41?'🌧️':'🌦️';
   const strength=s._rotation?'Rotating storm':s.dbz>=65?'Extreme storm':s.dbz>=60?'Severe storm':s.dbz>=52?'Strong storm':s.dbz>=41?'Storm':'Rain cell';
-  const distStr=fmtStormDist(s.distance);
+  // v5.65: distance ticks live like the Distance box — the shared
+  // [data-dist-mi] updater in startEtaCountdowns() recomputes it every second
+  // from closing speed × time-remaining, interpolating down toward arrival.
+  const _cs=(eta&&eta.closingSpeed)?eta.closingSpeed:0;
+  const _tgt=(eta&&eta._targetMs)?eta._targetMs:0;
+  const _liveDist=(_cs>0&&_tgt>Date.now())?Math.max(0,(_tgt-Date.now())/3600000)*_cs:s.distance;
+  const distStr=`<span data-dist-mi="${s.distance}" data-closing-mph="${_cs}" data-target-ms="${_tgt}">${fmtStormDist(_liveDist)}</span>`;
   const posDir=degToDir(s.bearing);
   const hasMv=!!(_sMv&&_sMv.speed>=2);
   const moveClause=hasMv?`moving ${degToDir(_sMv.direction)} (${Math.round(_sMv.direction)}°) at ${S.radarMetric?Math.round(_sMv.speed*1.60934)+' km/h':_sMv.speed+' mph'}`:'motion unknown';
@@ -2472,10 +2478,16 @@ function _stormTextSummary(s,_b,_sMv,eta){
     const t=_xtrkTier(_b.perpMissMi);
     const word=t.key==='direct'?'Direct impact':t.key==='nearby'?'Nearby pass':'Passing wide';
     const missStr=S.radarMetric?(_b.perpMissMi*1.60934).toFixed(1)+' km':_b.perpMissMi.toFixed(1)+' mi';
-    const tgt=eta&&eta._targetMs;
+    // v5.65: arrival shows a LIVE countdown (ticks via the shared eta-countdown
+    // updater) next to the fixed clock time. No data-storm-key here so it never
+    // double-triggers the auto-rescan the box's countdown already owns.
     let arr='';
-    if(tgt&&tgt>Date.now())arr=`, arriving ~${fmtArrivalTime((tgt-Date.now())/60000)}`;
-    else if(eta&&eta.eta!=null)arr=`, arriving ~${fmtArrivalTime(eta.eta)}`;
+    if(_tgt&&_tgt>Date.now()){
+      const _cd=fmtCountdown(Math.max(0,Math.round((_tgt-Date.now())/1000)));
+      arr=`, arriving ~${fmtClockShort(new Date(_tgt))} (in <span class="eta-countdown" data-eta-sec="${Math.round(_tgt)}">${_cd}</span>)`;
+    }else if(eta&&eta.eta!=null){
+      arr=`, arriving ~${fmtArrivalTime(eta.eta)}`;
+    }
     const est=_b.estDbzAtUser;
     const rain=(est!=null&&est>=15)?`${stormCat(est).label} (~${est} dBZ) expected`:'little/no rain expected at you';
     impact=`${t.emoji} ${word}, XTK ${missStr}${arr} · ${rain}.`;

@@ -412,15 +412,19 @@ function _doGPSLocate(){
     if(err.code===1){
       if(wasAutoGpsPending){localStorage.removeItem('st_autoGps');toast('📍 Auto-locate requires GPS permission');syncSettingsPanel()}
       toast('📍 Location permission denied — please enable location in your browser/phone settings, then try again');
-    }else if(err.code===2){
-      toast('📍 Location unavailable — make sure GPS/Location Services is turned ON in your phone settings');
-    }else if(err.code===3){
-      toast('📍 GPS timed out — trying again with lower accuracy...');
+    }else if(err.code===2||err.code===3){
+      // POSITION_UNAVAILABLE (2) and TIMEOUT (3) are commonly TRANSIENT — a
+      // desktop / regular browser often fails the first high-accuracy fix before
+      // the OS location service warms up (permission already granted, no prompt),
+      // then works on a manual retry. So don't give up on code 2 the way we used
+      // to: retry once automatically with LOW accuracy (network/IP based — faster
+      // and more reliable) and a longer timeout, exactly as the timeout path does.
+      toast(err.code===3?'📍 GPS timed out — trying again with lower accuracy...':'📍 Couldn\'t get a fix — retrying with lower accuracy...');
       navigator.geolocation.getCurrentPosition(
         pos=>{toast('📍 Location found');_handleLocSuccess(pos)},
         err2=>{
           if(err2.code===1&&wasAutoGpsPending){localStorage.removeItem('st_autoGps');syncSettingsPanel()}
-          toast('📍 Still cannot get location — try searching for your city instead');
+          toast(err2.code===1?'📍 Location permission denied — enable location and try again':'📍 Still cannot get location — make sure Location Services is ON, or search for your city instead');
         },
         {enableHighAccuracy:false,timeout:30000,maximumAge:300000}
       );

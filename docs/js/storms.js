@@ -264,13 +264,17 @@ async function refreshLightningStrikes(force){
     // is open — background push can't use the device-local WarPulse key). At most
     // once per 10 min when a fresh observed strike lands within ~10 mi.
     try{
-      let _near=Infinity;
-      for(const f of flashes){const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);if(d<_near)_near=d;}
+      let _near=Infinity,_nBrg=null;
+      for(const f of flashes){
+        const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
+        if(d<_near){_near=d;_nBrg=(f.bear!=null)?f.bear:bearingDeg(S.lat,S.lon,f.lat,f.lon);}
+      }
       if(isFinite(_near)&&_near<=10&&Date.now()-(S._ltgNotifyAt||0)>10*60000){
         S._ltgNotifyAt=Date.now();
         const nd=S.radarMetric?(_near*1.60934).toFixed(1)+' km':_near.toFixed(1)+' mi';
-        if(typeof _sendBrowserNotification==='function')_sendBrowserNotification('⚡ Lightning nearby',`Observed strike ${nd} away — seek shelter (30/30 rule).`);
-        if(typeof toast==='function')toast(`⚡ Real lightning ${nd} away`);
+        const dirStr=(_nBrg!=null)?` to the ${degToDir(_nBrg)} (${Math.round(_nBrg)}°)`:'';
+        if(typeof _sendBrowserNotification==='function')_sendBrowserNotification('⚡ Lightning nearby',`Observed strike ${nd}${dirStr} away — seek shelter (30/30 rule).`);
+        if(typeof toast==='function')toast(`⚡ Real lightning ${nd}${dirStr}`);
       }
     }catch(e){}
   }catch(e){console.warn('[ltg] fetch failed:',e&&e.message||e)}

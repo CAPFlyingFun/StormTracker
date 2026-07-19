@@ -327,6 +327,40 @@ function buildWeatherContext(){
     }
   }catch(e){}
 
+  // RAIN NOWCAST — the SAME Rain Clock projection the dial renders (S._rainClockData),
+  // so the AI's rain narrative matches what the user sees on the Rain Clock tab
+  // (rain-until time, expected amount, upcoming windows, nearest precipitation).
+  try{
+    const rc=S._rainClockData;
+    if(rc&&rc.ready&&Array.isArray(rc.windows)){
+      const now=Date.now();
+      const _rcClock=(min)=>fmtClock(new Date(now+min*60000));
+      parts.push(`\nRAIN NOWCAST (Rain Clock — the projection shown on the app's Rain Clock dial; radar-derived nowcast blended with the hourly forecast):`);
+      if(rc.windows.length){
+        const w0=rc.windows[0];
+        if(rc.rainingNow||w0.startMin<=0){
+          parts.push(`  Status: raining now, easing around ${_rcClock(w0.endMin)}${rc.forecast?' (from the hourly forecast — no cells on radar yet)':''}.`);
+        }else{
+          parts.push(`  Status: dry now — next rain about ${_rcClock(w0.startMin)}, easing around ${_rcClock(w0.endMin)}.`);
+        }
+        // Upcoming windows (up to 3), each with its clock span and peak intensity.
+        const wl=rc.windows.slice(0,3).map(w=>{
+          const span=w.startMin<=0?`now → ${_rcClock(w.endMin)}`:`${_rcClock(w.startMin)} → ${_rcClock(w.endMin)}`;
+          return `${span} (peak ${Math.round(w.peakDbz)} dBZ)`;
+        });
+        if(wl.length)parts.push(`  Windows: ${wl.join('; ')}`);
+      }else{
+        parts.push(`  Status: no rain expected on the nowcast horizon.`);
+      }
+      if(rc.totalMm>0.01&&typeof fmtPrecip==='function')parts.push(`  Expected total (next ~3 h): ${fmtPrecip(rc.totalMm)}.`);
+      if(rc.nearest&&rc.nearest.mi!=null){
+        const nm=S.radarMetric?(rc.nearest.mi*1.60934).toFixed(1)+' km':rc.nearest.mi.toFixed(1)+' mi';
+        parts.push(`  Nearest precipitation: ${nm} to the ${rc.nearest.dir} (${Math.round(rc.nearest.brg)}°).`);
+      }
+      parts.push(`  Use this nowcast for "when will it rain / stop" questions; it reflects the exact dial the user is looking at.`);
+    }
+  }catch(e){}
+
   // STORM CONTEXT — consume the SAME post-filter snapshot the Storms tab cards
   // and System Briefing render from, so all three surfaces agree on the cell
   // list. This block replaces the prior raw-storm rebuild.

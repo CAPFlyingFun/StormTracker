@@ -2289,18 +2289,27 @@ async function _fetchJTWCStorms() {
 // season's Nth cyclone gets the Nth name, so we map the storm's ATCF number to
 // the WMO rotating list for its basin and show that as a projection. It's an
 // estimate: the real name can shift if an earlier depression never got named.
-// Lists rotate on a 6-year cycle → index = (year-2019) % 6. Only the entries we
-// can state with confidence are included; a missing year simply shows no
-// projection. UPDATE / EXTEND these as the WMO retires names or the season turns.
+// Lists rotate on a 6-year cycle → index = (year-2019) % 6. Full rotation from
+// the NHC (nhc.noaa.gov/aboutnames.shtml), current through 2031 with the latest
+// WMO retirements applied (Melissa→Molly, Beryl→Brianna, Helene→Holly,
+// Milton→Miguel; EP Otis→Otilio, Dora→Debora, John→Jake). UPDATE when the WMO
+// retires more names or the cycle turns past 2031.
 const _STORM_NAMES = {
   at: {
-    0: ['Andrea','Barry','Chantal','Dexter','Erin','Fernand','Gabrielle','Humberto','Imelda','Jerry','Karen','Lorenzo','Melissa','Nestor','Olga','Pablo','Rebekah','Sebastien','Tanya','Van','Wendy'], // 2025 / 2031
-    1: ['Arthur','Bertha','Cristobal','Dolly','Edouard','Fay','Gonzalo','Hanna','Isaias','Josephine','Kyle','Leah','Marco','Nana','Omar','Paulette','Rene','Sally','Teddy','Vicky','Wilfred'], // 2026 / 2032 (Laura→Leah)
+    0: ['Andrea','Barry','Chantal','Dexter','Erin','Fernand','Gabrielle','Humberto','Imelda','Jerry','Karen','Lorenzo','Molly','Nestor','Olga','Pablo','Rebekah','Sebastien','Tanya','Van','Wendy'], // 2025 / 2031 (Melissa→Molly)
+    1: ['Arthur','Bertha','Cristobal','Dolly','Edouard','Fay','Gonzalo','Hanna','Isaias','Josephine','Kyle','Leah','Marco','Nana','Omar','Paulette','Rene','Sally','Teddy','Vicky','Wilfred'], // 2026 (Laura→Leah)
     2: ['Ana','Bill','Claudette','Danny','Elsa','Fred','Grace','Henri','Imani','Julian','Kate','Larry','Mindy','Nicholas','Odette','Peter','Rose','Sam','Teresa','Victor','Wanda'], // 2027 (Ida→Imani)
+    3: ['Alex','Bonnie','Colin','Danielle','Earl','Farrah','Gaston','Hermine','Idris','Julia','Karl','Lisa','Martin','Nicole','Owen','Paula','Richard','Shary','Tobias','Virginie','Walter'], // 2028 (Fiona→Farrah, Ian→Idris)
+    4: ['Arlene','Bret','Cindy','Don','Emily','Franklin','Gert','Harold','Idalia','Jose','Katia','Lee','Margot','Nigel','Ophelia','Philippe','Rina','Sean','Tammy','Vince','Whitney'], // 2029
+    5: ['Alberto','Brianna','Chris','Debby','Ernesto','Francine','Gordon','Holly','Isaac','Joyce','Kirk','Leslie','Miguel','Nadine','Oscar','Patty','Rafael','Sara','Tony','Valerie','William'], // 2030 (Beryl→Brianna, Helene→Holly, Milton→Miguel)
   },
   ep: {
-    0: ['Alvin','Barbara','Cosme','Dalila','Erick','Flossie','Gil','Henriette','Ivo','Juliette','Kiko','Lorena','Mario','Narda','Octave','Priscilla','Raymond','Sonia','Tico','Velma','Wallis','Xina','York','Zelda'], // 2025
+    0: ['Alvin','Barbara','Cosme','Dalila','Erick','Flossie','Gil','Henriette','Ivo','Juliette','Kiko','Lorena','Mario','Narda','Octave','Priscilla','Raymond','Sonia','Tico','Velma','Wallis','Xina','York','Zelda'], // 2025 / 2031
     1: ['Amanda','Boris','Cristina','Douglas','Elida','Fausto','Genevieve','Hernan','Iselle','Julio','Karina','Lowell','Marie','Norbert','Odalys','Polo','Rachel','Simon','Trudy','Vance','Winnie','Xavier','Yolanda','Zeke'], // 2026
+    2: ['Andres','Blanca','Carlos','Dolores','Enrique','Felicia','Guillermo','Hilda','Ignacio','Jimena','Kevin','Linda','Marty','Nora','Olaf','Pamela','Rick','Sandra','Terry','Vivian','Waldo','Xina','York','Zelda'], // 2027
+    3: ['Agatha','Blas','Celia','Darby','Estelle','Frank','Georgette','Howard','Ivette','Javier','Kay','Lester','Madeline','Newton','Orlene','Paine','Roslyn','Seymour','Tina','Virgil','Winifred','Xavier','Yolanda','Zeke'], // 2028
+    4: ['Adrian','Beatriz','Calvin','Debora','Eugene','Fernanda','Greg','Hilary','Irwin','Jova','Kenneth','Lidia','Max','Norma','Otilio','Pilar','Ramon','Selma','Todd','Veronica','Wiley','Xina','York','Zelda'], // 2029 (Dora→Debora, Otis→Otilio)
+    5: ['Aletta','Bud','Carlotta','Daniel','Emilia','Fabio','Gilma','Hector','Ileana','Jake','Kristy','Lane','Miriam','Norman','Olivia','Paul','Rosa','Sergio','Tara','Vicente','Willa','Xavier','Yolanda','Zeke'], // 2030 (John→Jake)
   },
 };
 // Atlantic supplemental list (used when a season exhausts the main 21 names).

@@ -3082,8 +3082,8 @@ function _renderStormsCore(){
   const mv=(typeof getSteeringMv==='function')?getSteeringMv():(S.stormMovement&&S.stormMovement.speed>=2?S.stormMovement:null);
   if(mv&&mv.speed>=2){storms.forEach(s=>{s._eta=calcStormETA(s)})}else{storms.forEach(s=>{if(!s._eta)s._eta=calcStormETA(s)})}
   let inConeCount=0;
-  let inConeWorstCls=null;
   let inConeMinMiss=null;
+  let coneDirect=0,coneNearby=0,conePassing=0; // v5.66: X-TRK tier split of the cones you're inside
   if(mv&&mv.speed>=2&&S._tracksMode!=='off'){
     const uLat=S.lat,uLng=S.lon;
     const _coneFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
@@ -3105,11 +3105,15 @@ function _renderStormsCore(){
         inConeCount++;
         try{
           const b=calcStormETAForBriefing(s);
-          if(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi)&&(inConeMinMiss==null||b.perpMissMi<inConeMinMiss))inConeMinMiss=b.perpMissMi;
-          if(b&&b.classification==='direct')inConeWorstCls='direct';
-          else if(b&&b.classification==='near_direct'&&inConeWorstCls!=='direct')inConeWorstCls='near_direct';
-          else if(b&&b.classification==='near_miss'&&inConeWorstCls!=='direct'&&inConeWorstCls!=='near_direct')inConeWorstCls='near_miss';
-        }catch(e){}
+          const pm=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
+          if(pm!=null&&(inConeMinMiss==null||pm<inConeMinMiss))inConeMinMiss=pm;
+          // v5.66: bucket each cone you're inside by the SAME X-TRK tiers as the
+          // card badges — Direct ≤1.5 · Nearby 1.5–6 · Passing >6 (or no XTK).
+          const _t=pm!=null?_xtrkTier(pm):null;
+          if(_t&&_t.key==='direct')coneDirect++;
+          else if(_t&&_t.key==='nearby')coneNearby++;
+          else conePassing++;
+        }catch(e){conePassing++;}
       }
     });
   }
@@ -3118,8 +3122,13 @@ function _renderStormsCore(){
   // of contradicting the header. In-cone = inside a storm's broad 15° track
   // envelope (widens with distance — ~13 mi half-width at 50 mi out), while
   // "approaching" = projected closest pass under ~6 mi. Very different bars.
-  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,scanId:S._stormScanId};
-  const inConeColor=inConeWorstCls?stormClass(inConeWorstCls).color:'#6b7280';
+  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,direct:coneDirect,nearby:coneNearby,passing:conePassing,scanId:S._stormScanId};
+  const inConeColor=coneDirect>0?'#ef4444':coneNearby>0?'#f97316':conePassing>0?'#94a3b8':'#6b7280';
+  const _coneBreak=[];
+  if(coneDirect>0)_coneBreak.push('Direct: '+coneDirect);
+  if(coneNearby>0)_coneBreak.push('Nearby: '+coneNearby);
+  if(conePassing>0)_coneBreak.push('Passing: '+conePassing);
+  const _coneLineHtml=(mv&&mv.speed>=2)?`<br><span style="color:${inConeColor}">🎯 In ${inConeCount} storm track${inConeCount!==1?'s':''}${_coneBreak.length?' · '+_coneBreak.join(', '):''}</span>`:'';
   const sf=S._stormFilter||_loadStormFilter();
   const filtered=_applyStormFilter(storms,sf);
   const prevOpen={};
@@ -3347,11 +3356,11 @@ function _renderStormsCore(){
   el.innerHTML=`${zoneAlert}
     <div class="alert-banner ${sev}">
       <span class="alert-icon">${sev==='danger'?'🚨':sev==='warning'?'⚠️':'📡'}</span>
-      <div class="alert-text"><span class="alert-title">${storms.length} Cell${storms.length>1?'s':''} Detected${storms.length?' <span class="c-muted-85">(Min: '+Math.min(...storms.map(s=>s.dbz))+' dBZ | Max: '+Math.max(...storms.map(s=>s.dbz))+' dBZ)</span>':''}${stormCount?' · '+stormCount+' Storm'+(stormCount>1?'s':''):''}</span>${filterNote}${inboundCapped.length?' · <span style="color:#ef4444">'+inboundCapped.length+' inbound</span>':''}${mv&&mv.speed>=2?'<br><span style="color:'+inConeColor+'">🎯 You are currently in '+inConeCount+' storm track cone'+(inConeCount!==1?'s':'')+'</span>':''}<br>Within ${S.radarMetric?(S.scanRadius*1.60934).toFixed(0)+' km':S.scanRadius+' mi'}${mv&&mv.speed>=2?' · Moving '+degToDir(mv.direction)+' ('+Math.round(mv.direction)+'°) at '+(S.radarMetric?Math.round(mv.speed*1.60934)+' km/h':mv.speed+' mph'):''}<br><span id="auto-scan-status" class="c-muted-sm"></span></div>
+      <div class="alert-text"><span class="alert-title">${storms.length} Cell${storms.length>1?'s':''} Detected${storms.length?' <span class="c-muted-85">(Min: '+Math.min(...storms.map(s=>s.dbz))+' dBZ | Max: '+Math.max(...storms.map(s=>s.dbz))+' dBZ)</span>':''}${stormCount?' · '+stormCount+' Storm'+(stormCount>1?'s':''):''}</span>${filterNote}${inboundCapped.length?' · <span style="color:#ef4444">'+inboundCapped.length+' inbound</span>':''}${_coneLineHtml}<br>Within ${S.radarMetric?(S.scanRadius*1.60934).toFixed(0)+' km':S.scanRadius+' mi'}${mv&&mv.speed>=2?' · Moving '+degToDir(mv.direction)+' ('+Math.round(mv.direction)+'°) at '+(S.radarMetric?Math.round(mv.speed*1.60934)+' km/h':mv.speed+' mph'):''}<br><span id="auto-scan-status" class="c-muted-sm"></span></div>
     </div>
     ${noWindBanner}${smartSummary}
     ${_renderFilterBar(sf)}
-    ${(()=>{const hidden=totalCount-filteredCount;if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(sf.approachOnly&&S._coneStats&&S._coneStats.count>0&&S._coneStats.scanId===S._stormScanId)?' — none head directly at you; uncheck "Approaching only" to see nearby tracks':''}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
+    ${(()=>{const hidden=totalCount-filteredCount;if(hidden>0&&_stormFilterActive(sf)){return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;margin-bottom:6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.22);border-radius:6px;font-size:0.75em;color:var(--text-secondary)"><span>🙈 ${hidden} cell${hidden>1?'s':''} hidden by filters${(()=>{const _c=S._coneStats;if(!(sf.approachOnly&&_c&&_c.count>0&&_c.scanId===S._stormScanId))return'';return _c.direct>0?` — ${_c.direct} heading directly, ${_c.count-_c.direct} passing wider; uncheck "Approaching only" to see the rest`:' — none heading directly at you; uncheck "Approaching only" to see nearby tracks'})()}</span><a href="#" onclick="event.preventDefault();clearStormFilters()" style="color:var(--accent-cyan);font-weight:600;text-decoration:none">Clear filters</a></div>`}return''})()}
     <div class="card"><div class="card-title"><span class="icon">🌪️</span> Storm Points</div>
       ${groupHtml}
     </div>

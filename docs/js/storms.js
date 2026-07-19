@@ -2986,16 +2986,21 @@ function _applyStormFilter(storms,f){
   const _fHasAl=S._upperWindDir!=null;
   const noMv=!_fHasMv&&!_fHasAl;
   if(S._coneFocus&&S.lat!=null&&S.lon!=null){
-    // v5.68: cone-focus mode (tap the 🎯 header line) — show every cell whose
-    // forecast cone covers you, regardless of X-TRK tier, overriding
-    // "Approaching only". Uses the same in-cone test + dBZ floor as the count.
-    const _cFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
-    out=out.filter(s=>{
-      if((s.dbz||0)<_cFloor)return false;
-      const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||S.stormMovement;
-      if(!_smv||!(_smv.speed>=2))return false;
-      try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(e){return false}
-    });
+    // v5.70: cone-focus (tap the 🎯 header line) shows the EXACT cells the header
+    // counted — via the shared S._coneStats.keys computed just before this filter
+    // runs — so the focused list, the count, and the tier split always agree.
+    const _ck=(S._coneStats&&Array.isArray(S._coneStats.keys)&&S._coneStats.keys.length)?new Set(S._coneStats.keys):null;
+    if(_ck){
+      out=out.filter(s=>_ck.has(stormKey(s)));
+    }else{
+      const _cFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
+      out=out.filter(s=>{
+        if((s.dbz||0)<_cFloor)return false;
+        const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||S.stormMovement;
+        if(!_smv||!(_smv.speed>=2))return false;
+        try{return isUserInStormCone(s,_smv,S.lat,S.lon)}catch(e){return false}
+      });
+    }
   }else if(f.approachOnly&&!noMv)out=out.filter(s=>{
     const e=s._eta;if(!(e&&e.approaching&&e.eta!=null))return false;
     // v5.63: "Approaching only" now means heading DIRECTLY at you — cross-track
@@ -3188,45 +3193,42 @@ function _renderStormsCore(){
   let inConeCount=0;
   let inConeMinMiss=null;
   let coneDirect=0,coneNearby=0,conePassing=0; // v5.66: X-TRK tier split of the cones you're inside
-  if(mv&&mv.speed>=2&&S._tracksMode!=='off'){
+  let _coneKeys=[]; // v5.70: distinct storm keys whose cone covers you (drives the tap-focus)
+  if(mv&&mv.speed>=2&&S._tracksMode!=='off'&&S.lat!=null&&S.lon!=null){
     const uLat=S.lat,uLng=S.lon;
     const _coneFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
-    // Base the cone COUNT on the same population the map draws (plotStormTracks
-    // also uses getVisibleStormList), so clutter-hiding keeps the count and the
-    // drawn cones in agreement.
-    let coneStorms=(typeof getVisibleStormList==='function')?getVisibleStormList():storms;
-    if(S._tracksMode==='inbound'){
-      if(S._topStorms&&S._topStorms.length){
-        coneStorms=coneStorms.filter(s=>S._topStorms.includes(s));
-      }else{
-        coneStorms=coneStorms.filter(s=>{try{if(!s._brief)s._brief=calcStormETAForBriefing(s);return s._brief&&s._brief.impactScore>0}catch(e){return false}}).sort((a,b)=>((b._brief&&b._brief.impactScore)||0)-((a._brief&&a._brief.impactScore)||0)).slice(0,12);
-      }
-    }
-    coneStorms.forEach(s=>{
-      if((s.dbz||0)<_coneFloor)return;
+    // v5.70: count DISTINCT storms (by key) from the real storm set S.storms —
+    // NOT getVisibleStormList, which produced "In 12 tracks" next to "10 Storms"
+    // (population mismatch). The collected keys ARE the tap-focus target, so the
+    // header count, the Direct/Nearby/Passing split and the focused list always
+    // describe the exact same cells.
+    const _seen=new Set();
+    for(const s of (S.storms||[])){
+      if((s.dbz||0)<_coneFloor)continue;
+      const _k=stormKey(s); if(_seen.has(_k))continue; _seen.add(_k);
       const _smv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)||mv;
-      if(isUserInStormCone(s,_smv,uLat,uLng)){
-        inConeCount++;
-        try{
-          const b=calcStormETAForBriefing(s);
-          const pm=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
-          if(pm!=null&&(inConeMinMiss==null||pm<inConeMinMiss))inConeMinMiss=pm;
-          // v5.66: bucket each cone you're inside by the SAME X-TRK tiers as the
-          // card badges — Direct ≤1.5 · Nearby 1.5–6 · Passing >6 (or no XTK).
-          const _t=pm!=null?_xtrkTier(pm):null;
-          if(_t&&_t.key==='direct')coneDirect++;
-          else if(_t&&_t.key==='nearby')coneNearby++;
-          else conePassing++;
-        }catch(e){conePassing++;}
-      }
-    });
+      let _in=false; try{_in=isUserInStormCone(s,_smv,uLat,uLng)}catch(e){}
+      if(!_in)continue;
+      inConeCount++; _coneKeys.push(_k);
+      try{
+        const b=calcStormETAForBriefing(s);
+        const pm=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
+        if(pm!=null&&(inConeMinMiss==null||pm<inConeMinMiss))inConeMinMiss=pm;
+        // v5.66: bucket by the SAME X-TRK tiers as the card badges —
+        // Direct ≤1.5 · Nearby 1.5–6 · Passing >6 (or no XTK → passing).
+        const _t=pm!=null?_xtrkTier(pm):null;
+        if(_t&&_t.key==='direct')coneDirect++;
+        else if(_t&&_t.key==='nearby')coneNearby++;
+        else conePassing++;
+      }catch(e){conePassing++;}
+    }
   }
   // v5.44: publish cone stats so the "no storms approaching" banner and the
   // hidden-by-filters note can EXPLAIN "in N cones but 0 approaching" instead
   // of contradicting the header. In-cone = inside a storm's broad 15° track
   // envelope (widens with distance — ~13 mi half-width at 50 mi out), while
   // "approaching" = projected closest pass under ~6 mi. Very different bars.
-  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,direct:coneDirect,nearby:coneNearby,passing:conePassing,scanId:S._stormScanId};
+  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,direct:coneDirect,nearby:coneNearby,passing:conePassing,keys:_coneKeys,scanId:S._stormScanId};
   const inConeColor=coneDirect>0?'#ef4444':coneNearby>0?'#f97316':conePassing>0?'#94a3b8':'#6b7280';
   const _coneBreak=[];
   if(coneDirect>0)_coneBreak.push('Direct: '+coneDirect);

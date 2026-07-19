@@ -830,14 +830,20 @@ function plotLightningStrikes(map){
   S.ltgMarkers.forEach(m=>{try{map.removeLayer(m)}catch(e){}});
   S.ltgMarkers=[];
   if(typeof ltgLive!=='function'||!ltgLive())return;
+  // v5.70: draw on a dedicated top pane (z above the hex/zone overlay so strikes
+  // are never buried), and make the dots bigger with a dark halo so they read
+  // against bright radar returns — the old 2.5 px stroke-less dots vanished.
+  try{if(!map.getPane('ltgPane')){map.createPane('ltgPane');const p=map.getPane('ltgPane');if(p){p.style.zIndex=620;p.style.pointerEvents='none';}}}catch(e){}
+  const havePane=(()=>{try{return !!map.getPane('ltgPane')}catch(e){return false}})();
   const now=Date.now();
   const fl=S._ltgStrikes.flashes.slice(0,400);
   for(const f of fl){
     const ageMin=f.t?(now-f.t)/60000:15;
-    const col=ageMin<5?'#ffee33':ageMin<10?'#ffb833':'#ff8f33';
-    const op=ageMin<5?0.95:ageMin<10?0.6:0.32;
+    const col=ageMin<5?'#fff27a':ageMin<10?'#ffd43b':'#ffa94d';
+    const op=ageMin<5?1:ageMin<10?0.85:0.55;
+    const rad=ageMin<5?4.5:ageMin<10?3.5:2.8;
     try{
-      const m=L.circleMarker([f.lat,f.lon],{radius:ageMin<5?3.5:2.5,stroke:false,fillColor:col,fillOpacity:op,interactive:false,pane:'markerPane'});
+      const m=L.circleMarker([f.lat,f.lon],{radius:rad,stroke:true,color:'#2a1e00',weight:1,fillColor:col,fillOpacity:op,interactive:false,pane:havePane?'ltgPane':'markerPane'});
       m.addTo(map);S.ltgMarkers.push(m);
     }catch(e){}
   }

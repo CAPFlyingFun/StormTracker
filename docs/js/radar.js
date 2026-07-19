@@ -807,12 +807,11 @@ async function commitScanResults(rawPoints,opts){
   const map=opts.map||S.map;
   if(map){
     plotStormMarkers(map);
-    // Unconditional: self-clears stale live-lightning dots when ltgLive() has
-    // gone false (key removed, data expired, or fetch backoff) so old strikes
-    // never coexist with the radar-derived ⚡ estimates plotted above.
-    if(typeof plotLightningStrikes==='function')plotLightningStrikes(map);
     if(rawPoints.length>0){autoActivateZones()}
     else{clearStormZones();if(S.radarLayer&&!map.hasLayer(S.radarLayer))try{S.radarLayer.addTo(map)}catch(e){}}
+    // v5.72: plot live-lightning LAST (after zones) so the dots sit on top, and
+    // self-clear stale dots when ltgLive() has gone false (key removed / expired).
+    if(typeof plotLightningStrikes==='function')plotLightningStrikes(map);
   }
   updateThreatTicker();
   // v5.69: live lightning rides the scan pipeline (non-blocking — internally

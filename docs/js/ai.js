@@ -61,6 +61,8 @@ function syncAISettings(){
   _applyAIProviderUI();
   const sk=document.getElementById('settings-skylink-key');
   if(sk&&typeof getSkylinkKey==='function')sk.value=getSkylinkKey();
+  const lk=document.getElementById('settings-lightning-key');
+  if(lk&&typeof getLightningKey==='function')lk.value=getLightningKey();
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
 }
 function clearAIChat(){

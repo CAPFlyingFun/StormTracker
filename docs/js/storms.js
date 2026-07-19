@@ -180,6 +180,22 @@ function toggleSkylinkKeyVis(){
   if(!inp)return;
   inp.type=inp.type==='password'?'text':'password';
 }
+// ⚡ Lightning (WarPulse) — user-supplied API key from lightning.warpulse.com,
+// stored ONLY in localStorage ('st_lightningKey'). It is read locally and sent
+// only to the WarPulse lightning API (once the strike fetch is wired up); it is
+// never transmitted anywhere else and never leaves the device otherwise. Without
+// a key the app keeps using its radar-derived lightning estimate (cells ≥48 dBZ).
+function getLightningKey(){try{return localStorage.getItem('st_lightningKey')||''}catch(e){return''}}
+function saveLightningKey(v){
+  const t=(v||'').trim();
+  try{localStorage.setItem('st_lightningKey',t)}catch(e){}
+  if(typeof toast==='function')toast(t?'✓ Lightning key saved':'Lightning key cleared');
+}
+function toggleLightningKeyVis(){
+  const inp=document.getElementById('settings-lightning-key');
+  if(!inp)return;
+  inp.type=inp.type==='password'?'text':'password';
+}
 function _ftToHPa(ft){
   // ISA: P = 1013.25 * (1 - 0.0065*h/288.15)^5.255 ; h in meters
   const h=ft*0.3048;

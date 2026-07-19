@@ -284,6 +284,25 @@ function buildWeatherContext(){
     parts.push('\nCurrent conditions: Data not yet loaded. Weather may still be fetching.');
   }
 
+  // RAIN OVER YOU RIGHT NOW — the SINGLE authoritative "is it raining at the user's
+  // exact spot" fact, from the same oracle the hero card and Rain Clock use
+  // (rainOverUserNow -> 25 dBZ overhead floor). Without this the AI was inferring
+  // "currently experiencing heavy thunderstorms/heavy rain" from inbound cells +
+  // humidity even when nothing >=25 dBZ was actually overhead. This line is the
+  // ground truth: describe CURRENT conditions from it, not from the inbound set.
+  try{
+    const _now=(typeof rainOverUserNow==='function')?rainOverUserNow():null;
+    const _rc=S._rainClockData;
+    const _nrst=(_rc&&_rc.nearest&&_rc.nearest.mi!=null)
+      ?(()=>{const nm=S.radarMetric?(_rc.nearest.mi*1.60934).toFixed(1)+' km':_rc.nearest.mi.toFixed(1)+' mi';return ` Nearest actual rain (>=25 dBZ) is ${nm} to the ${_rc.nearest.dir}.`;})()
+      :'';
+    if(_now&&_now.maxDbz!=null){
+      parts.push(`\nRAIN OVER YOU RIGHT NOW: YES — ${_now.label} (~${Math.round(_now.maxDbz)} dBZ) is directly overhead (within 1.5 mi).${_nrst}`);
+    }else{
+      parts.push(`\nRAIN OVER YOU RIGHT NOW: NO — nothing >=25 dBZ is over your exact location; it is NOT currently raining at your spot.${_nrst} Do NOT describe current/overhead rain or "you're experiencing rain now"; any rain is inbound/forecast (see RAIN NOWCAST and STORM CONTEXT). Radar echo can sit nearby without rain reaching you.`);
+    }
+  }catch(e){}
+
   if(S.station){
     const st=S.station;
     parts.push(`\nMETAR STATION DATA (${S.stationId||'unknown'}):`);

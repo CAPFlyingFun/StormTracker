@@ -403,7 +403,14 @@ function _heroBandFromZone(zone){
   if(!zone||!zone.length)return null;
   const z=zone[0];
   const dbz=z.maxDbz!=null?z.maxDbz:(z.cls==='trace'?0:z.min);
-  if(dbz<5)return null;
+  // v5.79: the "raining now over you" floor must match the app-wide rain floor
+  // (STORM_MIN_DBZ, 25 dBZ — the same threshold the Rain Clock, forecast ring and
+  // 36 h graph use since v5.54). Previously this fired at >=5 dBZ, so a wisp of
+  // 5-24 dBZ echo drifting within 1.5 mi lit the hero "Light rain · LIVE RADAR"
+  // while the Rain Clock (25 dBZ floor) correctly said "not raining, nearest rain
+  // 3 mi away." Now both agree: sub-25 echo is not "rain over you."
+  const _floor=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:25;
+  if(dbz<_floor)return null;
   return Object.assign({},dbzColor(dbz),{maxDbz:dbz});
 }
 // v4.74: ONE shared "is it raining over the user right now?" signal. The hero

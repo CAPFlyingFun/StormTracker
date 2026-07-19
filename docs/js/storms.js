@@ -2285,9 +2285,36 @@ async function _fetchJTWCStorms() {
 }
 function _isUserInCone(storm) {
   if (!S.lat || !S.lon || !_nhcData.cones) return false;
-  const cone = _nhcData.cones.find(c => c.stormId === storm.id || c.stormName.toLowerCase() === storm.name.toLowerCase());
+  // Match the storm to ITS cone with the SAME strict rule the push scanner uses
+  // (scanner/tropical.js fetchTropical): only match on a NON-EMPTY id, or a
+  // non-empty name that equals the cone's. The old loose test (c.stormId ===
+  // storm.id || name === name) matched '' === '' / undefined === undefined, so a
+  // system whose id/name didn't parse grabbed the FIRST cone with a blank id —
+  // which is how a far-basin storm (e.g. an Eastern-Pacific system off Baja) read
+  // "IN CONE" from Florida while the correctly-scoped push notification did not.
+  const sid = storm.id || '';
+  const sname = (storm.name || '').toLowerCase();
+  const cone = _nhcData.cones.find(c =>
+    (sid && c.stormId === sid) ||
+    (c.stormName && sname && c.stormName.toLowerCase() === sname)
+  );
   if (!cone || !cone.coords || cone.coords.length < 3) return false;
-  const ring = cone.coords;
+  const ring = cone.coords; // GeoJSON [lon, lat]
+  // Integrity guard: a real forecast cone starts AT the storm, so the storm's own
+  // position must fall within its cone's bounding box. If it doesn't, the match is
+  // bogus and we must never report the user "in cone" a basin away.
+  if (storm.lat != null && storm.lon != null) {
+    let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    for (const c of ring) {
+      if (c[0] < minLon) minLon = c[0];
+      if (c[0] > maxLon) maxLon = c[0];
+      if (c[1] < minLat) minLat = c[1];
+      if (c[1] > maxLat) maxLat = c[1];
+    }
+    const M = 2.5; // degrees of slack (reported position vs cone apex rounding)
+    if (storm.lon < minLon - M || storm.lon > maxLon + M ||
+        storm.lat < minLat - M || storm.lat > maxLat + M) return false;
+  }
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][1] != null ? ring[i][1] : ring[i][0];
@@ -2596,7 +2623,18 @@ function _nhcProximityCheck() {
     const inCone = s._inCone;
     const inRadius = s.dist != null && s.dist <= S._nhcProxRadius;
     if (!inCone && !inRadius) continue;
-    if (!bannerStorm || inCone) bannerStorm = { storm: s, inCone, cat };
+    // Feature the MOST relevant system: in-cone outranks merely-in-radius, and
+    // within the same tier the CLOSEST wins — so a nearby storm you're actually
+    // in the cone of is never overshadowed by a far-off system (the old rule kept
+    // whichever in-cone storm came LAST in the list, which could be a distant one).
+    if (!bannerStorm) {
+      bannerStorm = { storm: s, inCone, cat };
+    } else {
+      const cur = bannerStorm;
+      const better = (inCone && !cur.inCone) ||
+        (inCone === cur.inCone && s.dist != null && cur.storm.dist != null && s.dist < cur.storm.dist);
+      if (better) bannerStorm = { storm: s, inCone, cat };
+    }
     const key = 'nhc_alert_' + s.name + '_' + Math.floor(Date.now() / 3600000);
     if (sessionStorage.getItem(key)) continue;
     sessionStorage.setItem(key, '1');

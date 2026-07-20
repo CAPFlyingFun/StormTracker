@@ -1964,9 +1964,19 @@ function updateThreatTicker(){
     severeApproaching.sort((a,b)=>_tickerThreatScore(b)-_tickerThreatScore(a));
     const msgs=severeApproaching.map(t=>{
       const s=t.storm;const{cdSpan,arrStr}=fmtEtaLive(t.eta.eta);const _m=_stormMv(s);const fromDir=_m.dir;const spd=_m.spd;
-      if(s.dbz>=61)return`<span style="color:#FF00F5">🚨 WARNING: Extremely dangerous storm (${s.dbz} dBZ) approaching from the ${fromDir} at ${spd} ${spdUnit}. ETA ⏱️${cdSpan} (${arrStr}). Seek shelter immediately. 🚨</span>`;
-      if(s.dbz>=52)return`<span style="color:#FF0200">🚨 SEVERE WEATHER ALERT: Dangerous storm (${s.dbz} dBZ) approaching from the ${fromDir} at ${spd} ${spdUnit}. ETA ⏱️${cdSpan} (${arrStr}). Use extreme caution. 🚨</span>`;
-      return`<span style="color:#FFB200">⚠️ Strong storm (${s.dbz} dBZ) approaching from the ${fromDir} at ${spd} ${spdUnit}. ETA ⏱️${cdSpan} (${arrStr}). Use caution and be prepared. ⚠️</span>`;
+      // v5.95: ETA phrasing keys off the X-TRK tier (same 1.5/6 mi scale as the
+      // storm cards). DIRECT (≤1.5 mi) gets a live countdown — it's aimed at you.
+      // NEARBY (1.5–6 mi) gets a fixed possible arrival + a "may shift" nudge, no
+      // countdown. Beyond 6 mi there's no ETA (too far / too track-dependent to
+      // put a clock on). _etaFrag folds into the sentence, empty when omitted.
+      const _tier=(typeof _xtrkTier==='function')?_xtrkTier(t.eta.perpMissMi):null;
+      const _key=_tier?_tier.key:(t.eta.perpMissMi!=null&&t.eta.perpMissMi<=1.5?'direct':t.eta.perpMissMi!=null&&t.eta.perpMissMi<=6?'nearby':'passing');
+      const _hit=_key==='direct'?'approaching':_key==='nearby'?'passing near':'passing wide of';
+      const _etaFrag=_key==='direct'?` ETA ⏱️${cdSpan} (${arrStr}).`
+        :_key==='nearby'?` Possible ETA ~${arrStr} — path may still shift, keep an eye out.`:'';
+      if(s.dbz>=61)return`<span style="color:#FF00F5">🚨 WARNING: Extremely dangerous storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Seek shelter immediately. 🚨</span>`;
+      if(s.dbz>=52)return`<span style="color:#FF0200">🚨 SEVERE WEATHER ALERT: Dangerous storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Use extreme caution. 🚨</span>`;
+      return`<span style="color:#FFB200">⚠️ Strong storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Use caution and be prepared. ⚠️</span>`;
     });
     const sep='<span style="color:#444;margin:0 40px">│</span>';
     const html=msgs.join(sep);
@@ -1983,10 +1993,18 @@ function updateThreatTicker(){
   const _mTop=_stormMv(closest.storm);const fromDir=_mTop.dir;const spd=_mTop.spd;
   const maxDbz=Math.max(...allApproaching.map(a=>a.storm.dbz));
   const label=maxDbz>=30?'moderate rain':'light rain';
+  // v5.95: same X-TRK tiering as the severe ticker/cards — countdown only when
+  // the top cell is a direct hit; a nearby pass shows a fixed possible time with
+  // a "may shift" nudge; beyond 6 mi, no ETA fragment at all.
+  const _lTier=(typeof _xtrkTier==='function')?_xtrkTier(closest.eta.perpMissMi):null;
+  const _lKey=_lTier?_lTier.key:(closest.eta.perpMissMi!=null&&closest.eta.perpMissMi<=1.5?'direct':closest.eta.perpMissMi!=null&&closest.eta.perpMissMi<=6?'nearby':'passing');
+  const _lEta=_lKey==='direct'?`ETA ⏱️${cdSpan} (~${arrStr})`
+    :_lKey==='nearby'?`possible ETA ~${arrStr} (may shift)`:'';
+  const _lEtaDot=_lEta?` ${_lEta.charAt(0).toUpperCase()+_lEta.slice(1)}.`:'';
   const lightMsgs=[
-    `🌧️ ${allApproaching.length} ${label} cell${allApproaching.length>1?'s':''} heading your way from the ${fromDir} at ${spd} ${spdUnit}. Strongest (${maxDbz} dBZ) ETA ⏱️${cdSpan} (~${arrStr}). Might want to grab an umbrella! ☂️`,
-    `🌦️ Light precipitation approaching — ${allApproaching.length} cell${allApproaching.length>1?'s':''} inbound (${maxDbz} dBZ max). ETA ⏱️${cdSpan} (~${arrStr}). Nothing severe, but stay dry! 💧`,
-    `☔ Heads up! ${allApproaching.length} rain area${allApproaching.length>1?'s':''} moving toward you (${maxDbz} dBZ). Top-threat ETA ⏱️${cdSpan} (~${arrStr}). Not dangerous, just wet. 🌂`
+    `🌧️ ${allApproaching.length} ${label} cell${allApproaching.length>1?'s':''} heading your way from the ${fromDir} at ${spd} ${spdUnit}. Strongest ${maxDbz} dBZ.${_lEtaDot} Might want to grab an umbrella! ☂️`,
+    `🌦️ Light precipitation approaching — ${allApproaching.length} cell${allApproaching.length>1?'s':''} inbound (${maxDbz} dBZ max).${_lEtaDot} Nothing severe, but stay dry! 💧`,
+    `☔ Heads up! ${allApproaching.length} rain area${allApproaching.length>1?'s':''} moving toward you (${maxDbz} dBZ).${_lEtaDot} Not dangerous, just wet. 🌂`
   ];
   const msg=lightMsgs[Math.floor(Date.now()/60000)%lightMsgs.length]+_tierBreakdownStr;
   showTicker(`<span style="color:#7dd3fc">${msg}</span>`,'#7dd3fc','rgba(125,211,252,0.2)','linear-gradient(90deg,rgba(0,8,25,0.95),rgba(5,15,35,0.95),rgba(0,8,25,0.95))');

@@ -1118,7 +1118,8 @@ function calcStormETA(storm){
   let _etaOut=etaMin;
   if(_brief&&_brief.etaMin!=null&&(_tierKey==='direct'||_tierKey==='near_direct'))_etaOut=_brief.etaMin;
   const _closingOut=(_brief&&_brief.closingMph!=null)?_brief.closingMph:Math.round(closingSpeed*100)/100;
-  const _eta={eta:_etaOut,impact:pct,approaching:_isApproaching,perpTier:_tierKey,closingSpeed:_closingOut,angleDiff:Math.round(diff),cellTrack:!!cellTrack,trackDir:cellTrack?cellTrack.dir:null,trackSpd:cellTrack?cellTrack.speed:null,movDir,movSpd,source:_hyb.source,confidence:_hyb.confidence,obsBased:_obsBased,nwsWarnings,terrain:terrain.desc};
+  const _perpMiss=(_brief&&_brief.perpMissMi!=null&&isFinite(_brief.perpMissMi))?_brief.perpMissMi:null;
+  const _eta={eta:_etaOut,impact:pct,approaching:_isApproaching,perpTier:_tierKey,perpMissMi:_perpMiss,closingSpeed:_closingOut,angleDiff:Math.round(diff),cellTrack:!!cellTrack,trackDir:cellTrack?cellTrack.dir:null,trackSpd:cellTrack?cellTrack.speed:null,movDir,movSpd,source:_hyb.source,confidence:_hyb.confidence,obsBased:_obsBased,nwsWarnings,terrain:terrain.desc};
   storm._eta=_eta;storm._etaScanId=S._stormScanId;
   return _eta;
 }
@@ -2772,13 +2773,24 @@ function _stormTextSummary(s,_b,_sMv,eta){
     // v5.65: arrival shows a LIVE countdown (ticks via the shared eta-countdown
     // updater) next to the fixed clock time. No data-storm-key here so it never
     // double-triggers the auto-rescan the box's countdown already owns.
+    // v5.95: ETA phrasing by X-TRK tier. DIRECT (≤1.5 mi) gets a live ticking
+    // countdown next to the clock time — it's aimed at you. NEARBY (1.5–6 mi)
+    // gets a fixed possible arrival time plus a "path may shift" nudge, no
+    // countdown. PASSING (>6 mi) gets no ETA — too far / too track-dependent to
+    // put a clock on. The presence of a countdown alone now reads direct.
     let arr='';
-    if(_tgt&&_tgt>Date.now()){
-      const _cd=fmtCountdown(Math.max(0,Math.round((_tgt-Date.now())/1000)));
-      arr=`, arriving ~${fmtClockShort(new Date(_tgt))} (in <span class="eta-countdown" data-eta-sec="${Math.round(_tgt)}">${_cd}</span>)`;
-    }else if(eta&&eta.eta!=null){
-      arr=`, arriving ~${fmtArrivalTime(eta.eta)}`;
+    const _clock=(_tgt&&_tgt>Date.now())?fmtClockShort(new Date(_tgt)):((eta&&eta.eta!=null)?fmtArrivalTime(eta.eta):null);
+    if(t.key==='direct'&&_clock){
+      if(_tgt&&_tgt>Date.now()){
+        const _cd=fmtCountdown(Math.max(0,Math.round((_tgt-Date.now())/1000)));
+        arr=`, arriving ~${_clock} (in <span class="eta-countdown" data-eta-sec="${Math.round(_tgt)}">${_cd}</span>)`;
+      }else{
+        arr=`, arriving ~${_clock}`;
+      }
+    }else if(t.key==='nearby'&&_clock){
+      arr=`, possible ETA ~${_clock} — path may still shift, keep an eye on the radar`;
     }
+    // t.key==='passing' (>6 mi): no ETA
     const est=_b.estDbzAtUser;
     const rain=(est!=null&&est>=15)?`${stormCat(est).label} (~${est} dBZ) expected`:'little/no rain expected at you';
     impact=`${t.emoji} ${word}, XTK ${missStr}${arr} · ${rain}.`;
@@ -3592,7 +3604,17 @@ function _renderStormsCore(){
           const remainMin=(targetMs-Date.now())/60000;
           const arrivalTime=fmtArrivalTime(remainMin);
           const initCountdown=fmtCountdown(Math.round(remainMin*60));
-          mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:${imp.color}"><span class="eta-countdown" data-eta-sec="${Math.round(targetMs)}" data-storm-key="${sk}">${initCountdown}</span></div><div style="font-size:0.65em;color:${imp.color};margin-top:1px">${tStr('Arrives')} ~${arrivalTime}</div></div>`;
+          // v5.95: ETA tile by X-TRK tier. DIRECT (≤1.5 mi) → live ticking
+          // countdown (aimed at you). NEARBY (1.5–6 mi) → fixed possible arrival
+          // clock time, no countdown. PASSING (>6 mi, or miss unknown) → no ETA
+          // tile at all. So a ticking clock alone means "coming at you."
+          const _etaTier=(missMiVal==null)?'passing':(missMiVal<=1.5?'direct':missMiVal<=6?'nearby':'passing');
+          if(_etaTier==='direct'){
+            mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:${imp.color}"><span class="eta-countdown" data-eta-sec="${Math.round(targetMs)}" data-storm-key="${sk}">${initCountdown}</span></div><div style="font-size:0.65em;color:${imp.color};margin-top:1px">${tStr('Arrives')} ~${arrivalTime}</div></div>`;
+          }else if(_etaTier==='nearby'){
+            mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:var(--text-secondary);font-size:0.9em">~${arrivalTime}</div><div style="font-size:0.6em;color:var(--text-muted);margin-top:1px">${tStr('possible · may shift')}</div></div>`;
+          }
+          // passing (>6 mi): no ETA tile
         }
         mvLine+=missTile;
       }

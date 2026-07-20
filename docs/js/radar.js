@@ -33,19 +33,12 @@ function initRadar(){
         <div class="map-ctrl-btn" id="btn-lightning" title="Toggle lightning strikes" onclick="toggleLightning()" style="opacity:${(typeof _ltgShown==='function'&&!_ltgShown())?0.4:1};font-size:15px;display:flex;align-items:center;justify-content:center">⚡</div>
       </div>
       <div class="map-controls map-controls-right">
-        <div class="map-ctrl-btn" id="btn-zones" title="Toggle storm zones" onclick="toggleStormZones()">${_ri('zones')}</div>
-        <div class="map-ctrl-btn" id="btn-path-arrows" title="Toggle storm path arrows" onclick="togglePathArrows()">${_ri('path-arrows')}</div>
-        <div class="map-ctrl-btn" id="btn-points" title="Toggle storm points" onclick="toggleStormPoints()">${_ri(S._pointsMode==='inbound'?'points-12':'points')}</div>
-        <div class="map-ctrl-btn" id="btn-tracks" title="Toggle storm track cones" onclick="toggleStormTracks()">${_ri(S._tracksMode==='inbound'?'tracks-12':'tracks')}</div>
-        <div class="map-ctrl-btn" id="btn-relmotion" title="AI relative-motion vectors (off / top12 / all)" onclick="toggleRelMotion()" style="font-weight:700;font-size:11px;line-height:1">${S._relMotionMode==='all'?'∡A':S._relMotionMode==='inbound'?'∡12':'∡'}</div>
-        <div class="map-ctrl-btn" id="btn-radar-overlay" title="Toggle radar overlay" onclick="toggleRadarOverlay()">${_ri('radar-overlay')}</div>
-        <div class="map-ctrl-btn" id="btn-mping" title="Toggle mPING reports" onclick="toggleMping()">${_ri('mping')}</div>
-        <div class="map-ctrl-btn" id="btn-alert-polys" title="Toggle NWS alert polygons" onclick="toggleAlertPolygons()">${_ri('alert-polys')}</div>
-        <div class="map-ctrl-btn" id="btn-nhc-tracks" title="Toggle hurricane overlays (cones, tracks, wind fields)" style="opacity:${S._showNHCTracks?1:0.4};font-size:15px;display:flex;align-items:center;justify-content:center" onclick="toggleNHCTracks(!S._showNHCTracks)">🌀</div>
-        <div class="map-ctrl-btn" id="radar-clear-cone" title="Clear track" style="display:none" onclick="clearStormCone()">${_ri('clear')}</div>
+        <div class="map-ctrl-btn" id="btn-layers-panel" title="Map layers" onclick="toggleLayersPanel()" style="font-size:14px;display:flex;align-items:center;justify-content:center">🗂️</div>
         <div class="map-ctrl-btn" id="btn-iso-3d" title="3D Storm Terrain" onclick="show3DView()">${_ri('terrain-3d')}</div>
+        <div class="map-ctrl-btn" id="radar-clear-cone" title="Clear track" style="display:none" onclick="clearStormCone()">${_ri('clear')}</div>
         <div class="map-ctrl-btn" id="clutter-toggle" title="Clutter hidden (tap to show)" style="display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);border-color:#555" onclick="toggleClutter()">${_ri('clutter')}</div>
       </div>
+      <div id="map-layers-panel" style="display:none;position:absolute;top:8px;right:52px;z-index:1002;width:178px;max-height:72%;overflow-y:auto;background:rgba(8,14,28,0.94);border:1px solid var(--border-subtle);border-radius:10px;padding:8px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)">${_layersPanelHTML()}</div>
       <div class="radar-anim-bar" id="radar-anim-bar" style="display:none">
         <input type="range" id="radar-anim-slider" min="0" max="0" value="0" class="flex-1">
         <span id="radar-anim-time" style="font-size:0.65em;color:var(--text-secondary);min-width:50px;text-align:right"></span>
@@ -2701,3 +2694,62 @@ function toggleStormTracks(){
   }
 }
 
+
+// ═══ v5.92: MAP LAYERS PANEL ═══ groups the former right-side button pile into
+// collapsible sections (mirrors the Storms tab's accordion feel). Legacy toggle
+// buttons keep their original ids so every existing toggle function still
+// styles them; the panel re-renders after each tap so mode icons stay fresh,
+// preserving each section's open/closed state.
+function _lpLegacyRow(id,iconHtml,label,fn,extra){
+  return `<div style="display:flex;align-items:center;gap:8px;padding:2px 2px;cursor:pointer" onclick="_lpDo('${fn}')">`+
+    `<div class="map-ctrl-btn" id="${id}" style="pointer-events:none;${extra||''}">${iconHtml}</div>`+
+    `<span style="font-size:0.68em;color:var(--text-secondary)">${label}</span></div>`;
+}
+function _lpSeg(label,key,opts){
+  const cur=(typeof _nhcOpt==='function')?_nhcOpt(key):null;
+  return `<div style="padding:3px 2px"><div style="font-size:0.6em;color:var(--text-muted);margin-bottom:2px">${label}</div><div style="display:flex;gap:3px">`+
+    opts.map(o=>`<span onclick="setNHCLayerOpt('${key}','${o.v}')" style="flex:1;text-align:center;font-size:0.6em;padding:3px 2px;border-radius:6px;cursor:pointer;border:1px solid ${cur===o.v?'var(--accent-cyan)':'var(--border-subtle)'};background:${cur===o.v?'rgba(0,229,255,0.15)':'transparent'};color:${cur===o.v?'var(--accent-cyan)':'var(--text-muted)'};font-weight:600">${o.l}</span>`).join('')+
+    `</div></div>`;
+}
+function _lpHurrOpts(){
+  return _lpSeg('Tracks & cones','tracks',[{v:'all',l:'All'},{v:'off',l:'Off'}])
+    +_lpSeg('Wind fields','wind',[{v:'all',l:'All'},{v:'h64',l:'64kt'},{v:'off',l:'Off'}])
+    +_lpSeg('Fronts','fronts',[{v:'on',l:'On'},{v:'off',l:'Off'}])
+    +_lpSeg('ST Model','st',[{v:'on',l:'On'},{v:'off',l:'Off'}])
+    +_lpSeg('Flow particles','flow',[{v:'on',l:'On'},{v:'off',l:'Off'}])
+    +_lpSeg('History dots','dots',[{v:'on',l:'On'},{v:'off',l:'Off'}]);
+}
+function _layersPanelHTML(){
+  const sec=(title,open,body)=>`<details ${open?'open':''} style="margin-bottom:4px"><summary style="font-size:0.7em;font-weight:700;color:var(--text-primary);cursor:pointer;padding:4px 2px">${title}</summary>${body}</details>`;
+  const storms=
+    _lpLegacyRow('btn-zones',_ri('zones'),'Storm zones','toggleStormZones')+
+    _lpLegacyRow('btn-points',_ri(S._pointsMode==='inbound'?'points-12':'points'),'Storm points','toggleStormPoints')+
+    _lpLegacyRow('btn-tracks',_ri(S._tracksMode==='inbound'?'tracks-12':'tracks'),'Track cones','toggleStormTracks')+
+    _lpLegacyRow('btn-path-arrows',_ri('path-arrows'),'Path arrows','togglePathArrows')+
+    _lpLegacyRow('btn-relmotion',(S._relMotionMode==='all'?'∡A':S._relMotionMode==='inbound'?'∡12':'∡'),'Motion vectors','toggleRelMotion','font-weight:700;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center');
+  const radar=
+    _lpLegacyRow('btn-radar-overlay',_ri('radar-overlay'),'Radar overlay','toggleRadarOverlay')+
+    _lpLegacyRow('btn-mping',_ri('mping'),'mPING reports','toggleMping')+
+    _lpLegacyRow('btn-alert-polys',_ri('alert-polys'),'NWS alert areas','toggleAlertPolygons');
+  const hurr=
+    _lpLegacyRow('btn-nhc-tracks','🌀','All 🌀 overlays','_lpToggleNHC','font-size:15px;display:flex;align-items:center;justify-content:center;opacity:'+(S._showNHCTracks?1:0.4))+
+    `<div id="lp-hurr-opts">${_lpHurrOpts()}</div>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px 6px"><span style="font-size:0.7em;font-weight:800;letter-spacing:0.06em;color:var(--accent-cyan)">MAP LAYERS</span><span onclick="toggleLayersPanel()" style="cursor:pointer;color:var(--text-muted);padding:0 4px;font-size:0.85em">✕</span></div>`
+    +sec('⛈️ Storms',true,storms)+sec('📡 Radar',false,radar)+sec('🌀 Hurricane',true,hurr);
+}
+function _lpToggleNHC(){toggleNHCTracks(!S._showNHCTracks)}
+function _lpDo(fn){try{if(typeof window[fn]==='function')window[fn]()}catch(e){console.warn('[layers]',fn,e&&e.message)}_syncLayersPanel()}
+function _syncLayersPanel(){
+  const p=document.getElementById('map-layers-panel');
+  if(!p||p.style.display==='none')return;
+  const states=[...p.querySelectorAll('details')].map(d=>d.open);
+  p.innerHTML=_layersPanelHTML();
+  [...p.querySelectorAll('details')].forEach((d,i)=>{if(states[i]!=null)d.open=states[i]});
+}
+function toggleLayersPanel(){
+  const p=document.getElementById('map-layers-panel');
+  if(!p)return;
+  const open=p.style.display!=='none';
+  p.style.display=open?'none':'block';
+  if(!open)p.innerHTML=_layersPanelHTML();
+}

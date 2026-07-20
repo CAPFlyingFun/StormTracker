@@ -2052,6 +2052,19 @@ const _nhcData = { systems: null, forecast: null, cones: null, windRadii: null, 
 S._nhcTrackLayers = [];
 S._nhcSelectedStorm = null;
 S._showNHCTracks = (() => { try { const v = localStorage.getItem('st_nhc_tracks'); return v === null ? true : v === '1'; } catch(e) { return true; } })();
+// v5.92: granular 🌀 layer options (Map Layers panel). tracks: all|off ·
+// wind: all|h64|off · fronts/st/flow/dots: on|off. Persisted; read live.
+const _NHC_OPT_DEFAULTS = { tracks: 'all', wind: 'all', fronts: 'on', st: 'on', flow: 'on', dots: 'on' };
+S._nhcLayerOpts = (() => { try { return Object.assign({}, _NHC_OPT_DEFAULTS, JSON.parse(localStorage.getItem('st_nhcLayers') || '{}')); } catch(e) { return Object.assign({}, _NHC_OPT_DEFAULTS); } })();
+function _nhcOpt(k) { return (S._nhcLayerOpts || _NHC_OPT_DEFAULTS)[k]; }
+function setNHCLayerOpt(k, v) {
+  S._nhcLayerOpts[k] = v;
+  try { localStorage.setItem('st_nhcLayers', JSON.stringify(S._nhcLayerOpts)); } catch(e) {}
+  if (k === 'flow' && v !== 'on' && typeof stopSTFlow === 'function') stopSTFlow();
+  if (S.map) plotNHCTracks(S.map);
+  if (typeof _syncLayersPanel === 'function') _syncLayersPanel();
+}
+if (typeof window !== 'undefined') { window._nhcOpt = _nhcOpt; window.setNHCLayerOpt = setNHCLayerOpt; }
 S._nhcProxRadius = (() => { try { const v = parseInt(localStorage.getItem('st_nhc_prox_radius')); return v > 0 ? v : 200; } catch(e) { return 200; } })();
 const _STORM_REGIONS = [
   { id: 'all', label: 'All Basins' },
@@ -2895,7 +2908,8 @@ function plotNHCTracks(map) {
   const _isStormVisible = (stormId, stormName) => filteredIds.has((stormId||'').toLowerCase()) || filteredNames.has((stormName||'').toLowerCase());
   const selectedName = S._nhcSelectedStorm;
   const showAll = !selectedName;
-  for (const cone of (_nhcData.cones || [])) {
+  const _lpTracks = (typeof _nhcOpt === 'function') ? _nhcOpt('tracks') : 'all'; // v5.92 layer opt
+  for (const cone of (_lpTracks === 'off' ? [] : (_nhcData.cones || []))) {
     if (!_isStormVisible(cone.stormId, cone.stormName)) continue;
     if (!showAll && cone.stormName.toLowerCase() !== selectedName?.toLowerCase() && cone.stormId !== selectedName) continue;
     if (!cone.coords || cone.coords.length < 3) continue;
@@ -2911,7 +2925,7 @@ function plotNHCTracks(map) {
     poly.addTo(map);
     S._nhcTrackLayers.push(poly);
   }
-  for (const track of (_nhcData.forecast || [])) {
+  for (const track of (_lpTracks === 'off' ? [] : (_nhcData.forecast || []))) {
     if (!_isStormVisible(track.stormId, track.stormName)) continue;
     if (!showAll && track.stormName.toLowerCase() !== selectedName?.toLowerCase() && track.stormId !== selectedName) continue;
     if (!track.coords || track.coords.length < 2) continue;
@@ -2926,7 +2940,7 @@ function plotNHCTracks(map) {
     S._nhcTrackLayers.push(line);
   }
   // v5.86: PAST track (history) from GDACS — solid muted trail behind the storm
-  for (const hist of (_nhcData.history || [])) {
+  for (const hist of (_lpTracks === 'off' ? [] : (_nhcData.history || []))) {
     if (!_isStormVisible(hist.stormId, hist.stormName)) continue;
     if (!showAll && hist.stormName.toLowerCase() !== selectedName?.toLowerCase() && hist.stormId !== selectedName) continue;
     if (!hist.coords || hist.coords.length < 2) continue;
@@ -2940,11 +2954,11 @@ function plotNHCTracks(map) {
   }
   // v5.91: surface fronts (NOAA/WPC analysis) join the 🌀 overlay group —
   // async + gen-guarded in tropical-model.js; cached 30 min.
-  if (typeof drawFronts === 'function') drawFronts(map);
+  if (typeof drawFronts === 'function' && _nhcOpt('fronts') !== 'off') drawFronts(map);
   // v5.86: timestamped position fixes (GDACS) — dots shown for the SELECTED
   // storm only (past = grey, forecast = cyan); tap a dot for its date/time.
   if (selectedName) {
-    for (const fp of (_nhcData.fcstPoints || [])) {
+    for (const fp of ((typeof _nhcOpt === 'function' && _nhcOpt('dots') === 'off') ? [] : (_nhcData.fcstPoints || []))) {
       if (fp.stormName.toLowerCase() !== selectedName.toLowerCase() && fp.stormId !== selectedName) continue;
       const nowT = Date.now();
       for (const pt of (fp.pts || [])) {
@@ -2952,17 +2966,23 @@ function plotNHCTracks(map) {
         const future = pt.t != null && pt.t > nowT;
         const dot = L.circleMarker([pt.lat, pt.lon], {
           radius: 3.5, color: future ? '#22d3ee' : '#94a3b8',
-          fillColor: future ? '#22d3ee' : '#94a3b8', fillOpacity: 0.85, weight: 1
+          fillColor: future ? '#22d3ee' : '#94a3b8', fillOpacity: 0.85, weight: 1, interactive: false
         });
-        if (pt.label) dot.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center"><b>${future ? 'Forecast' : 'Past'} position</b><br>${escHtml(pt.label)}</div>`);
         dot.addTo(map);
         S._nhcTrackLayers.push(dot);
+        // v5.92: the visible dot is tiny — a big invisible circle carries the tap
+        if (pt.label) {
+          const hit = L.circleMarker([pt.lat, pt.lon], { radius: 12, stroke: false, fillColor: '#000', fillOpacity: 0.02 });
+          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center"><b>${future ? 'Forecast' : 'Past'} position</b><br>${escHtml(pt.label)}</div>`);
+          hit.addTo(map);
+          S._nhcTrackLayers.push(hit);
+        }
       }
     }
     // v5.87: ST Model — StormTracker's own BAM-style steering track for the
     // selected storm (tropical-model.js). Async; guarded by S._nhcPlotGen.
     const _selStorm = (_nhcData.systems || []).find(s => s.id === selectedName || (s.name || '').toLowerCase() === String(selectedName).toLowerCase());
-    if (_selStorm && typeof drawSTModelTrack === 'function') drawSTModelTrack(_selStorm, map);
+    if (_selStorm && typeof drawSTModelTrack === 'function' && _nhcOpt('st') !== 'off') drawSTModelTrack(_selStorm, map);
   }
   for (const s of filtered) {
     if (s.lat == null || s.lon == null) continue;
@@ -3010,10 +3030,11 @@ function plotNHCTracks(map) {
     if (isSelected) try { // v5.90: isolated — a radii hiccup must never blank other layers
       const radiiColors = { 34: '#4fc3f7', 50: '#ffc107', 64: '#ff5722' };
       const radiiLabels = { 34: '34 kt (TS)', 50: '50 kt (Strong TS)', 64: '64 kt (Hurricane)' };
-      const stormRadii = (_nhcData.windRadii || []).filter(wr => wr.stormId === s.id || wr.stormName.toLowerCase() === s.name.toLowerCase());
+      const _wOpt = (typeof _nhcOpt === 'function') ? _nhcOpt('wind') : 'all'; // v5.92 layer opt
+      const stormRadii = _wOpt === 'off' ? [] : (_nhcData.windRadii || []).filter(wr => (wr.stormId === s.id || wr.stormName.toLowerCase() === s.name.toLowerCase()) && (_wOpt !== 'h64' || wr.ktLevel == 64));
       // v5.90: radii features routinely vanish upstream right after an advisory
       // swap (ArcGIS layers republish) — note it so a blank isn't a mystery.
-      if (!stormRadii.length) console.log('[NHC] no wind-radii features for', s.name, 'this cycle — upstream advisory gap');
+      if (!stormRadii.length && _wOpt !== 'off') console.log('[NHC] no wind-radii features for', s.name, 'this cycle — upstream advisory gap');
       if (stormRadii.length) {
         // v5.88: declutter — the ArcGIS feed carries one radii ring per forecast
         // hour per wind band, and labeling EVERY ring stamped "34 kt (TS)" six

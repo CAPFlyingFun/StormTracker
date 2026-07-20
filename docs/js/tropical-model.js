@@ -294,7 +294,7 @@ function startSTFlow(map){
     const vel=(lat,lng)=>{let su=0,sv=0,sw=0;for(const s of F.samples){const d=Math.max(4,haversine(lat,lng,s.lat,s.lon));const w=1/(d*d);su+=w*s.u;sv+=w*s.v;sw+=w}return{u:su/sw,v:sv/sw}};
     const step=()=>{
       if(!document.body.contains(cv))return;
-      if(S.activePage!=='radar'||!S._nhcSelectedStorm||!S._showNHCTracks){stopSTFlow();return}
+      if(S.activePage!=='radar'||!S._nhcSelectedStorm||!S._showNHCTracks||(typeof _nhcOpt==='function'&&_nhcOpt('flow')==='off')){stopSTFlow();return}
       if(cv.width!==cont.clientWidth||cv.height!==cont.clientHeight){cv.width=cont.clientWidth;cv.height=cont.clientHeight}
       ctx.globalCompositeOperation='destination-out';ctx.fillStyle='rgba(0,0,0,0.10)';ctx.fillRect(0,0,cv.width,cv.height);
       ctx.globalCompositeOperation='source-over';ctx.strokeStyle='rgba(0,212,255,0.5)';ctx.lineWidth=1;
@@ -485,9 +485,12 @@ async function drawSTModelTrack(storm,map){
       const cat=(p.windMph!=null)?_stCat(p.windMph):null;
       const dot=L.circleMarker([p.lat,p.lon],{
         radius:major?4.5:3,color:_ST_COLOR,
-        fillColor:cat?cat.color:_ST_COLOR,fillOpacity:0.95,weight:1});
-      dot.bindTooltip('ST +'+p.hr+'h · '+when+(cat?' · ~'+p.windMph+' mph ('+cat.label+')':'')+(p.nearFront?' · ≈front':''),{direction:'top'});
+        fillColor:cat?cat.color:_ST_COLOR,fillOpacity:0.95,weight:1,interactive:false});
       dot.addTo(map); S._nhcTrackLayers.push(dot);
+      // v5.92: big invisible hit circle — the visible dots were too small to tap
+      const hit=L.circleMarker([p.lat,p.lon],{radius:12,stroke:false,fillColor:'#000',fillOpacity:0.02});
+      hit.bindTooltip('ST +'+p.hr+'h · '+when+(cat?' · ~'+p.windMph+' mph ('+cat.label+')':'')+(p.nearFront?' · ≈front':''),{direction:'top'});
+      hit.addTo(map); S._nhcTrackLayers.push(hit);
     }
     let peak=null;
     for(const p of pts){if(p.windMph!=null&&(!peak||p.windMph>peak.windMph))peak=p;}
@@ -499,7 +502,7 @@ async function drawSTModelTrack(storm,map){
       html:'<div style="font-size:9px;font-weight:700;color:'+_ST_COLOR+';text-shadow:0 0 3px #000;white-space:nowrap" title="StormTracker in-app steering model — experimental, not for safety decisions">ST Model'+(peak&&peak.windMph?' · peak ~'+peak.windMph+' mph ('+_stCat(peak.windMph).label+')':'')+(ver?' · '+ver.ageH+'h err ~'+ver.errMi+' mi':'')+'</div>',
       iconAnchor:[-6,4]})});
     lbl.addTo(map); S._nhcTrackLayers.push(lbl);
-    startSTFlow(map); // particle-flow steering visualization (self-stops on deselect)
+    if(typeof _nhcOpt!=='function'||_nhcOpt('flow')!=='off')startSTFlow(map); // particle-flow viz (self-stops on deselect)
     console.log('[ST Model]',storm.name,'—',pts.length-1,'h track, dots every '+stepH+'h, peak',peak&&peak.windMph,'mph',ver?('· '+ver.ageH+'h err '+ver.errMi+' mi'):'');
   }catch(e){console.log('[ST Model] draw failed:',e&&e.message)}
 }

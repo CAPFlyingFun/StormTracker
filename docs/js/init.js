@@ -253,6 +253,7 @@ function _netMonitorStart(){
 async function init(){
   if(typeof _autoCheckUpdate==='function'&&await _autoCheckUpdate())return;
   _pruneExpiredAlerts();
+  if(typeof _drainPushNotifQueue==='function')_drainPushNotifQueue();
   if(typeof _updateNotifBadge==='function')_updateNotifBadge();
   _loadAllCustomIcons().catch(()=>{});
   loadUnits();

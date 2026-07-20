@@ -71,12 +71,14 @@ function checkWeatherThresholds(){
   checkRainAlert();
   checkRainOverheadAlert();
 }
-function _sendBrowserNotification(title,body){
+function _sendBrowserNotification(title,body,logBody){
   // v5.96: record EVERY alert in the 📢 Notifications log first — before the
   // permission/visibility guards below — so the history captures alerts whether
   // or not a browser notification actually gets shown (app open, permission off,
   // etc.). Every real weather/storm/hurricane/lightning alert routes through here.
-  if(typeof logNotification==='function')logNotification(body);
+  // v5.97: `body` is the SHORT text the phone/browser shows (which truncates);
+  // the optional `logBody` is the FULL detailed version stored in the 📢 panel.
+  if(typeof logNotification==='function')logNotification(logBody||body);
   if(!('Notification' in window))return;
   if(Notification.permission!=='granted')return;
   if(document.visibilityState==='visible')return;
@@ -209,23 +211,25 @@ function checkStormCellAlerts(){
     });
     if(!allMatch||!bestMsg)return;
     _STORM_ALERT_COOLDOWN[cellKey]=now;
-    let etaMin=null,arrivalMs=null,closingMph=0;
-    try{const se=calcStormETA(storm);if(se&&se.approaching&&se.eta!=null&&se.eta>0){etaMin=Math.max(0,se.eta-radarAgeMin());arrivalMs=now+etaMin*60000;closingMph=se.closingSpeed||0}}catch(e){}
-    const distStr=S.radarMetric?parseFloat((storm.distance*1.60934).toFixed(1))+' km':parseFloat(storm.distance.toFixed(1))+' mi';
-    const etaStr=etaMin!=null?' · ETA '+formatStormEta(etaMin)+' ('+fmtClockShort(new Date(arrivalMs))+')':'';
-    const cellMsg=`🌩️ Storm cell alert: ${storm.dbz} dBZ · ${distStr} away${storm.impactPct>0?' · Impact: '+storm.impactPct+'% ('+storm.impactTier+')':''}${etaStr}`;
-    batch.push({storm,etaMin,arrivalMs,closingMph,cellMsg});
-    _stormAlertHistory.push({key:'stormCell',label:'Storm Cell',icon:'🌩️',msg:cellMsg,val:storm.dbz,u:'dBZ',distance:storm.distance,impactPct:storm.impactPct||0,impactTier:storm.impactTier||'none',time:now,etaMin:etaMin,arrivalMs:arrivalMs,closingMph:closingMph,lat:storm.lat,lng:storm.lng,bearing:storm.bearing});
+    // v5.97: build the alert text from the SAME X-TRK/ETA math as the storm cards
+    // (via _stormNotifMsg) instead of the old cone-angle impact %. `short` feeds
+    // the phone notification, `full` the 📢 panel.
+    const nm=(typeof _stormNotifMsg==='function')?_stormNotifMsg(storm):{short:`🌩️ ${storm.dbz} dBZ storm cell`,full:`🌩️ ${storm.dbz} dBZ storm cell`,key:'passing',etaMin:null,arrMs:null};
+    const etaMin=nm.etaMin,arrivalMs=nm.arrMs;
+    let closingMph=0;try{const se=storm._eta||calcStormETA(storm);if(se)closingMph=se.closingSpeed||0}catch(e){}
+    batch.push({storm,etaMin,arrivalMs,closingMph,short:nm.short,full:nm.full,key:nm.key});
+    _stormAlertHistory.push({key:'stormCell',label:'Storm Cell',icon:'🌩️',msg:nm.full,val:storm.dbz,u:'dBZ',distance:storm.distance,impactPct:storm.impactPct||0,impactTier:storm.impactTier||'none',time:now,etaMin:etaMin,arrivalMs:arrivalMs,closingMph:closingMph,lat:storm.lat,lng:storm.lng,bearing:storm.bearing});
   });
   if(!batch.length)return;
   try{localStorage.setItem('st_stormAlertCooldown',JSON.stringify(_STORM_ALERT_COOLDOWN))}catch(e){}
   _saveStormAlertHistory();
+  // v5.97: no more auto-popping toast — the alert goes straight to the phone
+  // notification (short) and the 📢 log (full detail). App-open case: the bell
+  // badge increments and the entry lands in the panel.
   if(batch.length===1){
-    toast(batch[0].cellMsg,8000);
-    _sendBrowserNotification('Storm Cell Alert',batch[0].cellMsg);
+    _sendBrowserNotification('Storm Cell Alert',batch[0].short,batch[0].full);
   }else{
     const topDbz=Math.max(...batch.map(b=>b.storm.dbz));
-    const peakImp=Math.max(...batch.map(b=>b.storm.impactPct||0));
     const closestDist=Math.min(...batch.map(b=>b.storm.distance));
     const distStr=S.radarMetric?parseFloat((closestDist*1.60934).toFixed(1))+' km':parseFloat(closestDist.toFixed(1))+' mi';
     const bearings=batch.map(b=>b.storm.bearing);
@@ -237,13 +241,15 @@ function checkStormCellAlerts(){
       const travelDir=degToDir(mv.direction);
       const spdU=S.radarMetric?'km/h':'mph';
       const spdV=S.radarMetric?Math.round(mv.speed*1.60934):Math.round(mv.speed);
-      moveStr=` traveling ${travelDir} (${Math.round(mv.direction)}°) ~${spdV} ${spdU}`;
+      moveStr=` moving ${travelDir} (${Math.round(mv.direction)}°) ~${spdV} ${spdU}`;
     }
-    const bestEta=batch.filter(b=>b.etaMin!=null).sort((a,b)=>a.etaMin-b.etaMin)[0];
-    const etaPart=bestEta?`, ETA ${formatStormEta(bestEta.etaMin)}`:'';
-    const summaryMsg=`🌩️ ${batch.length} storm cells to the ${dirFrom}${moveStr} — strongest ${topDbz} dBZ · ${distStr} away, ${peakImp}% impact${etaPart}`;
-    toast(summaryMsg,10000);
-    _sendBrowserNotification('Storm Cell Alert',summaryMsg);
+    // Lead with the most threatening cell (direct → nearby → passing, then
+    // closest) and append its full detail so the panel entry is actionable.
+    const rank={direct:0,nearby:1,passing:2};
+    const lead=batch.slice().sort((a,b)=>((rank[a.key]!=null?rank[a.key]:3)-(rank[b.key]!=null?rank[b.key]:3))||a.storm.distance-b.storm.distance)[0];
+    const shortMsg=`🌩️ ${batch.length} storm cells from the ${dirFrom} — strongest ${topDbz} dBZ, closest ${distStr}`;
+    const fullMsg=`🌩️ ${batch.length} storm cells approaching from the ${dirFrom}${moveStr}. Strongest ${topDbz} dBZ; closest ${distStr} away.\nLead cell → ${lead.full.replace(/^🌩️\s*/,'')}`;
+    _sendBrowserNotification('Storm Cell Alert',shortMsg,fullMsg);
   }
   if(S.activePage==='alerts')renderAlerts();
 }

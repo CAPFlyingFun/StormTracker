@@ -1,5 +1,5 @@
-// Version: v5.96 (display) | cache-bust counter: 693 (used in ?v= query strings and SW cache name)
-const CACHE_NAME = 'stormtracker-v693';
+// Version: v5.97 (display) | cache-bust counter: 694 (used in ?v= query strings and SW cache name)
+const CACHE_NAME = 'stormtracker-v694';
 const STATIC_ASSETS = [
   '/StormTracker/',
   '/StormTracker/index.html',
@@ -53,6 +53,18 @@ const STATIC_ASSETS = [
   '/StormTracker/img/radar/terrain-3d.svg',
   '/StormTracker/img/radar/clutter.svg'
 ];
+
+// v5.97: persist background PUSH notifications so the in-app 📢 panel can show
+// them on next open. The service worker can't touch localStorage, so it writes
+// to IndexedDB ('st-notif' → 'queue'); the app drains this into its notification
+// log when it loads (see _drainPushNotifQueue in core.js).
+function _stNotifDb(){return new Promise((res,rej)=>{try{const r=indexedDB.open('st-notif',1);r.onupgradeneeded=()=>{try{r.result.createObjectStore('queue',{keyPath:'id'})}catch(e){}};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}catch(e){rej(e)}})}
+async function _queuePushNotif(title,body){
+  try{
+    const db=await _stNotifDb();
+    await new Promise(res=>{const tx=db.transaction('queue','readwrite');tx.objectStore('queue').put({id:Date.now()+'-'+Math.random().toString(36).slice(2,7),ts:Date.now(),title:title||'',body:body||''});tx.oncomplete=res;tx.onerror=res;tx.onabort=res;});
+  }catch(e){}
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -180,6 +192,8 @@ self.addEventListener('push', event => {
         { action: 'dismiss', title: 'Dismiss' }
       ]
     };
+    // v5.97: record it for the in-app 📢 panel before showing.
+    await _queuePushNotif(title, options.body);
     try {
       await self.registration.showNotification(title, options);
     } catch (e) {

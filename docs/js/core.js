@@ -189,6 +189,41 @@ function _updateNotifBadge(){
   const n=_notifUnreadCount();
   if(n>0){b.textContent=n>9?'9+':String(n);b.style.display='block';}else{b.style.display='none';}
 }
+// v5.97: pull any background PUSH notifications the service worker stored while
+// the app was closed (IndexedDB 'st-notif' → 'queue') into the log, so the 📢
+// panel shows the real phone/browser notifications too. De-dupes against alerts
+// the app itself already logged this session, then clears the queue.
+function _drainPushNotifQueue(){
+  try{
+    if(!('indexedDB' in window))return;
+    const r=indexedDB.open('st-notif',1);
+    r.onupgradeneeded=()=>{try{r.result.createObjectStore('queue',{keyPath:'id'})}catch(e){}};
+    r.onsuccess=()=>{
+      let db=r.result,tx;
+      try{tx=db.transaction('queue','readwrite')}catch(e){return}
+      const store=tx.objectStore('queue'),g=store.getAll();
+      g.onsuccess=()=>{
+        const items=(g.result||[]).slice().sort((a,b)=>a.ts-b.ts);
+        if(items.length){
+          const log=_loadNotifLog();
+          items.forEach(it=>{
+            const msg=String(it.body||it.title||'').replace(/🔔\s*/,'').trim();if(!msg)return;
+            if(log.some(n=>n.msg===msg&&Math.abs(n.ts-it.ts)<120000))return;
+            log.push({id:it.ts.toString(36)+Math.random().toString(36).slice(2,6),ts:it.ts,msg});
+          });
+          log.sort((a,b)=>b.ts-a.ts);
+          _saveNotifLog(log);
+          _updateNotifBadge();
+          const o=document.getElementById('notif-overlay');
+          if(o&&o.style.display==='block')_renderNotifPanel();
+        }
+        try{store.clear()}catch(e){}
+      };
+      g.onerror=()=>{};
+    };
+    r.onerror=()=>{};
+  }catch(e){}
+}
 function toggleNotifPanel(show){
   const o=document.getElementById('notif-overlay');if(!o)return;
   const open=(show===undefined)?o.style.display!=='block':show;

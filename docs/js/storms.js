@@ -2799,6 +2799,36 @@ function _stormTextSummary(s,_b,_sMv,eta){
   }
   return `${icon} ${strength} — ${distStr} to your ${posDir} (${Math.round(s.bearing)}°), ${moveClause}. ${impact}`;
 }
+// v5.97: storm-cell NOTIFICATION text, built from the SAME cross-track (X-TRK)
+// and ETA math the storm cards use (calcStormETAForBriefing + _xtrkTier on the
+// 1.5/6 mi scale) — replacing the old cone-angle "impact %" the alerts used to
+// show. Returns a SHORT line for the phone/browser notification (which
+// truncates) and a FULL, detailed line for the 📢 Notifications log. ETA follows
+// the v5.95 rule: Direct → ETA+clock, Nearby → possible ETA, Passing → none.
+function _stormNotifMsg(storm){
+  let b=null;try{b=calcStormETAForBriefing(storm);}catch(e){}
+  const mv=(typeof getHybridMovement==='function')?getHybridMovement(storm):null;
+  const miss=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
+  const tier=(typeof _xtrkTier==='function')?_xtrkTier(miss):null;
+  const key=tier?tier.key:(miss!=null&&miss<=1.5?'direct':miss!=null&&miss<=6?'nearby':'passing');
+  const label=key==='direct'?'🎯 Direct impact':key==='nearby'?'🟠 Nearby pass':'⚪ Passing wide';
+  const shortTier=key==='direct'?'direct':key==='nearby'?'nearby':'passing';
+  let etaMin=null,arrMs=null;
+  try{const se=storm._eta||calcStormETA(storm);if(se&&se.eta!=null&&se.eta>0){etaMin=Math.max(0,se.eta-radarAgeMin());arrMs=Date.now()+etaMin*60000;}}catch(e){}
+  let etaFull='',etaShort='';
+  if(arrMs&&key==='direct'){etaFull=` — ETA ${formatStormEta(etaMin)} (~${fmtClockShort(new Date(arrMs))})`;etaShort=` · ETA ${formatStormEta(etaMin)}`;}
+  else if(arrMs&&key==='nearby'){etaFull=` — possible ETA ~${fmtClockShort(new Date(arrMs))} (path may shift)`;etaShort=` · ~${fmtClockShort(new Date(arrMs))}`;}
+  const distStr=fmtStormDist(storm.distance);
+  const posDir=degToDir(storm.bearing);
+  const strength=storm._rotation?'Rotating storm':storm.dbz>=65?'Extreme storm':storm.dbz>=60?'Severe storm':storm.dbz>=52?'Strong storm':storm.dbz>=41?'Storm':'Rain cell';
+  const mvClause=(mv&&mv.speed>=2)?`moving ${degToDir(mv.direction)} (${Math.round(mv.direction)}°) at ${S.radarMetric?Math.round(mv.speed*1.60934)+' km/h':mv.speed+' mph'}`:'motion uncertain';
+  const missStr=miss!=null?(S.radarMetric?`, X-TRK ${(miss*1.60934).toFixed(1)} km`:`, X-TRK ${miss.toFixed(1)} mi`):'';
+  const est=(b&&b.estDbzAtUser!=null)?b.estDbzAtUser:null;
+  const rain=(est!=null&&est>=15)?` ${stormCat(est).label} (~${est} dBZ) expected at you.`:(key==='passing'?'':' Little/no rain expected at you.');
+  const full=`🌩️ ${strength} — ${storm.dbz} dBZ, ${distStr} to your ${posDir} (${Math.round(storm.bearing)}°), ${mvClause}. ${label}${missStr}${etaFull}.${rain}`;
+  const short=`🌩️ ${storm.dbz} dBZ ${shortTier} · ${distStr} ${posDir}${etaShort}`;
+  return {short,full,key,etaMin,arrMs,dbz:storm.dbz,dist:storm.distance};
+}
 function _renderTropicalSection() {
   const allSystems = _nhcData.systems;
   if (allSystems === null) {
@@ -3141,9 +3171,10 @@ function _nhcProximityCheck() {
     sessionStorage.setItem(key, '1');
     const dir = (s.lat != null && s.lon != null && S.lat != null && S.lon != null) ? degToDir(bearingDeg(S.lat, S.lon, s.lat, s.lon)) : '';
     const reason = inCone ? 'You are inside the forecast cone!' : `${Math.round(s.dist)} mi${dir ? ' to the ' + dir : ''} from your location`;
-    const msg = `🌀 ${s.type} ${s.name} (${cat.label}) — ${reason}`;
-    toast(msg, 8000);
-    _sendBrowserNotification('Tropical Cyclone Alert', msg);
+    // v5.97: short push text + full detail for the 📢 log; no auto-popping toast.
+    const shortMsg = `🌀 ${s.name} (${cat.label}) — ${inCone ? 'in the forecast cone' : Math.round(s.dist) + ' mi ' + dir}`;
+    const fullMsg = `🌀 ${s.type} ${s.name} (${cat.label}) — ${reason}.`;
+    _sendBrowserNotification('Tropical Cyclone Alert', shortMsg, fullMsg);
   }
   _renderNHCBanner(bannerStorm);
 }

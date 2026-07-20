@@ -3040,10 +3040,17 @@ function _applyStormFilter(storms,f){
     // in-cone keys the cone loop already computed THIS render (O(1) per cell)
     // instead of rebuilding a cone polygon for all ~1500 cells every render —
     // that per-cell cone test made filter changes feel like they didn't refresh.
-    const _ck=(S._coneStats&&Array.isArray(S._coneStats.keys)&&S._coneStats.keys.length&&S._coneStats.scanId===S._stormScanId)?new Set(S._coneStats.keys):null;
-    if(_ck)out=out.filter(s=>_ck.has(stormKey(s)));
-    // else: cone stats not ready this render — leave unfiltered rather than run
-    // the expensive per-cell cone test.
+    // v5.84: gate on whether cone stats were COMPUTED for this scan (scanId match),
+    // NOT on keys.length. An empty key set for the CURRENT scan means "genuinely 0
+    // storms approaching," so filter to empty. Only when the stats predate this scan
+    // (scanId mismatch, e.g. mid-scan) do we leave the list unfiltered rather than
+    // run the expensive per-cell cone test. Previously an empty-but-current cone
+    // left the list UNFILTERED, so "Approaching only" showed EVERY storm (including
+    // receding ones) while the header correctly read "In 0 storm tracks".
+    if(S._coneStats&&Array.isArray(S._coneStats.keys)&&S._coneStats.scanId===S._stormScanId){
+      const _ck=new Set(S._coneStats.keys);
+      out=out.filter(s=>_ck.has(stormKey(s)));
+    }
   }
   S._filterApproachBypassed=!S._coneFocus&&f.approachOnly&&noMv;
   if(f.threatsOnly){
@@ -3424,7 +3431,15 @@ function _renderStormsCore(){
   const _tierOf=s=>{const pm=_missMi(s);if(pm==null||!isFinite(pm))return 'passing';if(pm<=1.5)return 'direct';if(pm<=6)return 'nearby';return 'passing';};
   const _byXtk=(x,y)=>{const mx=_missMi(x),my=_missMi(y);const ax=(mx==null||!isFinite(mx))?999:mx,ay=(my==null||!isFinite(my))?999:my;if(ax!==ay)return ax-ay;return (x.distance||0)-(y.distance||0);};
   const _seenG=new Set();
-  const _fUniq=filtered.filter(s=>{const k=stormKey(s);if(_seenG.has(k))return false;_seenG.add(k);return true;});
+  // v5.84: a storm MOVING AWAY isn't "arriving" — exclude it from the Direct/Nearby/
+  // Passing tiers (and therefore from the inbound badge = gDirect below, and the sat
+  // header's "N inbound"). Its track's perpendicular miss can be <1.5 mi because the
+  // path line threads near you BEHIND its direction of travel, which used to file a
+  // receding cell under "Direct" and inflate "N inbound" even though the card itself
+  // said "moving away · not a threat". These tiers describe storms on a track
+  // TOWARD/PAST you only; receding cells stay visible on the radar + sonar.
+  const _isReceding=s=>{try{if(!s._brief)s._brief=calcStormETAForBriefing(s);return!!(s._brief&&s._brief.classification==='moving_away');}catch(e){return false}};
+  const _fUniq=filtered.filter(s=>{const k=stormKey(s);if(_seenG.has(k))return false;_seenG.add(k);return true;}).filter(s=>!_isReceding(s));
   const gDirect=_fUniq.filter(s=>_tierOf(s)==='direct').sort(_byXtk);
   const gNearby=_fUniq.filter(s=>_tierOf(s)==='nearby').sort(_byXtk);
   const gPassing=_fUniq.filter(s=>_tierOf(s)==='passing').sort(_byXtk);

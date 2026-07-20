@@ -1588,6 +1588,21 @@ function buildTrendSVG(h,info){
   svg+=`<rect x="${PAD_L}" y="${PAD_T}" width="${nowX-PAD_L}" height="${cH}" fill="rgba(148,163,184,0.03)"/>`;
   svg+=`<line x1="${nowX}" y1="${PAD_T-4}" x2="${nowX}" y2="${H-PAD_B}" stroke="rgba(0,229,255,0.5)" stroke-width="1" stroke-dasharray="3,2"/>`;
   svg+=`<text x="${nowX}" y="${PAD_T-6}" fill="#00e5ff" font-size="7" font-weight="700" text-anchor="middle">NOW</text>`;
+  // v5.84: day-boundary lines — a faint vertical rule + weekday label at each local
+  // midnight across the window, so you can tell which day each part of the trend is.
+  {
+    let _pd=null;
+    for(let i=0;i<count;i++){
+      const _d=new Date(h.time[start+i]);
+      const _dk=_d.toDateString();
+      if(_pd!==null&&_dk!==_pd){
+        const dx=PAD_L+(i/(count-1))*cW;
+        svg+=`<line x1="${dx.toFixed(1)}" y1="${PAD_T}" x2="${dx.toFixed(1)}" y2="${H-PAD_B}" stroke="rgba(148,163,184,0.22)" stroke-width="0.75" stroke-dasharray="2,2"/>`;
+        svg+=`<text x="${(dx+2).toFixed(1)}" y="${(PAD_T+7).toFixed(1)}" fill="#7c8aa0" font-size="6" font-weight="700">${_d.toLocaleDateString(undefined,{weekday:'short'})}</text>`;
+      }
+      _pd=_dk;
+    }
+  }
   const groups=new Map();
   sel.forEach(s=>{const g=s.group||s.id;if(!groups.has(g))groups.set(g,[]);groups.get(g).push(s)});
   const groupKeys=[...groups.keys()];
@@ -3038,6 +3053,22 @@ function renderRainForecastBars(){
     xTicks+=`<line x1="${x.toFixed(1)}" y1="${baseY}" x2="${x.toFixed(1)}" y2="${baseY+3}" stroke="#5a6a7e" stroke-width="1"/>`;
     xTicks+=`<text x="${x.toFixed(1)}" y="${(baseY+13).toFixed(1)}" fill="#9fb3c8" font-size="8" text-anchor="${th===48?'end':'middle'}">${lbl}</text>`;
   }
+  // v5.84: day-boundary lines — a faint vertical rule + weekday label at each local
+  // midnight across the 48 h span, so the days are readable at a glance.
+  let dayLines='';
+  {
+    let _pd=null;
+    for(let i=0;i<slots.length;i++){
+      const _d=new Date(slots[i].t);
+      const _dk=_d.toDateString();
+      if(_pd!==null&&_dk!==_pd){
+        const dx=padL+i*barW;
+        dayLines+=`<line x1="${dx.toFixed(1)}" y1="${padT}" x2="${dx.toFixed(1)}" y2="${(padT+innerH).toFixed(1)}" stroke="#3a4a5e" stroke-width="0.75" stroke-dasharray="2,2" opacity="0.85"/>`;
+        dayLines+=`<text x="${(dx+2).toFixed(1)}" y="${(padT+7).toFixed(1)}" fill="#7c8aa0" font-size="6.5" font-weight="700">${_d.toLocaleDateString(undefined,{weekday:'short'})}</text>`;
+      }
+      _pd=_dk;
+    }
+  }
   const maxLbl=(typeof fmtPrecip==='function')?fmtPrecip(maxMm):(maxMm.toFixed(2)+' mm');
   const totalLbl=(typeof fmtPrecip==='function')?fmtPrecip(total):(total.toFixed(2)+' mm');
   const peakBadge=`<text x="${W-padR}" y="10" fill="#9fb3c8" font-size="8" text-anchor="end">peak ${maxLbl}/hr</text>`;
@@ -3053,7 +3084,7 @@ function renderRainForecastBars(){
       </div>
       <div style="display:flex;justify-content:center">
         <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:340px;height:auto" xmlns="http://www.w3.org/2000/svg">
-          ${gridLines}${empty?'':peakBadge}${bars}${axisLine}${xTicks}${yLabels}
+          ${gridLines}${dayLines}${empty?'':peakBadge}${bars}${axisLine}${xTicks}${yLabels}
           ${empty?`<text x="${(W/2).toFixed(1)}" y="${(padT+innerH/2).toFixed(1)}" fill="var(--text-secondary)" font-size="9" text-anchor="middle">No measurable rain forecast</text>`:''}
         </svg>
       </div>

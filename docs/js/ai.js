@@ -359,7 +359,11 @@ function buildWeatherContext(){
   // (rain-until time, expected amount, upcoming windows, nearest precipitation).
   try{
     const rc=S._rainClockData;
-    if(rc&&rc.ready&&Array.isArray(rc.windows)){
+    if(rc&&rc.awaitingMotion){
+      // v5.82: dial is holding until the scan resolves storm motion — don't let
+      // the AI fill the gap with "no rain expected" or a raining-now claim.
+      parts.push(`\nRAIN NOWCAST (Rain Clock): scan is still resolving storm motion, so the dial isn't projecting yet — do NOT state rain timing or claim it's raining/dry right now; say the nowcast is still coming up.`);
+    }else if(rc&&rc.ready&&Array.isArray(rc.windows)){
       const now=Date.now();
       const _rcClock=(min)=>fmtClock(new Date(now+min*60000));
       parts.push(`\nRAIN NOWCAST (Rain Clock — the projection shown on the app's Rain Clock dial; radar-derived nowcast blended with the hourly forecast):`);

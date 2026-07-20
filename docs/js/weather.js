@@ -2441,6 +2441,30 @@ function _rainClockProject(){
     const tOut=Math.min(_fcSpan,Math.ceil(f.end));
     for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}
   }
+  // === v5.82: hold the dial blank until storm MOTION is known. On first load a
+  // quick pre-winds-aloft scan can drop a transient echo inside the user's ~1.5 mi
+  // hex (the rainOverUserNow oracle → "rain right over you · 1 mi ENE") that the
+  // NEXT scan corrects to the real cell (e.g. "2 mi S") once the winds-aloft
+  // steering (S.stormMovement) resolves. Rather than paint that walk-back, suppress
+  // the radar projection (arcs, nearest, summary) while motion is still pending and
+  // show a "determining storm motion" state instead — this is exactly the ask:
+  // nothing until the scan finishes WITH a movement direction. Bounded by the SAME
+  // 30 s budget ensureWindsAloft uses (+2 s slack) so a winds-aloft OUTAGE can't
+  // freeze the dial — after that we fall back to the (honestly footnoted)
+  // projection. Motion is cached ~30 min, so this only bites the initial load and
+  // right after a location change (both reset S.stormMovement). Forecast-only dials
+  // (no radar yet) are NOT gated — they don't depend on motion and are already
+  // labelled as forecast. ===
+  const _motionKnown=(S.stormMovement!=null);
+  const _radarRain=out.radarReady&&(out.rainingNow||out.nearest!=null||out.windows.length>0);
+  if(_radarRain&&!_motionKnown){if(S._rcAwaitSince==null)S._rcAwaitSince=Date.now();}
+  else S._rcAwaitSince=null;
+  out.awaitingMotion=(S._rcAwaitSince!=null)&&((Date.now()-S._rcAwaitSince)<32000);
+  if(out.awaitingMotion){
+    const _z=(out.span||_RC_TOTAL_MIN)+1;
+    out.windows=[];out.minutes=new Array(_z).fill(0);out.fcMinutes=new Array(_z).fill(0);
+    out.fcReady=false;out.nearest=null;out.rainingNow=false;out.totalMm=0;out.forecast=false;
+  }
   out.ready=true;
   return out;
 }
@@ -2454,6 +2478,11 @@ function renderRainClock(){
   if(!el)return;
   const data=_rainClockProject();
   S._rainClockData=data;
+  // v5.82: while holding for storm motion, poll a re-render so the dial lifts the
+  // hold the instant winds-aloft/motion resolves (or the grace window elapses),
+  // even if no scan fires in between. Self-cancels once we're no longer waiting.
+  if(data.awaitingMotion){if(!S._rcAwaitTimer)S._rcAwaitTimer=setTimeout(()=>{S._rcAwaitTimer=null;try{renderRainClock()}catch(e){}},2000);}
+  else if(S._rcAwaitTimer){clearTimeout(S._rcAwaitTimer);S._rcAwaitTimer=null;}
   // v4.48 geometry rework: dial canvas grew from 320 to 360 so the hour
   // labels can live OUTSIDE the dial circle (between R_OUTER and the viewBox
   // edge) instead of competing with the rain arc on the dial face. The arc
@@ -2583,6 +2612,7 @@ function renderRainClock(){
   let centerLines=[];
   if(data.noLoc){centerLines=['Location','needed'];_phrases.push({title:'Location needed',body:'Allow location access or pick a spot manually so the Rain Clock can pull forecast and radar for you.'});}
   else if(data.loading){centerLines=['Loading','rain forecast…'];_phrases.push({title:'Loading…',body:'Pulling forecast and radar — give it a few seconds.'});}
+  else if(data.awaitingMotion){centerLines=['Scanning…','storm motion'];_phrases.push({title:'Determining storm motion',body:'Holding the projection until the scan resolves which way the storms are moving — so a nearby echo isn\'t shown as if it were right over you, then corrected a moment later.'});}
   else if(!data.windows.length){
     if(_omPart){centerLines=['Waiting on','Open-Meteo…'];_phrases.push({title:'Waiting on Open-Meteo',body:'Forecast service is slow or unreachable right now. The Rain Clock will fill in as soon as data arrives.'});}
     else if(data.stale&&!data.forecastReady){centerLines=['Radar stale','run a scan'];_phrases.push({title:'Radar is stale',body:'Run a fresh scan to update the Rain Clock with the latest radar.'});}
@@ -2708,7 +2738,7 @@ function renderRainClock(){
     sub=`<div style="font-size:0.7em;color:var(--text-secondary);text-align:center;margin-top:6px"><span style="color:var(--text-muted)">Nearest Precipitation:</span> <strong>${dStr}</strong> to the ${data.nearest.dir}${etaTxt}</div>`;
   }
   let foot='';
-  if(data.motionUnknown&&data.radarReady){
+  if(data.motionUnknown&&data.radarReady&&!data.awaitingMotion){
     foot=`<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px;font-style:italic">Motion unknown — radar projection limited</div>`;
   }
   const hasClickable=data.ready&&data.windows.some(w=>w.cells&&w.cells.length);

@@ -582,6 +582,9 @@ function refreshStormViewsForWinds(){
   if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
   if(S.map&&S._showPathArrows&&typeof buildPathArrows==='function')buildPathArrows(S.map);
   if(typeof updateThreatTicker==='function')updateThreatTicker();
+  // v5.82: winds aloft just resolved storm motion — re-render the Rain Clock so it
+  // lifts its "determining storm motion" hold and shows the real projection now.
+  if(typeof renderRainClock==='function')renderRainClock();
 }
 // v4.76: blocking winds-aloft GATE. Storm steering, movement vectors, ETAs,
 // cones and the Rain Clock all depend on winds aloft. The startup scan used to

@@ -2048,7 +2048,7 @@ function plotNWSWarningPolygons(map) {
 // ==========================================
 // NHC TROPICAL CYCLONE TRACKING
 // ==========================================
-const _nhcData = { systems: null, forecast: null, cones: null, windRadii: null, _lastFetch: 0 };
+const _nhcData = { systems: null, forecast: null, cones: null, windRadii: null, fcstPoints: null, _lastFetch: 0 };
 S._nhcTrackLayers = [];
 S._nhcSelectedStorm = null;
 S._showNHCTracks = (() => { try { const v = localStorage.getItem('st_nhc_tracks'); return v === null ? true : v === '1'; } catch(e) { return true; } })();
@@ -2112,16 +2112,18 @@ async function fetchNHCData() {
   }
   _nhcData._lastFetch = now;
   try {
-    const [gisRes, rssRes, surgeRes, jtwcRes] = await Promise.allSettled([
+    const [gisRes, rssRes, surgeRes, jtwcRes, gdacsRes] = await Promise.allSettled([
       _fetchNHCGIS(),
       _fetchNHCActiveStorms(),
       fetch('https://www.nhc.noaa.gov/CurrentSurges.json', { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-      _fetchJTWCStorms()
+      _fetchJTWCStorms(),
+      _fetchGDACSStorms()
     ]);
     const gis = gisRes.status === 'fulfilled' ? gisRes.value : null;
     const rssStorms = rssRes.status === 'fulfilled' ? rssRes.value : [];
     const surgeData = surgeRes.status === 'fulfilled' ? surgeRes.value : null;
     const jtwcStorms = jtwcRes.status === 'fulfilled' ? jtwcRes.value : [];
+    const gdacsStorms = gdacsRes.status === 'fulfilled' ? gdacsRes.value : [];
     let storms = [];
     if (gis && gis.positions && gis.positions.length) {
       storms = gis.positions;
@@ -2158,10 +2160,52 @@ async function fetchNHCData() {
         if (!dup) storms.push(js);
       }
     }
+    // ── GDACS merge (v5.86): match each GDACS event to a known storm by name
+    // (GDACS "FAUSTO-26" → "Fausto") or proximity (<300 mi), then fill the gaps:
+    // movement dir/speed + past-track history for EVERY storm, plus cone +
+    // forecast track for storms NHC's ArcGIS doesn't cover (JTWC basins) — which
+    // also lights up IN-CONE detection and "Tap for forecast track" globally.
+    _nhcData.history = [];
+    _nhcData.fcstPoints = [];
+    const _normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const _attachGdacsGeo = (gd, stormId, stormName) => {
+      const sid = stormId || '', sname = (stormName || '').toLowerCase();
+      if (gd.histTrack && gd.histTrack.length >= 2) _nhcData.history.push({ stormId: sid, stormName: stormName || '', coords: gd.histTrack, _src: 'gdacs' });
+      if (gd.fcstPoints && gd.fcstPoints.length) _nhcData.fcstPoints.push({ stormId: sid, stormName: stormName || '', pts: gd.fcstPoints, _src: 'gdacs' });
+      const hasCone = (_nhcData.cones || []).some(c => (sid && c.stormId === sid) || (c.stormName && sname && c.stormName.toLowerCase() === sname));
+      if (!hasCone && gd.cone && gd.cone.length >= 3) _nhcData.cones.push({ stormId: sid, stormName: stormName || '', coords: gd.cone, forecastPeriod: '120', _src: 'gdacs' });
+      const hasTrack = (_nhcData.forecast || []).some(t => (sid && t.stormId === sid) || (t.stormName && sname && t.stormName.toLowerCase() === sname));
+      if (!hasTrack && gd.fcstTrack && gd.fcstTrack.length >= 2) _nhcData.forecast.push({ stormId: sid, stormName: stormName || '', coords: gd.fcstTrack, forecastPeriod: '120', _src: 'gdacs' });
+    };
+    for (const gd of gdacsStorms) {
+      let match = storms.find(s => _normName(s.name) === _normName(gd.name));
+      // proximity fallback kept TIGHT (~2° / 150 mi) so a Fujiwhara pair or two
+      // same-basin storms can't cross-match; feed position lag stays well inside
+      if (!match && gd.lat != null) match = storms.find(s => s.lat != null && haversine(s.lat, s.lon, gd.lat, gd.lon) < 150);
+      if (match) {
+        match._gdacs = { alertlevel: gd.alertlevel, eventid: gd.eventid, reportUrl: gd.reportUrl, countries: gd.countries };
+        if (!match.maxWind && gd.maxWind) match.maxWind = gd.maxWind;
+        if (!match.moveDir && gd.moveDir) { match.moveDir = gd.moveDir; match.moveSpeed = gd.moveSpeed; match._moveSrc = 'gdacs'; }
+        _attachGdacsGeo(gd, match.id, match.name);
+      } else if (gd.lat != null) {
+        // a current storm no other feed reported — carry it from GDACS alone
+        const tt = gd.typeText || '';
+        const type = /hurricane|typhoon|cyclone.*(hurricane|typhoon)/i.test(tt) ? 'Hurricane' : /storm/i.test(tt) ? 'Tropical Storm' : 'Tropical Depression';
+        const ns = {
+          id: 'GDACS_' + gd.eventid, name: gd.name, type, basin: '',
+          lat: gd.lat, lon: gd.lon, maxWind: gd.maxWind, gusts: null,
+          minPressure: null, category: null, moveDir: gd.moveDir, moveSpeed: gd.moveSpeed,
+          dist: null, link: gd.reportUrl, surgeData: null, _source: 'gdacs',
+          _gdacs: { alertlevel: gd.alertlevel, eventid: gd.eventid, reportUrl: gd.reportUrl, countries: gd.countries }
+        };
+        storms.push(ns);
+        _attachGdacsGeo(gd, ns.id, ns.name);
+      }
+    }
     _nhcData.systems = storms;
     _nhcData.surgeRaw = surgeData;
     _recomputeNHCUserFields();
-    console.log('[NHC+JTWC] Tropical systems:', storms.length, 'NHC tracks:', (_nhcData.forecast||[]).length, 'cones:', (_nhcData.cones||[]).length, 'JTWC:', jtwcStorms.length);
+    console.log('[NHC+JTWC+GDACS] Tropical systems:', storms.length, 'tracks:', (_nhcData.forecast||[]).length, 'cones:', (_nhcData.cones||[]).length, 'history:', (_nhcData.history||[]).length, 'JTWC:', jtwcStorms.length, 'GDACS:', gdacsStorms.length);
   } catch (e) {
     console.log('[NHC] Fetch error:', e.message);
     if (!_nhcData.systems) _nhcData.systems = [];
@@ -2387,6 +2431,131 @@ async function _fetchJTWCStorms() {
   }
   return storms;
 }
+// ── GDACS (Global Disaster Alert & Coordination System — EU/UN, gdacs.org) ────
+// v5.86: free, no key, CORS-open. ONE list call returns every CURRENT tropical
+// cyclone worldwide WITH its geometry embedded per event: the uncertainty cone
+// (Class "Poly_Cones"), track segments ("Line_Line_N", polygonlabel = intensity
+// like "TD"/"TS"), timestamped positions ("Point_Polygon_Point_N", polygonlabel
+// like "20/07 03:00 UTC" — small circle POLYGONS we reduce to centroids), wind
+// polygons ("Poly_Green/Orange/Red" = 60/90/120 km/h) and "Point_Centroid".
+// Used to (1) gap-fill cone + track for storms NHC's ArcGIS doesn't cover —
+// JTWC basins: W. Pacific typhoons, Indian Ocean, S. Hemisphere — so IN-CONE
+// detection and "Tap for forecast track" work globally, (2) attach the GDACS
+// humanitarian alert level (Green/Orange/Red) to every matched storm, and
+// (3) catch any current storm the NHC/JTWC feeds missed. NOTE: the per-event
+// "details" endpoint (geteventdata) does NOT return JSON — never fetch it.
+async function _fetchGDACSStorms() {
+  const out = [];
+  try {
+    const res = await fetch('https://www.gdacs.org/gdacsapi/api/events/geteventlist/MAP?eventtypes=TC', { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) return out;
+    const data = await res.json();
+    const byEvent = {};
+    for (const f of (data.features || [])) {
+      const p = f.properties || {};
+      if (String(p.iscurrent).toLowerCase() !== 'true') continue;
+      const id = p.eventid;
+      if (id == null) continue;
+      const ev = byEvent[id] || (byEvent[id] = { eventid: id, props: null, lat: null, lon: null, cone: null, lines: [], points: [] });
+      const cls = String(p.Class || p.class || '');
+      const g = f.geometry || {};
+      let m;
+      if (cls === 'Point_Centroid' && g.type === 'Point' && Array.isArray(g.coordinates)) {
+        ev.lat = g.coordinates[1]; ev.lon = g.coordinates[0]; ev.props = p;
+      } else if (cls === 'Poly_Cones' && g.type === 'Polygon' && g.coordinates && g.coordinates[0]) {
+        ev.cone = g.coordinates[0];
+      } else if ((m = cls.match(/^Line_Line_(\d+)$/)) && g.type === 'LineString' && Array.isArray(g.coordinates)) {
+        ev.lines.push({ idx: +m[1], coords: g.coordinates });
+      } else if ((m = cls.match(/^Point_Polygon_Point_(\d+)$/)) && g.type === 'Polygon' && g.coordinates && g.coordinates[0]) {
+        const ring = g.coordinates[0];
+        if (ring.length) {
+          let sx = 0, sy = 0;
+          for (const c of ring) { sx += c[0]; sy += c[1]; }
+          ev.points.push({ idx: +m[1], lon: sx / ring.length, lat: sy / ring.length, label: p.polygonlabel || '' });
+        }
+      }
+      if (!ev.props) ev.props = p;
+    }
+    for (const id in byEvent) {
+      const ev = byEvent[id];
+      const p = ev.props || {};
+      const rawName = String(p.eventname || '').replace(/-\d+$/, '').trim();
+      const name = rawName ? rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase() : ('TC-' + id);
+      const sev = p.severitydata || {};
+      const maxWind = sev.severity ? Math.round(sev.severity * 0.621371) : null; // km/h → mph
+      ev.lines.sort((a, b) => a.idx - b.idx);
+      ev.points.sort((a, b) => a.idx - b.idx);
+      // stitch ordered track segments into one polyline (drop duplicated joints)
+      let track = [];
+      for (const ln of ev.lines) {
+        let cs = ln.coords || [];
+        if (track.length && cs.length) {
+          const last = track[track.length - 1], first = cs[0];
+          if (last[0] === first[0] && last[1] === first[1]) cs = cs.slice(1);
+        }
+        track = track.concat(cs);
+      }
+      // Timestamped fixes → split PAST (history) vs FUTURE (forecast) at "now",
+      // and derive movement direction + speed from the two most recent past
+      // fixes (GDACS carries what NHC ArcGIS/JTWC RSS often omit).
+      const nowT = Date.now();
+      const pts = ev.points.map(pt => ({ lat: pt.lat, lon: pt.lon, label: pt.label, t: _parseGdacsPtTime(pt.label) }));
+      const past = pts.filter(pt => pt.t != null && pt.t <= nowT).sort((a, b) => a.t - b.t);
+      const future = pts.filter(pt => pt.t != null && pt.t > nowT).sort((a, b) => a.t - b.t);
+      let moveDir = null, moveSpeed = null;
+      if (past.length >= 2) {
+        const a = past[past.length - 2], b = past[past.length - 1];
+        const hrs = (b.t - a.t) / 3600000;
+        const mi = haversine(a.lat, a.lon, b.lat, b.lon);
+        if (hrs >= 0.5 && mi > 0.5) {
+          moveSpeed = Math.round(mi / hrs);
+          moveDir = degToDir(bearingDeg(a.lat, a.lon, b.lat, b.lon));
+        }
+      }
+      // history polyline: past fixes → current centroid; forecast polyline:
+      // current centroid → future fixes. Falls back to the raw stitched track
+      // as forecast when the point labels didn't parse.
+      const histTrack = past.map(pt => [pt.lon, pt.lat]);
+      if (ev.lat != null && histTrack.length) {
+        const lastH = histTrack[histTrack.length - 1];
+        if (lastH[0] !== ev.lon || lastH[1] !== ev.lat) histTrack.push([ev.lon, ev.lat]);
+      }
+      let fcstTrack = future.map(pt => [pt.lon, pt.lat]);
+      if (fcstTrack.length) {
+        if (ev.lat != null) fcstTrack.unshift([ev.lon, ev.lat]);
+        else if (past.length) fcstTrack.unshift([past[past.length - 1].lon, past[past.length - 1].lat]);
+      }
+      if (!histTrack.length && !fcstTrack.length && track.length >= 2) fcstTrack = track;
+      out.push({
+        eventid: ev.eventid, name,
+        lat: ev.lat, lon: ev.lon, maxWind,
+        typeText: sev.severitytext || '',
+        alertlevel: p.alertlevel || 'Green',
+        countries: (Array.isArray(p.affectedcountries) ? p.affectedcountries : []).map(c => c && c.countryname).filter(Boolean),
+        reportUrl: (p.url && p.url.report) || null,
+        moveDir, moveSpeed,
+        cone: ev.cone, histTrack, fcstTrack, fcstPoints: pts
+      });
+    }
+  } catch (e) {
+    console.log('[GDACS] Fetch error:', e.message);
+  }
+  return out;
+}
+// GDACS point labels look like "20/07 03:00 UTC" (day/month). Resolve to a Date
+// using whichever year lands the timestamp closest to now (handles New Year).
+function _parseGdacsPtTime(label) {
+  const m = String(label || '').match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const yr = new Date().getUTCFullYear();
+  let best = null;
+  for (const y of [yr - 1, yr, yr + 1]) {
+    const t = Date.UTC(y, +m[2] - 1, +m[1], +m[3], +m[4]);
+    if (best == null || Math.abs(t - Date.now()) < Math.abs(best - Date.now())) best = t;
+  }
+  return best;
+}
+const _GDACS_LEVEL_COLORS = { Green: '#22c55e', Orange: '#f97316', Red: '#ef4444' };
 // ── Projected ("Future:") name for an UNNAMED depression ──────────────────────
 // NHC labels a depression "Tropical Depression <Number>" until it reaches
 // tropical-storm strength, when it takes the next name on the season's list. The
@@ -2614,7 +2783,7 @@ function _renderTropicalSection() {
   if (!allSystems.length) {
     return `<div class="card mt-12"><div class="card-title"><span class="icon">🌀</span> Tropical Cyclones</div>
       <div style="text-align:center;padding:16px;color:var(--accent-green);font-size:0.8em">✅ No active tropical systems</div>
-      <div style="font-size:0.6em;color:var(--text-muted);text-align:center;padding:0 8px 8px">Data: NHC + JTWC · ArcGIS + RSS</div></div>`;
+      <div style="font-size:0.6em;color:var(--text-muted);text-align:center;padding:0 8px 8px">Data: NHC + JTWC + GDACS</div></div>`;
   }
   let html = `<div class="card mt-12"><div class="card-title flex-between"><span><span class="icon">🌀</span> Tropical Cyclones (${systems.length}${S._nhcRegionFilter !== 'all' ? '/' + allSystems.length : ''})</span><label style="display:flex;align-items:center;gap:4px;font-size:0.65em;font-weight:500;color:var(--text-muted);cursor:pointer"><span>Map</span><input type="checkbox" ${S._showNHCTracks ? 'checked' : ''} onchange="toggleNHCTracks(this.checked)" class="accent-cyan-check"></label></div>`;
   html += `<div style="display:flex;gap:4px;margin-bottom:8px;padding:0 4px;flex-wrap:wrap;overflow-x:auto">${regionPills}</div>`;
@@ -2649,6 +2818,7 @@ function _renderTropicalSection() {
             <span style="font-size:0.7em;color:${cat.color};font-weight:700">${cat.label}${cat.num >= 1 ? ' (Category ' + cat.num + ')' : ''}</span>
             ${_futureStormName(s) ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:rgba(120,200,255,0.12);color:var(--accent-cyan);font-weight:700">Future: ${_futureStormName(s)}</span>` : ''}
             ${status ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${status.bg};color:${status.color};font-weight:700">${status.text}</span>` : ''}
+            ${s._gdacs ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${(_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e')}20;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700" title="GDACS humanitarian impact alert level">GDACS ${s._gdacs.alertlevel.toUpperCase()}</span>` : ''}
           </div>
         </div>
         <div style="text-align:right;font-size:0.75em">
@@ -2661,13 +2831,13 @@ function _renderTropicalSection() {
         ${s.minPressure != null ? `<div class="text-center-box"><div class="tile-label-upper" style="letter-spacing:normal">Pressure</div><div style="font-size:0.9em;font-weight:700;color:var(--text-primary)">${s.minPressure} mb</div></div>` : ''}
         ${s.moveDir ? `<div class="text-center-box"><div class="tile-label-upper" style="letter-spacing:normal">Movement</div><div style="font-size:0.9em;font-weight:700;color:var(--text-primary)">${s.moveDir}${s.moveSpeed ? ' ' + s.moveSpeed + ' mph' : ''}</div></div>` : ''}
       </div>
-      ${s.lat != null ? `<div style="font-size:0.65em;color:var(--text-muted);margin-top:4px">📍 ${Math.abs(s.lat).toFixed(1)}°${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(1)}°${s.lon >= 0 ? 'E' : 'W'} · ${(_STORM_REGIONS.find(r => r.id === s._region) || {}).label || s.basin}${s._source === 'jtwc' ? ' (JTWC)' : ''}${hasForecast ? ' · <span class="c-cyan">Tap for forecast track</span>' : ''}</div>` : ''}
+      ${s.lat != null ? `<div style="font-size:0.65em;color:var(--text-muted);margin-top:4px">📍 ${Math.abs(s.lat).toFixed(1)}°${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(1)}°${s.lon >= 0 ? 'E' : 'W'} · ${(_STORM_REGIONS.find(r => r.id === s._region) || {}).label || s.basin}${s._source === 'jtwc' ? ' (JTWC)' : s._source === 'gdacs' ? ' (GDACS)' : ''}${hasForecast ? ' · <span class="c-cyan">Tap for forecast track</span>' : ''}</div>` : ''}
     </div>`;
   });
   html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px 2px">
     <div class="flex-center-gap4"><span class="text-hint">Alert radius:</span>
       <select onchange="setNHCProxRadius(this.value)" style="font-size:0.6em;padding:1px 4px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:4px">${[100,200,300,500,750,1000].map(r=>`<option value="${r}"${r===S._nhcProxRadius?' selected':''}>${r} mi</option>`).join('')}</select></div>
-    <span class="text-hint">NHC + JTWC · 15-min</span></div></div>`;
+    <span class="text-hint">NHC + JTWC + GDACS · 15-min</span></div></div>`;
   return html;
 }
 function setNHCProxRadius(val) {
@@ -2744,6 +2914,38 @@ function plotNHCTracks(map) {
     line.addTo(map);
     S._nhcTrackLayers.push(line);
   }
+  // v5.86: PAST track (history) from GDACS — solid muted trail behind the storm
+  for (const hist of (_nhcData.history || [])) {
+    if (!_isStormVisible(hist.stormId, hist.stormName)) continue;
+    if (!showAll && hist.stormName.toLowerCase() !== selectedName?.toLowerCase() && hist.stormId !== selectedName) continue;
+    if (!hist.coords || hist.coords.length < 2) continue;
+    const storm = (_nhcData.systems || []).find(s => s.id === hist.stormId || s.name.toLowerCase() === hist.stormName.toLowerCase());
+    const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
+    const line = L.polyline(hist.coords.map(c => [c[1], c[0]]), {
+      color: cat.color || '#9333EA', weight: 2, opacity: 0.5, interactive: false
+    });
+    line.addTo(map);
+    S._nhcTrackLayers.push(line);
+  }
+  // v5.86: timestamped position fixes (GDACS) — dots shown for the SELECTED
+  // storm only (past = grey, forecast = cyan); tap a dot for its date/time.
+  if (selectedName) {
+    for (const fp of (_nhcData.fcstPoints || [])) {
+      if (fp.stormName.toLowerCase() !== selectedName.toLowerCase() && fp.stormId !== selectedName) continue;
+      const nowT = Date.now();
+      for (const pt of (fp.pts || [])) {
+        if (pt.lat == null || pt.lon == null) continue;
+        const future = pt.t != null && pt.t > nowT;
+        const dot = L.circleMarker([pt.lat, pt.lon], {
+          radius: 3.5, color: future ? '#22d3ee' : '#94a3b8',
+          fillColor: future ? '#22d3ee' : '#94a3b8', fillOpacity: 0.85, weight: 1
+        });
+        if (pt.label) dot.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center"><b>${future ? 'Forecast' : 'Past'} position</b><br>${escHtml(pt.label)}</div>`);
+        dot.addTo(map);
+        S._nhcTrackLayers.push(dot);
+      }
+    }
+  }
   for (const s of filtered) {
     if (s.lat == null || s.lon == null) continue;
     const cat = s.category || _saffirSimpson(s.maxWind);
@@ -2763,6 +2965,7 @@ function plotNHCTracks(map) {
       ${s.maxWind ? `<div style="font-size:0.8em;margin-top:4px">💨 Max Wind: <b>${s.maxWind} mph</b>${s.gusts ? ' (G' + s.gusts + ')' : ''}</div>` : ''}
       ${s.minPressure ? `<div class="text-sm">🔵 Pressure: <b>${s.minPressure} mb</b></div>` : ''}
       ${s.moveDir ? `<div class="text-sm">➡️ Moving: <b>${s.moveDir} ${s.moveSpeed || ''} mph</b></div>` : ''}
+      ${s._gdacs ? `<div style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">GDACS impact: ${s._gdacs.alertlevel}</div>` : ''}
       ${s.dist != null ? `<div style="font-size:0.75em;color:#aaa;margin-top:4px">${Math.round(s.dist)} mi from you</div>` : ''}
       <div style="margin-top:6px"><a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">Show forecast track →</a></div>
     </div>`);

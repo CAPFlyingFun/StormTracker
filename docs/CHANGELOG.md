@@ -3,6 +3,19 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v5.86
+
+  **GDACS tropical source: movement direction/speed + past-track history for every storm, global cones.**
+
+  - New `_fetchGDACSStorms()` (storms.js): one CORS-open, no-key call to `gdacs.org/gdacsapi/api/events/geteventlist/MAP?eventtypes=TC` returns every current tropical cyclone worldwide with geometry embedded per event. Features are grouped by `eventid` (filtered to `iscurrent === "true"`) and classified by `properties.Class`: `Point_Centroid` (position + props), `Poly_Cones` (uncertainty cone), `Line_Line_N` (track segments), `Point_Polygon_Point_N` (timestamped position fixes — small circle polygons reduced to centroids, label like `"20/07 03:00 UTC"`). The per-event `geteventdata` detail endpoint is NOT JSON — never fetched.
+  - Movement derived from the two most recent PAST fixes (`haversine`/`bearingDeg`, guarded ≥0.5 h and >0.5 mi): fills `moveDir`/`moveSpeed` for any storm missing them (JTWC RSS and NHC ArcGIS often omit these) — `_moveSrc:'gdacs'`.
+  - History vs forecast split at "now" using `_parseGdacsPtTime()` (day/month labels resolved to the year landing closest to now, handles New Year): past fixes → `_nhcData.history` polylines (solid muted trail in storm color), future fixes → forecast. Position dots render for the SELECTED storm only (grey = past, cyan = future; popup shows the fix time).
+  - Merge in `fetchNHCData` (5th `Promise.allSettled` entry): match by normalized name (`FAUSTO-26` → `Fausto`) or <300 mi proximity; attaches `_gdacs{alertlevel,eventid,reportUrl,countries}`, gap-fills `maxWind`, cone + forecast track ONLY for storms lacking NHC/JTWC graphics (strict non-empty id/name match, mirroring `_isUserInCone`) — so in-cone detection and "Tap for forecast track" now work in JTWC basins (W. Pacific, Indian Ocean, S. Hemisphere). Unmatched GDACS events become new storms (`id: GDACS_<eventid>`, `_source:'gdacs'`).
+  - UI: GDACS alert-level badge (Green/Orange/Red) on tropical cards + popups; `(GDACS)` source tag; footers now read "NHC + JTWC + GDACS".
+  - Known parity gap: the push scanner (`scanner/tropical.js`) still only knows NHC cones — a W. Pacific in-app IN CONE won't have a matching push. Possible follow-up.
+  - Sources evaluated and rejected: xweather (paid key), tidetech (key required), pocketworld (CORS header absent despite docs, thin data), weather-mcp (AI wrapper of weather.gov, not a feed), cyclocane (website, no API).
+  - Cache: `?v=683`, SW `stormtracker-v683`.
+
   ## v5.69
 
   **Real lightning strikes (WarPulse) — live observed data on map + sonar.**

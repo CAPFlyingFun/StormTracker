@@ -2876,6 +2876,9 @@ function toggleNHCTracks(on) {
   toast(on ? 'Hurricane tracks shown on map' : 'Hurricane tracks hidden');
 }
 function plotNHCTracks(map) {
+  // v5.87: generation counter — the async ST Model draw checks this so a slow
+  // model run can never paint onto a map that has since been re-plotted.
+  S._nhcPlotGen = (S._nhcPlotGen || 0) + 1;
   S._nhcTrackLayers.forEach(l => { try { map.removeLayer(l); } catch(e) {} });
   S._nhcTrackLayers = [];
   if (!S._showNHCTracks || !_nhcData.systems || !_nhcData.systems.length) return;
@@ -2945,6 +2948,10 @@ function plotNHCTracks(map) {
         S._nhcTrackLayers.push(dot);
       }
     }
+    // v5.87: ST Model — StormTracker's own BAM-style steering track for the
+    // selected storm (tropical-model.js). Async; guarded by S._nhcPlotGen.
+    const _selStorm = (_nhcData.systems || []).find(s => s.id === selectedName || (s.name || '').toLowerCase() === String(selectedName).toLowerCase());
+    if (_selStorm && typeof drawSTModelTrack === 'function') drawSTModelTrack(_selStorm, map);
   }
   for (const s of filtered) {
     if (s.lat == null || s.lon == null) continue;

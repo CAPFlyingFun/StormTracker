@@ -34,16 +34,56 @@ function pointInRing(lon, lat, ring) {
   return inside;
 }
 
+// v5.92: GDACS (EU/UN, keyless) joins NHC so background push covers the SAME
+// global cones the app shows (typhoons, Indian Ocean, Southern Hemisphere) —
+// closing the "in cone in-app but no push" gap. GDACS storms are merged INTO
+// the same systems list, so they inherit the existing per-location cooldowns,
+// re-notify cadence and track→cone escalation — no new alert paths. Mirrors
+// the client parse in docs/js/storms.js _fetchGDACSStorms (minimal subset).
+const _normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function _parseGdacsMin(data) {
+  const byEvent = {};
+  for (const f of ((data && data.features) || [])) {
+    const p = f.properties || {};
+    if (String(p.iscurrent).toLowerCase() !== 'true') continue;
+    const id = p.eventid;
+    if (id == null) continue;
+    const ev = byEvent[id] || (byEvent[id] = { eventid: id, props: null, lat: null, lon: null, cone: null });
+    const cls = String(p.Class || p.class || '');
+    const g = f.geometry || {};
+    if (cls === 'Point_Centroid' && g.type === 'Point' && Array.isArray(g.coordinates)) {
+      ev.lat = g.coordinates[1]; ev.lon = g.coordinates[0]; ev.props = p;
+    } else if (cls === 'Poly_Cones' && g.type === 'Polygon' && g.coordinates && g.coordinates[0]) {
+      ev.cone = g.coordinates[0]; // [[lon,lat],...] — same shape pointInRing expects
+    }
+    if (!ev.props) ev.props = p;
+  }
+  const out = [];
+  for (const id in byEvent) {
+    const ev = byEvent[id];
+    if (ev.lat == null) continue;
+    const p = ev.props || {};
+    const rawName = String(p.eventname || '').replace(/-\d+$/, '').trim();
+    const name = rawName ? rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase() : ('TC-' + id);
+    const sev = p.severitydata || {};
+    const maxWind = sev.severity ? Math.round(sev.severity * 0.621371) : null; // km/h → mph
+    out.push({ eventid: id, name, lat: ev.lat, lon: ev.lon, cone: ev.cone, maxWind });
+  }
+  return out;
+}
+
 // Fetch active tropical systems (current position + forecast cone) once globally.
 // Returns [{ id, name, type, maxWind(mph), lat, lon, cone:[[lon,lat],...] }].
 async function fetchTropical() {
   const opts = { signal: AbortSignal.timeout(12000) };
-  const [posR, coneR] = await Promise.allSettled([
+  const [posR, coneR, gdacsR] = await Promise.allSettled([
     fetch(`${ARC}/0/query?${Q}`, opts).then(r => r.ok ? r.json() : null),
     fetch(`${ARC}/4/query?${Q}`, opts).then(r => r.ok ? r.json() : null),
+    fetch('https://www.gdacs.org/gdacsapi/api/events/geteventlist/MAP?eventtypes=TC', opts).then(r => r.ok ? r.json() : null),
   ]);
   const posData = posR.status === 'fulfilled' ? posR.value : null;
   const coneData = coneR.status === 'fulfilled' ? coneR.value : null;
+  const gdacsData = gdacsR.status === 'fulfilled' ? gdacsR.value : null;
 
   // Parse forecast cones, keyed by storm id + lowercased name for matching.
   const cones = [];
@@ -77,6 +117,25 @@ async function fetchTropical() {
       systems.push({ id, name, type, maxWind, lat: coords[1], lon: coords[0], cone: cone ? cone.ring : null });
     }
   }
+  // ── GDACS merge (same matching rules as the client: normalized name, then a
+  // tight <150 mi proximity fallback so twin storms can't cross-match) ──
+  try {
+    for (const gd of _parseGdacsMin(gdacsData)) {
+      let match = systems.find(s => _normName(s.name) === _normName(gd.name));
+      if (!match) match = systems.find(s => s.lat != null && haversine(s.lat, s.lon, gd.lat, gd.lon) < 150);
+      if (match) {
+        // NHC/known storm: GDACS only FILLS GAPS (a cone where NHC has none) —
+        // it never overrides NHC data, and no duplicate alert entry is created.
+        if (!match.cone && gd.cone && gd.cone.length >= 3) match.cone = gd.cone;
+        if (!match.maxWind && gd.maxWind) match.maxWind = gd.maxWind;
+      } else {
+        // Storm outside NHC coverage (typhoon / SH cyclone): now push-eligible
+        // with the exact same evalTropical semantics as NHC storms.
+        const type = gd.maxWind >= 74 ? 'Hurricane' : gd.maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression';
+        systems.push({ id: 'GDACS_' + gd.eventid, name: gd.name, type, maxWind: gd.maxWind, lat: gd.lat, lon: gd.lon, cone: gd.cone });
+      }
+    }
+  } catch (e) { console.log('[tropical] GDACS merge skipped:', e && e.message); }
   return systems;
 }
 

@@ -210,11 +210,18 @@ function checkStormCellAlerts(){
       if(!bestMsg)bestMsg=result;
     });
     if(!allMatch||!bestMsg)return;
-    _STORM_ALERT_COOLDOWN[cellKey]=now;
     // v5.97: build the alert text from the SAME X-TRK/ETA math as the storm cards
     // (via _stormNotifMsg) instead of the old cone-angle impact %. `short` feeds
     // the phone notification, `full` the 📢 panel.
-    const nm=(typeof _stormNotifMsg==='function')?_stormNotifMsg(storm):{short:`🌩️ ${storm.dbz} dBZ storm cell`,full:`🌩️ ${storm.dbz} dBZ storm cell`,key:'passing',etaMin:null,arrMs:null};
+    // v5.98: ONLY a DIRECT impact (projected path within 1.5 mi X-TRK) fires an
+    // alert — nearby (1.5–6 mi) and passing (>6 mi) cells are suppressed (they
+    // still appear on the radar and Storms tab, just no push). Build the message
+    // first to read its tier, then gate; the fallback key is 'direct' so a
+    // missing helper can never silently mute every alert. Cooldown is set AFTER
+    // the gate so a suppressed cell can still alert later if it turns direct.
+    const nm=(typeof _stormNotifMsg==='function')?_stormNotifMsg(storm):{short:`🌩️ ${storm.dbz} dBZ storm cell`,full:`🌩️ ${storm.dbz} dBZ storm cell`,key:'direct',etaMin:null,arrMs:null};
+    if(nm.key!=='direct')return;
+    _STORM_ALERT_COOLDOWN[cellKey]=now;
     const etaMin=nm.etaMin,arrivalMs=nm.arrMs;
     let closingMph=0;try{const se=storm._eta||calcStormETA(storm);if(se)closingMph=se.closingSpeed||0}catch(e){}
     batch.push({storm,etaMin,arrivalMs,closingMph,short:nm.short,full:nm.full,key:nm.key});

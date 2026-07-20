@@ -73,6 +73,20 @@ function initRadar(){
     S._rangeCircle=L.circle([S.lat,S.lon],{radius:S.scanRadius*1609.34,color:'#3b82f6',fill:false,weight:1,dashArray:'6 4'}).addTo(map);
     S._userMarker=L.circleMarker([S.lat,S.lon],{radius:5,color:'#3b82f6',fillColor:'#3b82f6',fillOpacity:1}).addTo(map);
     S.map=map;
+    // v5.94: the map's UI overlays (button rails, legend, time chip, anim bar,
+    // layers panel) sit ABOVE the Leaflet canvas. Without this, a touch that
+    // starts on one of them and drags still reached the map and panned it — so
+    // trying to press a button or swipe the page over that strip moved the map
+    // instead. disableClickPropagation stops the drag/press from reaching the
+    // map; disableScrollPropagation stops wheel-scroll from zooming it. The
+    // browser is then free to scroll the PAGE when you swipe those strips, which
+    // also gives back an easy way to scroll past the full-height map.
+    if(L.DomEvent){
+      ['.map-controls-left','.map-controls-right','.map-legend','.radar-time-label','.radar-anim-bar','#map-layers-panel'].forEach(sel=>{
+        const ov=document.querySelector(sel);
+        if(ov){L.DomEvent.disableClickPropagation(ov);L.DomEvent.disableScrollPropagation(ov);}
+      });
+    }
     let _zoomReplot=null,_lastZoom=map.getZoom();
     map.on('zoomend',()=>{
       const z=map.getZoom();

@@ -2040,13 +2040,14 @@ function _nextRainHourFromForecast(){
 const _RC_TOTAL_MIN=180;
 // v4.65: sourced from the shared STORM_MIN_DBZ (15) so the Rain Clock MATCHES
 // the Storms-tab cards' floor instead of using its own stricter cutoff (was 25).
-const _RC_MIN_DBZ=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15;
+// v5.85: the rain-clock floors are now the user-configurable rain floor
+// (getRainFloorDbz(), default 25 dBZ), read live at each use site below so a
+// Settings change takes effect on the next render. Was a fixed STORM_MIN_DBZ const.
 // v4.81: forecast-fallback intensity floor. The forecast dial (shown when NO
 // storms are inbound) used to paint any measurable rain (floor ~1 dBZ), so it
 // read "raining for hours" even for trace/drizzle. This floor (~28 dBZ ≈
 // 0.08 in/hr, light-moderate) hides drizzle while still showing real rain.
-// Forecast-only — the live-radar dial keeps the stricter _RC_MIN_DBZ floor.
-const _RC_FC_MIN_DBZ=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:25;   // v5.54: forecast ring now shares the SAME 25 dBZ floor as the radar dial (was a separate 12), so the clock's two rings and the 36h graph all filter identically.
+// Both rings share the same user rain floor now (getRainFloorDbz()).
 // v4.66: intensity-scaled Rain Clock cell radius. Mirrors the Storms-tab cone
 // base width clamp((dbz-20)/15,0,3) but with a 0.2 mi floor so even a light
 // ~20 dBZ cell has a small but non-zero footprint (~0.2 mi), scaling up to
@@ -2067,11 +2068,13 @@ function _rcIntensityWord(dbz){
 // cards weren't drawn at their real positions. Now we pick the smallest "nice"
 // span (1h…12h) that still contains the furthest inbound storm, so EVERY inbound
 // card is drawn where it actually arrives. Buckets are chosen so span/6 (the gap
-// between the 6 clock labels) stays a clean number. Falls back to 3 h when there
-// is no inbound rain, preserving the familiar "next 3 hours" empty state.
+// between the 6 clock labels) stays a clean number. v5.85: when there's no inbound
+// rain, fall back to the FULL 12 h window (was 3 h) so the dial always shows up to
+// 12 h of context — with or without rain inbound — per the user's request.
 const _RC_SPAN_BUCKETS=[60,120,180,240,360,480,720];
+const _RC_IDLE_SPAN=720; // v5.85: idle/empty dial span (12 h). Was _RC_TOTAL_MIN (3 h).
 function _rcPickSpan(maxEtaMin){
-  if(!(maxEtaMin>0))return _RC_TOTAL_MIN;
+  if(!(maxEtaMin>0))return _RC_IDLE_SPAN;
   for(const b of _RC_SPAN_BUCKETS){if(maxEtaMin<=b)return b}
   return 720; // cap at 12 h; anything further is pinned to the edge (rare)
 }
@@ -2109,7 +2112,7 @@ function _rcForecastHours(){
     const mm=h.precipitation[i]||0;
     if(mm<FC_FLOOR_MM)continue;
     const dbz=Math.round(_precipMmToDbz(mm));
-    if(dbz<_RC_FC_MIN_DBZ)continue;
+    if(dbz<getRainFloorDbz())continue;
     out.push({start:Math.max(0,offMin),end:offMin+60,dbz,mm});
   }
   return out;
@@ -2136,7 +2139,7 @@ function _rainClockProject(){
   if(!hasWeather&&!hasRadar&&!haveHourly){out.loading=true;return out}
   const radarStale=hasRadar&&S.scanTime&&(Date.now()-S.scanTime)>15*60000;
   const mv=S.stormMovement;
-  const MIN_DBZ=_RC_MIN_DBZ;
+  const MIN_DBZ=getRainFloorDbz();
   let vx=0,vy=0,haveMv=false;
   if(mv&&mv.speed>1&&mv.direction!=null){
     const th=mv.direction*Math.PI/180;
@@ -2270,7 +2273,7 @@ function _rainClockProject(){
   out.totalMm=_radarSum>0.01?_radarSum:_fcstFirst3hMm;
   // Windows builder uses 25 dBZ start threshold — the dial is radar-only now
   // (forecast overlay removed), so we go back to the strict radar-noise floor.
-  const _WIN_MIN=_RC_MIN_DBZ;
+  const _WIN_MIN=getRainFloorDbz();
   let cur=null;
   for(let t=0;t<=span;t++){
     const v=out.minutes[t];
@@ -2398,7 +2401,7 @@ function _rainClockProject(){
       const mm=h.precipitation[i]||0;// mm accumulated in this hour == mm/hr
       if(mm<FC_FLOOR_MM)continue;
       const dbz=Math.round(_precipMmToDbz(mm));
-      if(dbz<_RC_FC_MIN_DBZ)continue; // v4.81: only light-moderate+ forecast rain
+      if(dbz<getRainFloorDbz())continue; // v4.81: only light-moderate+ forecast rain
       const start=Math.max(0,offMin);
       fcHours.push({start,end:offMin+60,dbz,mm});
       if(offMin+60>fcMaxMin)fcMaxMin=offMin+60;
@@ -2424,7 +2427,7 @@ function _rainClockProject(){
       let fc=null;
       for(let t=0;t<=fspan;t++){
         const v=fmins[t];
-        if(v>=_RC_FC_MIN_DBZ){if(!fc)fc={startMin:t,endMin:t,peakDbz:v};else{fc.endMin=t;if(v>fc.peakDbz)fc.peakDbz=v}}
+        if(v>=getRainFloorDbz()){if(!fc)fc={startMin:t,endMin:t,peakDbz:v};else{fc.endMin=t;if(v>fc.peakDbz)fc.peakDbz=v}}
         else if(fc){fwins.push(fc);fc=null}
       }
       if(fc)fwins.push(fc);
@@ -2572,7 +2575,7 @@ function renderRainClock(){
     // where data.minutes holds no radar — the forecast is on the inner ring instead.
     for(let m=0;m<TOTAL;m++){
       const v=data.minutes[m];
-      if(v<_RC_MIN_DBZ)continue;
+      if(v<getRainFloorDbz())continue;
       const [x0,y0]=ptAt(m,R_ARC);
       const [x1,y1]=ptAt(m+1,R_ARC);
       const col=(typeof dbzHex==='function')?dbzHex(v):'#39ff14';
@@ -2607,7 +2610,7 @@ function renderRainClock(){
     };
     let a=null;
     for(let m=0;m<=TOTAL;m++){
-      if(fm[m]>=_RC_FC_MIN_DBZ){if(a==null)a=m}
+      if(fm[m]>=getRainFloorDbz()){if(a==null)a=m}
       else if(a!=null){flush(a,m-1);a=null}
     }
     if(a!=null)flush(a,TOTAL);
@@ -2951,6 +2954,18 @@ function refreshRainClock(force){
   try{renderRainClock()}catch(e){console.log('rain clock failed:',e.message)}
   try{renderRainForecastBars()}catch(e){console.log('rain bars failed:',e.message)}
 }
+// v5.85: user rain floor (Settings → 🌧️ Rain Sensitivity). Stored in
+// st_rainFloorDbz, read live by getRainFloorDbz() everywhere the Rain Clock
+// decides "what counts as rain". Re-render the dial immediately on change.
+function setRainFloorDbz(v){
+  const n=parseInt(v,10);
+  if(!(isFinite(n)&&n>=5&&n<=40))return;
+  try{localStorage.setItem('st_rainFloorDbz',String(n))}catch(e){}
+  if(typeof refreshRainClock==='function')refreshRainClock(true);
+  if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();
+  if(typeof toast==='function')toast('🌧️ Rain floor set to ≥'+n+' dBZ');
+}
+if(typeof window!=='undefined'){window.setRainFloorDbz=setRainFloorDbz}
 
 function _precipMmToDbz(mmPerHr){
   if(mmPerHr==null||mmPerHr<=0)return 0;

@@ -518,6 +518,17 @@ const APPROACHING_TIER_KEYS=['direct','near_direct'];
 // which hid inbound cards — reverted here.)
 const STORM_MIN_DBZ=25;   // v5.54: raised 15->25 — shared rain floor (radar scan + Rain Clock). Rain below 25 dBZ is filtered from the Rain Clock, forecast ring and 36h graph. Storm/alert 'Min strength' (getConeMinDbz, 40) is separate and unchanged.
 if(typeof window!=='undefined'){window.STORM_MIN_DBZ=STORM_MIN_DBZ}
+// v5.85: user-configurable RAIN FLOOR — the single "what counts as rain" number
+// for the rain DISPLAYS (Rain Clock radar + forecast rings, nearest-precipitation
+// readout). Default = STORM_MIN_DBZ (25 dBZ ≈ 0.05 in/hr). Lower it to surface
+// light drizzle on the dial; raise it to hide it. SEPARATE from the storm
+// push-alert 'Min strength' (getConeMinDbz, 40 dBZ) — that governs what triggers
+// alerts, this governs what shows as rain. Clamped 5–40 dBZ.
+function getRainFloorDbz(){
+  try{const v=parseInt(localStorage.getItem('st_rainFloorDbz'),10);if(isFinite(v)&&v>=5&&v<=40)return v;}catch(e){}
+  return STORM_MIN_DBZ;
+}
+if(typeof window!=='undefined'){window.getRainFloorDbz=getRainFloorDbz}
 // v5.33: the storm-track cone floor, the in-app Storm Cell Alerts "Intensity"
 // gate, and the Background Storm Alerts push threshold are ONE SHARED NUMBER —
 // stored in st_stormThresholds.stormDbz.val and edited from the single control

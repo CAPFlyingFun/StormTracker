@@ -159,14 +159,26 @@ function _stWindAt(fp,tMs,maxWind){
   return {u:u/wsum,v:v/wsum};
 }
 
-// Integrate the track. Returns [{hr,lat,lon,t}] hourly, or null if unusable.
-// Cached 30 min per storm (a model run costs a handful of Open-Meteo calls).
+// Integrate the track. Returns [{hr,lat,lon,t,windMph}] hourly, or null if
+// unusable. Cached 30 min per storm. v5.90: IN-FLIGHT DEDUPE — plotNHCTracks
+// re-runs every radar refresh, and each re-run used to kick off its OWN slow
+// model run whose result was then discarded as stale (gen mismatch), so on a
+// busy radar tab the line could never land. Now concurrent callers share one
+// promise: the newest plot pass awaits the same run and draws it the moment
+// it resolves.
 async function computeSTModelTrack(storm){
   if(!storm||storm.lat==null||storm.lon==null)return null;
   const key=String(storm.id||storm.name||'');
   const cache=S._stModelCache=S._stModelCache||{};
   const hit=cache[key];
   if(hit&&Date.now()-hit.at<30*60000)return hit.pts;
+  const inflight=S._stModelInflight=S._stModelInflight||{};
+  if(inflight[key])return inflight[key];
+  const p=_stRunModel(storm,key,cache);
+  inflight[key]=p;
+  try{return await p}finally{delete inflight[key]}
+}
+async function _stRunModel(storm,key,cache){
   let lat=storm.lat,lon=storm.lon;
   const startMs=Date.now();
   const betaBrg=lat<0?225:315; // beta drift: poleward+westward in each hemisphere
@@ -187,11 +199,14 @@ async function computeSTModelTrack(storm){
     const needFetch=!fp||haversine(lat,lon,fp.lat,fp.lon)>_ST_REFETCH_MI;
     if(needFetch&&fetches<_ST_MAX_FETCH){
       try{
-        fp=await _stFetchWinds(lat,lon);fetches++;
-        fp.marine=await _stFetchMarine(lat,lon); // SST at the same sample point (null over land)
+        // v5.90: winds + SST fetched in PARALLEL — serial fetching doubled run
+        // time in v5.89 and made runs miss the re-plot window entirely.
+        const [wf,mf]=await Promise.all([_stFetchWinds(lat,lon),_stFetchMarine(lat,lon)]);
+        fp=wf; fp.marine=mf; fetches++;
       }
       catch(e){
         console.log('[ST Model] winds fetch failed:',e&&e.message);
+        S._stModelLastError=String(e&&e.message||e);
         if(!fp)break; // no winds at all → no model; else ride the last sample
       }
     }
@@ -243,7 +258,14 @@ async function drawSTModelTrack(storm,map){
     if(!storm||!map||typeof L==='undefined')return;
     const gen=S._nhcPlotGen;
     const pts=await computeSTModelTrack(storm);
-    if(!pts||gen!==S._nhcPlotGen)return;
+    if(!pts){
+      // v5.90: say WHY there's no line instead of silently drawing nothing.
+      console.log('[ST Model] no track for',storm.name,'—',S._stModelLastError||'winds unavailable');
+      const nk='_stNoted_'+(storm.id||storm.name);
+      if(!S[nk]&&typeof toast==='function'){S[nk]=true;toast('🧪 ST Model: winds aloft unavailable for '+storm.name+' — will retry on next refresh');}
+      return;
+    }
+    if(gen!==S._nhcPlotGen)return; // a newer plot pass owns the map now — it will draw this run from cache instantly
     const line=L.polyline(pts.map(p=>[p.lat,p.lon]),{
       color:_ST_COLOR,weight:2.5,opacity:0.95,dashArray:'2,6',interactive:false});
     line.addTo(map); S._nhcTrackLayers.push(line);

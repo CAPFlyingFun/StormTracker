@@ -3004,10 +3004,13 @@ function plotNHCTracks(map) {
       pulse.addTo(map);
       S._nhcTrackLayers.push(pulse);
     }
-    if (isSelected) {
+    if (isSelected) try { // v5.90: isolated — a radii hiccup must never blank other layers
       const radiiColors = { 34: '#4fc3f7', 50: '#ffc107', 64: '#ff5722' };
       const radiiLabels = { 34: '34 kt (TS)', 50: '50 kt (Strong TS)', 64: '64 kt (Hurricane)' };
       const stormRadii = (_nhcData.windRadii || []).filter(wr => wr.stormId === s.id || wr.stormName.toLowerCase() === s.name.toLowerCase());
+      // v5.90: radii features routinely vanish upstream right after an advisory
+      // swap (ArcGIS layers republish) — note it so a blank isn't a mystery.
+      if (!stormRadii.length) console.log('[NHC] no wind-radii features for', s.name, 'this cycle — upstream advisory gap');
       if (stormRadii.length) {
         // v5.88: declutter — the ArcGIS feed carries one radii ring per forecast
         // hour per wind band, and labeling EVERY ring stamped "34 kt (TS)" six
@@ -3044,7 +3047,7 @@ function plotNHCTracks(map) {
           S._nhcTrackLayers.push(rm);
         }
       }
-    }
+    } catch(e) { console.warn('[NHC] radii draw failed:', e && e.message); }
   }
 }
 function _renderStormSurgeSection() {

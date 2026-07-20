@@ -2938,6 +2938,9 @@ function plotNHCTracks(map) {
     line.addTo(map);
     S._nhcTrackLayers.push(line);
   }
+  // v5.91: surface fronts (NOAA/WPC analysis) join the 🌀 overlay group —
+  // async + gen-guarded in tropical-model.js; cached 30 min.
+  if (typeof drawFronts === 'function') drawFronts(map);
   // v5.86: timestamped position fixes (GDACS) — dots shown for the SELECTED
   // storm only (past = grey, forecast = cyan); tap a dot for its date/time.
   if (selectedName) {

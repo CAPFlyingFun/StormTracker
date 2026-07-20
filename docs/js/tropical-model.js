@@ -43,9 +43,19 @@ const _ST_COLOR='#00D4FF';            // v5.89: neon blue (user-picked) — the 
 const _ST_POT=[[25,40],[26,75],[27,100],[28,125],[29,150],[30,170]]; // SST °C → max potential Vmax (mph)
 const _ST_SHEAR_FREE=12;              // mph of deep shear a storm shrugs off
 const _ST_SHEAR_COST=2.0;             // mph of ceiling lost per mph of excess shear
-const _ST_K_UP=0.03;                  // /h intensification rate toward ceiling (~33 h e-fold)
+// v5.91: tuned DOWN after the model called "Cat 1 within 15 h" from a fresh TD
+// (user: "wind speeds seem too high too quick" — correct; that was rapid
+// intensification as the DEFAULT). Disorganized systems (<64 mph) now spin up
+// slowly (real TDs take ~a day to close off a core), organized ones faster,
+// and gain is hard-capped at +2 mph/h (~48 mph/day — still genuine RI, but as
+// the ceiling, not the norm).
+const _ST_K_UP_WEAK=0.012;            // /h toward ceiling while still organizing (<64 mph)
+const _ST_K_UP_ORG=0.02;              // /h once an organized core exists (≥64 mph)
+const _ST_RI_CAP=2.0;                 // max mph gained per hour
 const _ST_K_DOWN=0.06;                // /h over-water decay when above ceiling
 const _ST_K_LAND=0.08;                // /h inland decay (Kaplan–DeMaria-ish) toward 27 mph
+const _ST_FRONT_MI=250;               // within this of a surface front = hostile environment
+const _ST_FRONT_CAP=20;               // mph knocked off the ceiling near a front (dry air + baroclinic shear)
 const _COMPASS={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
 
 // Deep-layer-mean weights by intensity (mph). Weak storms are shallow and ride
@@ -140,6 +150,175 @@ function _stCat(mph){
   return{label:'TD',color:'#90caf9'};
 }
 
+// ═══ v5.91: SURFACE FRONTS (NOAA/WPC surface analysis) ═══
+// Drawn with the 🌀 overlays and consumed by the intensity model: within
+// ~250 mi of a front the environment is hostile (dry-air intrusion +
+// baroclinic shear) so the ceiling drops. NOTE deliberately NOT a push/pull
+// force on the track — a front's pressure gradient IS a wind-field feature,
+// so its steering influence already arrives through the 850–250 hPa winds the
+// model integrates. Adding it again would double-count the physics.
+const _FRONT_KINDS=[
+  {re:/cold/i,      color:'#3b82f6', label:'Cold front'},
+  {re:/warm/i,      color:'#ef4444', label:'Warm front'},
+  {re:/stnry|station/i, color:'#a855f7', dash:'8,5', label:'Stationary front'},
+  {re:/occl|ocfnt/i,color:'#d946ef', label:'Occluded front'},
+  {re:/trof|trough/i,color:'#94a3b8', dash:'3,6', label:'Trough'}
+];
+async function _stEnsureFronts(){
+  const c=S._frontsData;
+  if(c&&Date.now()-c.at<30*60000)return c;
+  try{
+    const url='https://mapservices.weather.noaa.gov/vector/rest/services/obs/surface_fronts/MapServer/0/query?where=1%3D1&outFields=*&f=geojson';
+    const r=await fetch(url,{signal:AbortSignal.timeout(12000)});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    if(!j.features||!Array.isArray(j.features))throw new Error('no features');
+    const fronts=[],flat=[];
+    for(const f of j.features){
+      const propStr=JSON.stringify(f.properties||{});
+      const kind=_FRONT_KINDS.find(k=>k.re.test(propStr));
+      if(!kind)continue;
+      const g=f.geometry||{};
+      const rawLines=g.type==='MultiLineString'?g.coordinates:(g.type==='LineString'?[g.coordinates]:[]);
+      const lines=[];
+      for(const ln of rawLines){
+        if(!ln||ln.length<2)continue;
+        const ll=ln.map(c2=>[c2[1],c2[0]]);
+        lines.push(ll);
+        for(let i=0;i<ll.length;i+=2)flat.push({lat:ll[i][0],lng:ll[i][1]}); // every 2nd vertex for distance checks
+      }
+      if(lines.length)fronts.push({color:kind.color,dash:kind.dash||null,label:kind.label,lines});
+    }
+    S._frontsData={at:Date.now(),fronts,flat};
+    console.log('[fronts]',fronts.length,'front features loaded');
+    return S._frontsData;
+  }catch(e){
+    console.log('[fronts] fetch failed:',e&&e.message);
+    // short-TTL empty cache so a dead service isn't hammered every render
+    S._frontsData={at:Date.now()-25*60000,fronts:[],flat:[]};
+    return S._frontsData;
+  }
+}
+// Min distance (mi) from a point to any front vertex, or null when no data.
+function _stNearFrontMi(lat,lon){
+  const d=S._frontsData;
+  if(!d||!d.flat||!d.flat.length)return null;
+  let mn=Infinity;
+  for(const p of d.flat){
+    const dd=haversine(lat,lon,p.lat,p.lng);
+    if(dd<mn){mn=dd;if(mn<50)break}
+  }
+  return mn;
+}
+// Draw fronts into the 🌀 overlay group (async; gen-guarded like the ST line).
+async function drawFronts(map){
+  try{
+    if(typeof L==='undefined'||!map)return;
+    const gen=S._nhcPlotGen;
+    const data=await _stEnsureFronts();
+    if(!data||!data.fronts.length||gen!==S._nhcPlotGen)return;
+    for(const f of data.fronts){
+      let longest=null;
+      for(const line of f.lines){
+        const pl=L.polyline(line,{color:f.color,weight:2,opacity:0.7,dashArray:f.dash,interactive:false});
+        pl.addTo(map);S._nhcTrackLayers.push(pl);
+        if(!longest||line.length>longest.length)longest=line;
+      }
+      if(longest&&longest.length>3){
+        const mid=longest[Math.floor(longest.length/2)];
+        const lbl=L.marker(mid,{interactive:false,icon:L.divIcon({className:'',
+          html:'<div style="font-size:8px;font-weight:600;color:'+f.color+';text-shadow:0 0 3px #000;white-space:nowrap;opacity:0.85">'+f.label+'</div>',
+          iconAnchor:[20,4]})});
+        lbl.addTo(map);S._nhcTrackLayers.push(lbl);
+      }
+    }
+  }catch(e){console.log('[fronts] draw failed:',e&&e.message)}
+}
+
+// ═══ v5.91: SELF-SCORING ═══ each fresh model run is stored (compact, 6-h
+// resolution, ≥3 h apart, 16 kept ≈ 2 days) so later runs can be verified
+// against where the storm ACTUALLY is: "24 h err ~41 mi" on the map label.
+function _stSaveRun(key,pts){
+  try{
+    const all=JSON.parse(localStorage.getItem('st_stRuns')||'{}');
+    const arr=all[key]=all[key]||[];
+    if(arr.length&&Date.now()-arr[arr.length-1].at<3*3600000)return; // keep runs ≥3 h apart
+    arr.push({at:Date.now(),pts:pts.filter(p=>p.hr%6===0).map(p=>({hr:p.hr,lat:+p.lat.toFixed(2),lon:+p.lon.toFixed(2)}))});
+    const cut=Date.now()-6*86400000;
+    all[key]=arr.filter(r=>r.at>cut).slice(-16);
+    localStorage.setItem('st_stRuns',JSON.stringify(all));
+  }catch(e){}
+}
+function _stVerify(key,storm){
+  try{
+    if(!storm||storm.lat==null)return null;
+    const arr=(JSON.parse(localStorage.getItem('st_stRuns')||'{}'))[key]||[];
+    let best=null;
+    for(const r of arr){
+      const ageH=(Date.now()-r.at)/3600000;
+      if(ageH<18||ageH>36)continue; // score the ~24 h forecast window
+      if(!best||Math.abs(ageH-24)<Math.abs(best.ageH-24))best={ageH,r};
+    }
+    if(!best)return null;
+    let lo=null,hi=null;
+    for(const p of best.r.pts){if(p.hr<=best.ageH)lo=p;if(p.hr>=best.ageH){hi=p;break}}
+    if(!lo||!hi)return null;
+    const f=hi.hr===lo.hr?0:(best.ageH-lo.hr)/(hi.hr-lo.hr);
+    const plat=lo.lat+f*(hi.lat-lo.lat),plon=lo.lon+f*(hi.lon-lo.lon);
+    return {ageH:Math.round(best.ageH),errMi:Math.round(haversine(plat,plon,storm.lat,storm.lon))};
+  }catch(e){return null}
+}
+
+// ═══ v5.91: PARTICLE-FLOW STEERING VISUALIZATION ═══ streaming particles
+// advected by the model's own sampled steering field (IDW-interpolated from
+// the run's fetch points), so you can SEE the river the storm is riding.
+// Auto-starts when the ST line draws; self-stops when the storm is
+// deselected, overlays toggle off, or you leave the radar tab.
+let _flowState=null;
+function startSTFlow(map){
+  try{
+    if(typeof L==='undefined'||!map)return;
+    try{if(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches)return}catch(e){}
+    const F=S._stFlowField;
+    if(!F||!F.samples||F.samples.length<2)return;
+    stopSTFlow();
+    const cont=map.getContainer();
+    const cv=document.createElement('canvas');
+    cv.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:450';
+    cv.width=cont.clientWidth;cv.height=cont.clientHeight;
+    cont.appendChild(cv);
+    const ctx=cv.getContext('2d');
+    const P=[],N=260;
+    const spawn=p=>{const b=map.getBounds();p.lat=b.getSouth()+Math.random()*(b.getNorth()-b.getSouth());p.lng=b.getWest()+Math.random()*(b.getEast()-b.getWest());p.life=40+Math.random()*80};
+    for(let i=0;i<N;i++){const p={};spawn(p);p.life*=Math.random();P.push(p)}
+    const vel=(lat,lng)=>{let su=0,sv=0,sw=0;for(const s of F.samples){const d=Math.max(4,haversine(lat,lng,s.lat,s.lon));const w=1/(d*d);su+=w*s.u;sv+=w*s.v;sw+=w}return{u:su/sw,v:sv/sw}};
+    const step=()=>{
+      if(!document.body.contains(cv))return;
+      if(S.activePage!=='radar'||!S._nhcSelectedStorm||!S._showNHCTracks){stopSTFlow();return}
+      if(cv.width!==cont.clientWidth||cv.height!==cont.clientHeight){cv.width=cont.clientWidth;cv.height=cont.clientHeight}
+      ctx.globalCompositeOperation='destination-out';ctx.fillStyle='rgba(0,0,0,0.10)';ctx.fillRect(0,0,cv.width,cv.height);
+      ctx.globalCompositeOperation='source-over';ctx.strokeStyle='rgba(0,212,255,0.5)';ctx.lineWidth=1;
+      for(const p of P){
+        const v=vel(p.lat,p.lng);
+        const k=0.00045; // mph → deg/frame (visual time-lapse)
+        const nlat=p.lat+v.v*k,nlng=p.lng+v.u*k/Math.max(0.2,Math.cos(p.lat*Math.PI/180));
+        const a=map.latLngToContainerPoint([p.lat,p.lng]),b2=map.latLngToContainerPoint([nlat,nlng]);
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b2.x,b2.y);ctx.stroke();
+        p.lat=nlat;p.lng=nlng;p.life--;
+        const bb=map.getBounds();
+        if(p.life<=0||p.lat<bb.getSouth()||p.lat>bb.getNorth()||p.lng<bb.getWest()||p.lng>bb.getEast())spawn(p);
+      }
+      _flowState.raf=requestAnimationFrame(step);
+    };
+    _flowState={cv,raf:requestAnimationFrame(step)};
+  }catch(e){console.log('[ST flow] failed:',e&&e.message)}
+}
+function stopSTFlow(){
+  try{
+    if(_flowState){cancelAnimationFrame(_flowState.raf);if(_flowState.cv&&_flowState.cv.parentNode)_flowState.cv.parentNode.removeChild(_flowState.cv);_flowState=null}
+  }catch(e){}
+}
+
 // Deep-layer-mean steering vector (u=east, v=north, mph) at absolute time tMs
 // from a fetched point. Meteorological direction is where wind comes FROM; the
 // advecting motion is toward FROM+180.
@@ -179,6 +358,9 @@ async function computeSTModelTrack(storm){
   try{return await p}finally{delete inflight[key]}
 }
 async function _stRunModel(storm,key,cache){
+  try{await _stEnsureFronts()}catch(e){} // fronts inform the intensity ceiling (cached 30 min)
+  const flowSamples=[]; // steering samples captured at each fetch point (particle viz)
+  let _fDist=null;      // distance to nearest front, refreshed every 3 model hours
   let lat=storm.lat,lon=storm.lon;
   const startMs=Date.now();
   const betaBrg=lat<0?225:315; // beta drift: poleward+westward in each hemisphere
@@ -203,6 +385,9 @@ async function _stRunModel(storm,key,cache){
         // time in v5.89 and made runs miss the re-plot window entirely.
         const [wf,mf]=await Promise.all([_stFetchWinds(lat,lon),_stFetchMarine(lat,lon)]);
         fp=wf; fp.marine=mf; fetches++;
+        // capture a steering sample here for the particle-flow visualization
+        const _s0=_stWindAt(fp,tMs,V);
+        if(_s0)flowSamples.push({lat:fp.lat,lon:fp.lon,u:_s0.u,v:_s0.v});
       }
       catch(e){
         console.log('[ST Model] winds fetch failed:',e&&e.message);
@@ -229,24 +414,37 @@ async function _stRunModel(storm,key,cache){
     }
     // ── v5.89 intensity step ── relax Vmax toward the environment's ceiling:
     // SST sets the potential, excess deep shear lowers it, land forces decay.
+    let _nearFront=false;
     {
       const sst=_stSstAt(fp.marine,tMs);
       const overLand=(fp.elev>10)||(sst==null);
+      if(hr%3===1||_fDist==null)_fDist=_stNearFrontMi(lat,lon); // refresh every 3 h
+      _nearFront=(_fDist!=null&&_fDist<_ST_FRONT_MI);
       if(overLand){
         V=V+_ST_K_LAND*(27-V);
       }else{
         let cap=_stPotential(sst);
         const sh=_stShearAt(fp,tMs);
         if(sh!=null&&sh>_ST_SHEAR_FREE)cap-=_ST_SHEAR_COST*(sh-_ST_SHEAR_FREE);
+        // v5.91: frontal zone = hostile (dry air + baroclinic shear). The
+        // front's steering push/pull is NOT added here — the pressure gradient
+        // is already in the 850–250 hPa winds the track integrates.
+        if(_nearFront)cap-=_ST_FRONT_CAP;
         cap=Math.max(25,cap);
-        V=V+(V<cap?_ST_K_UP:_ST_K_DOWN)*(cap-V);
+        // v5.91: organization lag + RI cap (was one hot 0.03 rate for all).
+        const kUp=V<64?_ST_K_UP_WEAK:_ST_K_UP_ORG;
+        let dV=(V<cap?kUp:_ST_K_DOWN)*(cap-V);
+        if(dV>_ST_RI_CAP)dV=_ST_RI_CAP;
+        V=V+dV;
       }
       V=Math.min(200,Math.max(20,V));
     }
-    pts.push({hr,lat,lon,t:tMs,windMph:Math.round(V)});
+    pts.push({hr,lat,lon,t:tMs,windMph:Math.round(V),nearFront:_nearFront});
   }
   if(pts.length<12)return null; // <12 h of track isn't a forecast
   cache[key]={at:Date.now(),pts};
+  _stSaveRun(key,pts); // v5.91: archive for later self-scoring vs reality
+  if(flowSamples.length>=2)S._stFlowField={at:Date.now(),samples:flowSamples};
   return pts;
 }
 
@@ -288,22 +486,29 @@ async function drawSTModelTrack(storm,map){
       const dot=L.circleMarker([p.lat,p.lon],{
         radius:major?4.5:3,color:_ST_COLOR,
         fillColor:cat?cat.color:_ST_COLOR,fillOpacity:0.95,weight:1});
-      dot.bindTooltip('ST +'+p.hr+'h · '+when+(cat?' · ~'+p.windMph+' mph ('+cat.label+')':''),{direction:'top'});
+      dot.bindTooltip('ST +'+p.hr+'h · '+when+(cat?' · ~'+p.windMph+' mph ('+cat.label+')':'')+(p.nearFront?' · ≈front':''),{direction:'top'});
       dot.addTo(map); S._nhcTrackLayers.push(dot);
     }
     let peak=null;
     for(const p of pts){if(p.windMph!=null&&(!peak||p.windMph>peak.windMph))peak=p;}
+    // v5.91: self-score — how far off was our ~24 h-old run vs where the storm
+    // actually is now? Only shows once the app has runs old enough to grade.
+    const ver=_stVerify(String(storm.id||storm.name||''),storm);
     const last=pts[pts.length-1];
     const lbl=L.marker([last.lat,last.lon],{interactive:false,icon:L.divIcon({className:'',
-      html:'<div style="font-size:9px;font-weight:700;color:'+_ST_COLOR+';text-shadow:0 0 3px #000;white-space:nowrap" title="StormTracker in-app steering model — experimental, not for safety decisions">ST Model'+(peak&&peak.windMph?' · peak ~'+peak.windMph+' mph ('+_stCat(peak.windMph).label+')':'')+'</div>',
+      html:'<div style="font-size:9px;font-weight:700;color:'+_ST_COLOR+';text-shadow:0 0 3px #000;white-space:nowrap" title="StormTracker in-app steering model — experimental, not for safety decisions">ST Model'+(peak&&peak.windMph?' · peak ~'+peak.windMph+' mph ('+_stCat(peak.windMph).label+')':'')+(ver?' · '+ver.ageH+'h err ~'+ver.errMi+' mi':'')+'</div>',
       iconAnchor:[-6,4]})});
     lbl.addTo(map); S._nhcTrackLayers.push(lbl);
-    console.log('[ST Model]',storm.name,'—',pts.length-1,'h track, dots every '+stepH+'h, peak',peak&&peak.windMph,'mph');
+    startSTFlow(map); // particle-flow steering visualization (self-stops on deselect)
+    console.log('[ST Model]',storm.name,'—',pts.length-1,'h track, dots every '+stepH+'h, peak',peak&&peak.windMph,'mph',ver?('· '+ver.ageH+'h err '+ver.errMi+' mi'):'');
   }catch(e){console.log('[ST Model] draw failed:',e&&e.message)}
 }
 
 if(typeof window!=='undefined'){
   window.computeSTModelTrack=computeSTModelTrack;
   window.drawSTModelTrack=drawSTModelTrack;
+  window.drawFronts=drawFronts;
+  window.startSTFlow=startSTFlow;
+  window.stopSTFlow=stopSTFlow;
 }
 })();

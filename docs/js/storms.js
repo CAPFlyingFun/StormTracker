@@ -2556,6 +2556,12 @@ function _parseGdacsPtTime(label) {
   return best;
 }
 const _GDACS_LEVEL_COLORS = { Green: '#22c55e', Orange: '#f97316', Red: '#ef4444' };
+// v5.88: GDACS's Green/Orange/Red is a HUMANITARIAN impact scale (population-
+// level consequences estimated by the UN/EU system) — NOT "all clear for you."
+// A storm can be GDACS Green while you sit inside its cone. So the UI leads
+// with a plain word (Low/Medium/High impact) and keeps the color as accent.
+const _GDACS_IMPACT_WORDS = { Green: 'Low', Orange: 'Medium', Red: 'High' };
+const _GDACS_TITLE = 'GDACS humanitarian impact estimate (population-scale, from the UN/EU Global Disaster Alert system) — NOT your personal risk. Check the cone and alerts for your own exposure.';
 // ── Projected ("Future:") name for an UNNAMED depression ──────────────────────
 // NHC labels a depression "Tropical Depression <Number>" until it reaches
 // tropical-storm strength, when it takes the next name on the season's list. The
@@ -2818,7 +2824,7 @@ function _renderTropicalSection() {
             <span style="font-size:0.7em;color:${cat.color};font-weight:700">${cat.label}${cat.num >= 1 ? ' (Category ' + cat.num + ')' : ''}</span>
             ${_futureStormName(s) ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:rgba(120,200,255,0.12);color:var(--accent-cyan);font-weight:700">Future: ${_futureStormName(s)}</span>` : ''}
             ${status ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${status.bg};color:${status.color};font-weight:700">${status.text}</span>` : ''}
-            ${s._gdacs ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${(_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e')}20;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700" title="GDACS humanitarian impact alert level">GDACS ${s._gdacs.alertlevel.toUpperCase()}</span>` : ''}
+            ${s._gdacs ? `<span style="font-size:0.55em;padding:1px 6px;border-radius:8px;background:${(_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e')}20;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700" title="${_GDACS_TITLE}">🌍 ${(_GDACS_IMPACT_WORDS[s._gdacs.alertlevel] || s._gdacs.alertlevel).toUpperCase()} IMPACT</span>` : ''}
           </div>
         </div>
         <div style="text-align:right;font-size:0.75em">
@@ -2896,9 +2902,11 @@ function plotNHCTracks(map) {
     const storm = (_nhcData.systems || []).find(s => s.id === cone.stormId || s.name.toLowerCase() === cone.stormName.toLowerCase());
     const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
     const latlngs = cone.coords.map(c => [c[1], c[0]]);
+    // v5.88: outline only — the filled cone stacked with wind swaths + tracks
+    // made the map read as one big blob; the dashes alone carry the shape.
     const poly = L.polygon(latlngs, {
       color: cat.color || '#9333EA', fillColor: cat.color || '#9333EA',
-      fillOpacity: 0.08, weight: 1.5, dashArray: '6,4', interactive: false
+      fillOpacity: 0, weight: 1.5, dashArray: '6,4', interactive: false
     });
     poly.addTo(map);
     S._nhcTrackLayers.push(poly);
@@ -2972,7 +2980,7 @@ function plotNHCTracks(map) {
       ${s.maxWind ? `<div style="font-size:0.8em;margin-top:4px">💨 Max Wind: <b>${s.maxWind} mph</b>${s.gusts ? ' (G' + s.gusts + ')' : ''}</div>` : ''}
       ${s.minPressure ? `<div class="text-sm">🔵 Pressure: <b>${s.minPressure} mb</b></div>` : ''}
       ${s.moveDir ? `<div class="text-sm">➡️ Moving: <b>${s.moveDir} ${s.moveSpeed || ''} mph</b></div>` : ''}
-      ${s._gdacs ? `<div style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">GDACS impact: ${s._gdacs.alertlevel}</div>` : ''}
+      ${s._gdacs ? `<div title="${_GDACS_TITLE}" style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">🌍 Humanitarian impact: ${_GDACS_IMPACT_WORDS[s._gdacs.alertlevel] || s._gdacs.alertlevel} (GDACS ${s._gdacs.alertlevel})</div><div style="font-size:0.58em;color:#94a3b8;margin-top:1px">population-scale estimate — not your personal risk</div>` : ''}
       ${s.dist != null ? `<div style="font-size:0.75em;color:#aaa;margin-top:4px">${Math.round(s.dist)} mi from you</div>` : ''}
       <div style="margin-top:6px"><a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">Show forecast track →</a></div>
     </div>`);
@@ -3001,27 +3009,39 @@ function plotNHCTracks(map) {
       const radiiLabels = { 34: '34 kt (TS)', 50: '50 kt (Strong TS)', 64: '64 kt (Hurricane)' };
       const stormRadii = (_nhcData.windRadii || []).filter(wr => wr.stormId === s.id || wr.stormName.toLowerCase() === s.name.toLowerCase());
       if (stormRadii.length) {
+        // v5.88: declutter — the ArcGIS feed carries one radii ring per forecast
+        // hour per wind band, and labeling EVERY ring stamped "34 kt (TS)" six
+        // times across the map. Rings are now thinner with a whisper of fill
+        // (color alone identifies the band: blue 34 / amber 50 / red 64), and
+        // each band gets ONE label, placed on its northernmost ring.
+        const _bandBest = {};
         for (const wr of stormRadii) {
           if (!wr.coords || wr.coords.length < 3) continue;
           const latlngs = wr.coords.map(c => [c[1], c[0]]);
           const color = radiiColors[wr.ktLevel] || '#4fc3f7';
           const poly = L.polygon(latlngs, {
-            color, fillColor: color, fillOpacity: 0.06, weight: 1.5, dashArray: '4,3', interactive: false
+            color, fillColor: color, fillOpacity: 0.03, weight: 1, dashArray: '4,3', interactive: false
           });
           poly.addTo(map);
           S._nhcTrackLayers.push(poly);
           const bounds = poly.getBounds();
-          const labelPt = bounds.getNorth ? L.latLng(bounds.getNorth(), bounds.getCenter().lng) : null;
-          if (labelPt) {
-            const rLabel = L.divIcon({
-              className: '',
-              html: `<div style="font-size:8px;color:${color};font-weight:600;text-shadow:0 0 3px #000;pointer-events:none">${radiiLabels[wr.ktLevel] || wr.ktLevel + ' kt'}</div>`,
-              iconSize: [80, 10], iconAnchor: [40, 12]
-            });
-            const rm = L.marker(labelPt, { icon: rLabel, interactive: false });
-            rm.addTo(map);
-            S._nhcTrackLayers.push(rm);
+          if (bounds.getNorth) {
+            const n = bounds.getNorth();
+            const prev = _bandBest[wr.ktLevel];
+            if (!prev || n > prev.north) _bandBest[wr.ktLevel] = { north: n, lng: bounds.getCenter().lng };
           }
+        }
+        for (const kt of Object.keys(_bandBest)) {
+          const b = _bandBest[kt];
+          const color = radiiColors[kt] || '#4fc3f7';
+          const rLabel = L.divIcon({
+            className: '',
+            html: `<div style="font-size:8px;color:${color};font-weight:600;text-shadow:0 0 3px #000;pointer-events:none">${radiiLabels[kt] || kt + ' kt'}</div>`,
+            iconSize: [80, 10], iconAnchor: [40, 12]
+          });
+          const rm = L.marker(L.latLng(b.north, b.lng), { icon: rLabel, interactive: false });
+          rm.addTo(map);
+          S._nhcTrackLayers.push(rm);
         }
       }
     }

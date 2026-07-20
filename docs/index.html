@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v5.95</title>
+<title>StormTracker v5.96</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=692">
+<link rel="stylesheet" href="css/style.css?v=693">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.95</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v5.96</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -44,6 +44,7 @@
   <div class="header-loc-btn" id="btn-travel" onclick="toggleTravelMode()" title="Travel Mode" style="opacity:0.5">🧭</div>
   <div class="header-loc-btn" id="btn-lang" onclick="toggleLangMenu()" title="Language">🇺🇸</div>
   <div class="header-loc-btn" id="btn-loc-open" onclick="event.stopPropagation();toggleLocOverlay(true)" title="Change location">🗺️</div>
+  <div class="header-loc-btn" id="btn-notif" onclick="toggleNotifPanel()" title="Notifications" style="opacity:0.85;position:relative">📢<span id="notif-badge" style="display:none;position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:var(--accent-red,#ef4444);color:#fff;font-size:9px;font-weight:700;line-height:15px;text-align:center;box-sizing:border-box"></span></div>
   <div class="header-loc-btn" id="btn-settings" onclick="toggleSettingsPanel()" title="Settings" style="opacity:0.7">⚙️</div>
   <div id="threat-ticker" style="display:none;overflow:hidden;white-space:nowrap;font-size:0.72em;font-weight:600;height:24px;line-height:24px;position:absolute;bottom:0;left:0;right:0;z-index:99;border-top:1px solid rgba(0,220,255,0.1)"><div id="threat-ticker-inner" style="display:inline-block;padding-left:100%;animation:tickerScroll 30s linear infinite"></div></div>
 </header>
@@ -500,6 +501,19 @@
   </div>
 </div>
 
+<div id="notif-overlay" class="settings-overlay" onclick="if(event.target===this)toggleNotifPanel(false)">
+  <div class="settings-panel">
+    <div class="overlay-header">
+      <span class="overlay-title">📢 Notifications</span>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button onclick="clearAllNotifs()" style="background:rgba(239,68,68,0.12);color:#f87171;border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:5px 11px;font-size:0.72em;font-weight:600;cursor:pointer">Clear all</button>
+        <button onclick="toggleNotifPanel(false)" class="overlay-close-btn">✕</button>
+      </div>
+    </div>
+    <div id="notif-list" class="overlay-body"></div>
+  </div>
+</div>
+
 <div class="loc-overlay" id="loc-overlay" onclick="if(event.target===this)toggleLocOverlay(false)">
   <div class="loc-overlay-inner">
     <div class="loc-input-wrap">
@@ -683,23 +697,23 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=692" defer></script>
-<script src="js/core.js?v=692" defer></script>
-<script src="js/gauges.js?v=692" defer></script>
-<script src="js/icons.js?v=692" defer></script>
-<script src="js/geo.js?v=692" defer></script>
-<script src="js/settings.js?v=692" defer></script>
-<script src="js/thresholds.js?v=692" defer></script>
-<script src="js/weather.js?v=692" defer></script>
-<script src="js/radar.js?v=692" defer></script>
-<script src="js/tropical-model.js?v=692" defer></script>
-<script src="js/storms.js?v=692" defer></script>
-<script src="js/station.js?v=692" defer></script>
-<script src="js/alerts.js?v=692" defer></script>
-<script src="js/briefingEngine.js?v=692" defer></script>
-<script src="js/ai.js?v=692" defer></script>
-<script src="js/push.js?v=692" defer></script>
-<script src="js/init.js?v=692" defer></script>
+<script src="js/radar-shared.js?v=693" defer></script>
+<script src="js/core.js?v=693" defer></script>
+<script src="js/gauges.js?v=693" defer></script>
+<script src="js/icons.js?v=693" defer></script>
+<script src="js/geo.js?v=693" defer></script>
+<script src="js/settings.js?v=693" defer></script>
+<script src="js/thresholds.js?v=693" defer></script>
+<script src="js/weather.js?v=693" defer></script>
+<script src="js/radar.js?v=693" defer></script>
+<script src="js/tropical-model.js?v=693" defer></script>
+<script src="js/storms.js?v=693" defer></script>
+<script src="js/station.js?v=693" defer></script>
+<script src="js/alerts.js?v=693" defer></script>
+<script src="js/briefingEngine.js?v=693" defer></script>
+<script src="js/ai.js?v=693" defer></script>
+<script src="js/push.js?v=693" defer></script>
+<script src="js/init.js?v=693" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -709,7 +723,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=692')
+    navigator.serviceWorker.register('sw.js?v=693')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

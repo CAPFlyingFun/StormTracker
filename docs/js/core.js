@@ -127,13 +127,104 @@ function syncTimeFmtBtns(){
   });
 }
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+// v5.96: toasts are QUEUED and staggered instead of all appearing at once. On
+// load the app can fire 3–8 storm/hurricane/rain alerts within the same tick;
+// dumping them together made them unreadable (and pushed some off-screen). Now
+// at most _TOAST_MAX show at a time and each new one waits _TOAST_STAGGER after
+// the last, so they cascade in one-by-one and each is legible. A lone toast
+// (the common toggle-confirmation case) still shows instantly.
+const _TOAST_MAX=3,_TOAST_STAGGER=850;
+let _toastQ=[],_toastActive=0,_toastGate=false;
+function _toastPump(){
+  if(_toastGate||!_toastQ.length||_toastActive>=_TOAST_MAX)return;
+  _toastGate=true;
+  const item=_toastQ.shift();
+  _renderToastEl(item.msg,item.dur);
+  setTimeout(()=>{_toastGate=false;_toastPump();},_TOAST_STAGGER);
+}
+function _renderToastEl(msg,dur){
+  const c=document.getElementById('toast-container');if(!c)return;
+  const el=document.createElement('div');el.className='toast';el.textContent=msg;c.appendChild(el);
+  _toastActive++;
+  setTimeout(()=>{el.classList.add('out');setTimeout(()=>{el.remove();_toastActive=Math.max(0,_toastActive-1);_toastPump();},250)},dur);
+}
 function toast(msg,dur){
+  if(!msg)return;
   if(S.travelMode&&!msg.startsWith('🧭')&&!msg.startsWith('📍')&&!msg.startsWith('Travel')){
     const bar=document.getElementById('travel-toast-bar');
     if(bar){bar.textContent=msg;bar.style.opacity='1';clearTimeout(S._travelToastFade);S._travelToastFade=setTimeout(()=>{bar.style.opacity='0'},dur||3000);}
     return;
   }
-  const c=document.getElementById('toast-container');const el=document.createElement('div');el.className='toast';el.textContent=msg;c.appendChild(el);setTimeout(()=>{el.classList.add('out');setTimeout(()=>el.remove(),250)},dur||3000);
+  _toastQ.push({msg,dur:dur||3000});
+  _toastPump();
+}
+
+// v5.96: Notification log — every real weather/storm/hurricane/lightning alert
+// (all of which route through _sendBrowserNotification) is recorded here so the
+// 📢 panel in the header can show a persistent history you can review, share or
+// delete, even for alerts that fired while the app was closed/backgrounded.
+function _loadNotifLog(){try{return JSON.parse(localStorage.getItem('st_notifLog')||'[]')}catch(e){return[]}}
+function _saveNotifLog(a){try{localStorage.setItem('st_notifLog',JSON.stringify(a.slice(0,100)))}catch(e){}}
+let _lastNotifLog={m:'',t:0};
+function logNotification(msg){
+  msg=String(msg||'').replace(/🔔\s*/,'').trim();if(!msg)return;
+  const now=Date.now();
+  // De-dupe: a single alert calls _sendBrowserNotification once, but guard against
+  // an identical message repeating within a few seconds (paired paths / re-scans).
+  if(msg===_lastNotifLog.m&&now-_lastNotifLog.t<5000)return;
+  _lastNotifLog={m:msg,t:now};
+  const log=_loadNotifLog();
+  log.unshift({id:now.toString(36)+Math.random().toString(36).slice(2,6),ts:now,msg});
+  _saveNotifLog(log);
+  _updateNotifBadge();
+  const o=document.getElementById('notif-overlay');
+  if(o&&o.style.display==='block')_renderNotifPanel();
+}
+function _notifUnreadCount(){
+  let seen=0;try{seen=parseInt(localStorage.getItem('st_notifSeen')||'0',10)||0}catch(e){}
+  return _loadNotifLog().filter(n=>n.ts>seen).length;
+}
+function _updateNotifBadge(){
+  const b=document.getElementById('notif-badge');if(!b)return;
+  const n=_notifUnreadCount();
+  if(n>0){b.textContent=n>9?'9+':String(n);b.style.display='block';}else{b.style.display='none';}
+}
+function toggleNotifPanel(show){
+  const o=document.getElementById('notif-overlay');if(!o)return;
+  const open=(show===undefined)?o.style.display!=='block':show;
+  o.style.display=open?'block':'none';
+  if(open){_renderNotifPanel();try{localStorage.setItem('st_notifSeen',String(Date.now()))}catch(e){}_updateNotifBadge();}
+}
+function _notifRelTime(ts){
+  const s=Math.max(0,Math.round((Date.now()-ts)/1000));
+  if(s<60)return'just now';
+  const m=Math.round(s/60);if(m<60)return m+'m ago';
+  const h=Math.round(m/60);if(h<24)return h+'h ago';
+  return Math.round(h/24)+'d ago';
+}
+function _renderNotifPanel(){
+  const body=document.getElementById('notif-list');if(!body)return;
+  const log=_loadNotifLog();
+  if(!log.length){body.innerHTML='<div style="text-align:center;color:var(--text-muted);padding:44px 20px;font-size:0.85em;line-height:1.6">📭 No notifications yet.<br>Storm, rain, lightning and hurricane alerts will appear here.</div>';return;}
+  body.innerHTML=log.map(n=>`<div class="notif-item">
+      <div class="notif-item-msg">${escHtml(n.msg)}</div>
+      <div class="notif-item-foot">
+        <span class="notif-item-time">${_notifRelTime(n.ts)} · ${fmtClockShort(new Date(n.ts))}</span>
+        <span class="notif-item-actions">
+          <button onclick="shareNotif('${n.id}')">↗ Share</button>
+          <button onclick="deleteNotif('${n.id}')">🗑 Delete</button>
+        </span>
+      </div>
+    </div>`).join('');
+}
+function deleteNotif(id){_saveNotifLog(_loadNotifLog().filter(n=>n.id!==id));_renderNotifPanel();_updateNotifBadge();}
+function clearAllNotifs(){_saveNotifLog([]);_renderNotifPanel();_updateNotifBadge();}
+function shareNotif(id){
+  const n=_loadNotifLog().find(x=>x.id===id);if(!n)return;
+  const text=n.msg+'\n\n— via StormTracker';
+  if(navigator.share){navigator.share({text}).catch(()=>{});}
+  else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(()=>toast('📋 Copied to clipboard')).catch(()=>toast(n.msg,6000));}
+  else toast(n.msg,6000);
 }
 function showSkel(el,n){el.innerHTML=Array.from({length:n},()=>`<div class="skeleton skel-line" style="width:${60+Math.random()*40}%"></div>`).join('')}
 // degToDir moved to radar-shared.js (loaded first; global).

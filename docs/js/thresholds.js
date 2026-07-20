@@ -72,6 +72,11 @@ function checkWeatherThresholds(){
   checkRainOverheadAlert();
 }
 function _sendBrowserNotification(title,body){
+  // v5.96: record EVERY alert in the 📢 Notifications log first — before the
+  // permission/visibility guards below — so the history captures alerts whether
+  // or not a browser notification actually gets shown (app open, permission off,
+  // etc.). Every real weather/storm/hurricane/lightning alert routes through here.
+  if(typeof logNotification==='function')logNotification(body);
   if(!('Notification' in window))return;
   if(Notification.permission!=='granted')return;
   if(document.visibilityState==='visible')return;

@@ -2963,21 +2963,27 @@ function renderRainForecastBars(){
   if(!h||!h.time||!h.precipitation||!h.time.length){
     const _omPart=S._lastWeatherData&&S._lastWeatherData._omPartial;
     const msg=_omPart
-      ?'⏳ Waiting on Open-Meteo — 36-hour rain forecast will appear once the service is back.'
+      ?'⏳ Waiting on Open-Meteo — 48-hour rain forecast will appear once the service is back.'
       :'⏳ Hourly precipitation forecast not available right now — will appear on the next refresh.';
-    el.innerHTML=`<div class="card weather-section" data-sec="rainbars" style="padding:8px;margin-bottom:8px"><div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 36 hrs</span><div style="display:flex;gap:4px;align-items:center">${gridBtn}${reorder}</div></div><div style="font-size:0.7em;color:var(--text-secondary);text-align:center;padding:14px 6px">${msg}</div></div>`;
+    el.innerHTML=`<div class="card weather-section" data-sec="rainbars" style="padding:8px;margin-bottom:8px"><div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 48 hrs</span><div style="display:flex;gap:4px;align-items:center">${gridBtn}${reorder}</div></div><div style="font-size:0.7em;color:var(--text-secondary);text-align:center;padding:14px 6px">${msg}</div></div>`;
     return;
   }
   const now=Date.now();
   let startIdx=h.time.findIndex(t=>{const ts=new Date(t).getTime();return ts>=now-1800000});
   if(startIdx<0)startIdx=0;
-  const HOURS=36;
+  const HOURS=48;   // v5.83: 48 h horizon (future only), matching the 48h Trends window.
   const slots=[];
   for(let i=0;i<HOURS;i++){
     const idx=startIdx+i;
     if(idx>=h.time.length)break;
-    let mm=h.precipitation[idx]||0;
-    if(mm>0&&typeof _precipMmToDbz==='function'&&_precipMmToDbz(mm)<_RC_FC_MIN_DBZ)mm=0;   // v5.54: filter precip below the shared 25 dBZ floor (matches the Rain Clock)
+    // v5.83: plot the RAW hourly precipitation forecast — the SAME h.precipitation
+    // the 48h Trends "Precip" series uses — so the two graphs never disagree. The
+    // old v5.54 25 dBZ floor zeroed light rain (<~1.3 mm/hr) here, which made this
+    // "Total Precipitation" chart read "no measurable rain" while the 48h Trends
+    // (and the NWS forecast) still showed it. This chart is a multi-day FORECAST,
+    // separate from the Rain Clock's 0-3 h radar nowcast, so it shows all forecast
+    // precip; the Rain Clock keeps its own 25 dBZ nowcast floor.
+    const mm=h.precipitation[idx]||0;
     slots.push({t:new Date(h.time[idx]).getTime(),mm});
   }
   // v4.69: this 36-hour chart is now FULLY INDEPENDENT of the Rain Clock. It
@@ -2988,7 +2994,7 @@ function renderRainForecastBars(){
   // this is a 36-hour forecast; mixing them was confusing. They are deliberately
   // separate measurements now: the clock = inbound radar cells (0-3h), this chart
   // = the precipitation forecast (0-36h).
-  if(!slots.length){el.innerHTML=`<div class="card weather-section" data-sec="rainbars" style="padding:8px;margin-bottom:8px"><div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 36 hrs</span><div style="display:flex;gap:4px;align-items:center">${gridBtn}${reorder}</div></div><div style="font-size:0.7em;color:var(--text-secondary);text-align:center;padding:14px 6px">⏳ Forecast hours haven't refreshed yet — graph will fill in on the next update.</div></div>`;return;}
+  if(!slots.length){el.innerHTML=`<div class="card weather-section" data-sec="rainbars" style="padding:8px;margin-bottom:8px"><div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 48 hrs</span><div style="display:flex;gap:4px;align-items:center">${gridBtn}${reorder}</div></div><div style="font-size:0.7em;color:var(--text-secondary);text-align:center;padding:14px 6px">⏳ Forecast hours haven't refreshed yet — graph will fill in on the next update.</div></div>`;return;}
   const total=slots.reduce((a,s)=>a+s.mm,0);
   const maxMm=Math.max(0.05,...slots.map(s=>s.mm));
   const W=300,H=110,padL=8,padR=8,padT=14,padB=22;
@@ -3020,7 +3026,7 @@ function renderRainForecastBars(){
       yLabels+=`<text x="${(W-padR-2).toFixed(1)}" y="${(y-1).toFixed(1)}" fill="#6b7a8e" font-size="7" text-anchor="end">${lbl}</text>`;
     }
   }
-  const tickHours=[0,6,12,24,36];
+  const tickHours=[0,12,24,36,48];
   let xTicks='';
   for(const th of tickHours){
     if(th>slots.length)continue;
@@ -3030,7 +3036,7 @@ function renderRainForecastBars(){
     else if(th<slots.length)lbl=fmtClock(new Date(slots[th].t));
     else lbl=fmtClock(new Date(slots[slots.length-1].t+3600000));
     xTicks+=`<line x1="${x.toFixed(1)}" y1="${baseY}" x2="${x.toFixed(1)}" y2="${baseY+3}" stroke="#5a6a7e" stroke-width="1"/>`;
-    xTicks+=`<text x="${x.toFixed(1)}" y="${(baseY+13).toFixed(1)}" fill="#9fb3c8" font-size="8" text-anchor="${th===36?'end':'middle'}">${lbl}</text>`;
+    xTicks+=`<text x="${x.toFixed(1)}" y="${(baseY+13).toFixed(1)}" fill="#9fb3c8" font-size="8" text-anchor="${th===48?'end':'middle'}">${lbl}</text>`;
   }
   const maxLbl=(typeof fmtPrecip==='function')?fmtPrecip(maxMm):(maxMm.toFixed(2)+' mm');
   const totalLbl=(typeof fmtPrecip==='function')?fmtPrecip(total):(total.toFixed(2)+' mm');
@@ -3039,7 +3045,7 @@ function renderRainForecastBars(){
   el.innerHTML=`
     <div class="card weather-section" data-sec="rainbars" style="padding:8px 8px 6px;margin-bottom:8px">
       <div class="sec-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 36 hrs</span>
+        <span class="card-title m-0" style="font-size:0.78em"><span class="icon">📊</span> Total Precipitation Next 48 hrs</span>
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:0.6em;color:var(--text-muted)">total ${totalLbl}</span>
           ${gridBtn}${reorder}
@@ -3051,6 +3057,6 @@ function renderRainForecastBars(){
           ${empty?`<text x="${(W/2).toFixed(1)}" y="${(padT+innerH/2).toFixed(1)}" fill="var(--text-secondary)" font-size="9" text-anchor="middle">No measurable rain forecast</text>`:''}
         </svg>
       </div>
-      ${empty?`<div style="font-size:0.62em;color:var(--text-muted);text-align:center;margin-top:2px">Forecast model shows no measurable rain in the next 36 hours.</div>`:''}
+      ${empty?`<div style="font-size:0.62em;color:var(--text-muted);text-align:center;margin-top:2px">Forecast model shows no measurable rain in the next 48 hours.</div>`:''}
     </div>`;
 }

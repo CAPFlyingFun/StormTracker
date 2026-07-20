@@ -24,7 +24,7 @@
 
 import webpush from 'web-push';
 import {
-  scanLocation, dbzAtPoint, haversine, bearingDeg, calcImpact, calcETA, degToDir,
+  scanLocation, dbzAtPoint, haversine, bearingDeg, calcImpact, calcETA, crossTrackMi, degToDir,
 } from './detect.js';
 import { fetchConditions, evalWx, fetchNws, nwsIcon, nwsWindow } from './alerts.js';
 import { fetchTropical, evalTropical } from './tropical.js';
@@ -381,7 +381,10 @@ function fmtStormBody(best, count, mv, tz, h24) {
   if (count >= 12) { lead = `Strongest of ${count} storms inbound — `; tail = ' · more inbound, open for details'; }
   else if (count > 1) { lead = `${count} storms inbound — strongest `; }
   else { lead = 'Storm cell inbound — '; }
-  return `${lead}${best.dbz} dBZ · ${distStr}${best.impactPct > 0 ? ` · ${best.impactPct}% impact` : ''}${etaStr}${moveStr}${tail}`;
+  // v5.99: every pushed cell is now a DIRECT hit (X-TRK ≤ 1.5 mi), so show that
+  // instead of the old cone "% impact" number the app no longer uses.
+  const directStr = (best.xtrkMi != null && isFinite(best.xtrkMi)) ? ` · 🎯 direct (X-TRK ${best.xtrkMi.toFixed(1)} mi)` : '';
+  return `${lead}${best.dbz} dBZ · ${distStr}${directStr}${etaStr}${moveStr}${tail}`;
 }
 
 // Compact one-liner for the multi-alert DIGEST (a single-storm notification
@@ -695,13 +698,18 @@ async function run() {
           const cc = { lat: c.lat, lng: c.lng, dbz: c.dbz, distance, bearing };
           const imp = calcImpact(cc, mv); cc.impactPct = imp.impactPct; cc.impactTier = imp.impactTier;
           const eta = calcETA(cc, mv); cc.etaMin = eta.etaMin; cc.approaching = eta.approaching; cc.closingSpeed = eta.closingSpeed;
+          cc.xtrkMi = crossTrackMi(cc, mv); // v5.99: cross-track (X-TRK) miss for the direct-only gate
           return cc;
         });
         // Inbound cells passing the user's radius/impact/distance filter, then
         // GATED by the intensity bands: a cell only counts if its dBZ falls in a
         // band the user left on. This mirrors the in-app band gate exactly.
+        // v5.99: DIRECT-only — only a cell whose projected path passes within
+        // 1.5 mi (X-TRK) pushes, matching the in-app gate. Nearby/passing cells
+        // still show on the radar + Storms tab (and their cones are still drawn),
+        // they just don't ping. Cones stay a visual-only awareness layer.
         const hits = personal.filter(c =>
-          c.distance <= th.radius && c.approaching &&
+          c.distance <= th.radius && c.approaching && c.xtrkMi <= 1.5 &&
           c.dbz >= th.dbz && c.impactPct >= th.impact && c.distance <= th.dist &&
           (() => { const bk = bandForDbz(c.dbz); return bk && bands[bk] && bands[bk].on; })()
         );

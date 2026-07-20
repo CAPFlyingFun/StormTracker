@@ -223,6 +223,23 @@ export function calcImpact(storm, mv) {
   return { impactPct, impactTier };
 }
 
+// v5.99: straight-line cross-track (perpendicular miss) of the storm's projected
+// path from the user, in miles — the scanner's equivalent of the app's X-TRK
+// distance. Geometry: with the storm at (distance, bearing) from the user and
+// moving along mv.direction, the miss is distance·sin(diff), where diff is the
+// angle between the motion and the storm→user direction (diff = 0 → heading
+// straight at you). A cell whose closest approach is BEHIND it (diff ≥ 90°, i.e.
+// moving away) returns Infinity, so it can never read as a direct hit.
+// Approximates the app's BAM-integrated perpMiss well enough to gate a 1.5-mi
+// "Direct" push; both stay honest via scanner/test-shared-parity.mjs.
+export function crossTrackMi(storm, mv) {
+  if (!mv || mv.speed < 2) return Infinity;
+  const bearToUser = ((storm.bearing || 0) + 180) % 360;
+  const diff = Math.abs(((mv.direction - bearToUser + 180) % 360) - 180);
+  if (diff >= 90) return Infinity;
+  return (storm.distance || 0) * Math.sin(diff * Math.PI / 180);
+}
+
 export function calcETA(storm, mv) {
   if (!mv || mv.speed < 2) return { etaMin: null, approaching: false, closingSpeed: 0 };
   const baseWidthMi = Math.max(0, Math.min(3, (storm.dbz - 20) / 15));

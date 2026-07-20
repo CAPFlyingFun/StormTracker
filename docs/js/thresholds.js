@@ -166,23 +166,9 @@ function _saveStormAlertHistory(){
   if(_stormAlertHistory.length>50)_stormAlertHistory=_stormAlertHistory.slice(-50);
   try{localStorage.setItem('st_stormAlertHistory',JSON.stringify(_stormAlertHistory))}catch(e){}
 }
-function _calcStormImpact(storm){
-  const mv=(typeof getHybridMovement==='function')?getHybridMovement(storm):S.stormMovement;
-  if(!mv||mv.speed<2)return{impactPct:0,impactTier:'none'};
-  const midBear=storm.bearing||0;
-  const midDist=storm.distance||0;
-  const bearToUser=(midBear+180)%360;
-  const diff=Math.abs(((mv.direction-bearToUser+180)%360)-180);
-  const closing=mv.speed*Math.cos(Math.min(diff,60)*Math.PI/180);
-  const baseWidthMi=Math.max(0,Math.min(3,(storm.dbz-20)/15));
-  const widthAngle=midDist>0.5?Math.atan2(baseWidthMi,midDist)*180/Math.PI:15;
-  const coneHalf=15+widthAngle;
-  let impactPct=0,impactTier='none';
-  if(diff<=coneHalf*0.6&&closing>1){impactTier='high';impactPct=80+Math.round(((coneHalf*0.6)-diff)/(coneHalf*0.6)*20);}
-  else if(diff<=coneHalf&&closing>0.5){impactTier='medium';impactPct=31+Math.round((coneHalf-diff)/(coneHalf*0.4)*49);}
-  else if(diff<=coneHalf+10){impactTier='low';impactPct=Math.max(5,Math.round((coneHalf+10-diff)/10*30));}
-  return{impactPct,impactTier};
-}
+// v5.99: the old cone-angle _calcStormImpact model was DELETED — impact now
+// comes from the single X-TRK master record (stormMaster in storms.js), the same
+// one the cards use, so the alerts and the cards can never disagree again.
 function checkStormCellAlerts(){
   _pruneExpiredAlerts();
   if(!S._topStorms||!S._topStorms.length)return;
@@ -193,9 +179,9 @@ function checkStormCellAlerts(){
   const now=Date.now();
   const batch=[];
   stormList.forEach(storm=>{
-    const impact=_calcStormImpact(storm);
-    storm.impactPct=impact.impactPct;
-    storm.impactTier=impact.impactTier;
+    const _m=(typeof stormMaster==='function')?stormMaster(storm):null;
+    storm.impactPct=_m?_m.impactPct:0;
+    storm.impactTier=_m?_m.impactTier:'none';
     const bandKey=bandForDbz(storm.dbz);
     if(!bandKey||!bandEnabled(bandKey))return;
     const cellKey='sc_'+Math.round(storm.bearing/10)+'_'+Math.round(storm.distance/3);

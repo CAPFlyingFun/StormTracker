@@ -2799,22 +2799,52 @@ function _stormTextSummary(s,_b,_sMv,eta){
   }
   return `${icon} ${strength} — ${distStr} to your ${posDir} (${Math.round(s.bearing)}°), ${moveClause}. ${impact}`;
 }
-// v5.97: storm-cell NOTIFICATION text, built from the SAME cross-track (X-TRK)
-// and ETA math the storm cards use (calcStormETAForBriefing + _xtrkTier on the
-// 1.5/6 mi scale) — replacing the old cone-angle "impact %" the alerts used to
-// show. Returns a SHORT line for the phone/browser notification (which
-// truncates) and a FULL, detailed line for the 📢 Notifications log. ETA follows
-// the v5.95 rule: Direct → ETA+clock, Nearby → possible ETA, Passing → none.
-function _stormNotifMsg(storm){
-  let b=null;try{b=calcStormETAForBriefing(storm);}catch(e){}
+// v5.99: THE single per-scan "master" record for a storm cell. Cards, the ETA
+// box, the ticker, notifications, the storm-cell alert gate and sorting all read
+// THIS one X-TRK model instead of independently re-deriving impact / ETA / tier.
+// Computed once and cached by S._stormScanId; the underlying helpers
+// (calcStormETAForBriefing / calcStormETA / getHybridMovement) each cache per
+// scan too, so nothing recomputes. This REPLACES the old separate cone-angle
+// impact model (_calcStormImpact, deleted) — impactPct now comes from the same
+// X-TRK impactScore the cards show, and impactTier maps the X-TRK tier onto the
+// legacy high/medium/low buckets the Alerts tab renders.
+function stormMaster(storm){
+  if(!storm)return null;
+  if(storm._m&&storm._mScanId===S._stormScanId)return storm._m;
+  let brief=null;try{if(typeof calcStormETAForBriefing==='function')brief=calcStormETAForBriefing(storm);}catch(e){}
+  const eta=(typeof calcStormETA==='function')?calcStormETA(storm):null;
   const mv=(typeof getHybridMovement==='function')?getHybridMovement(storm):null;
-  const miss=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
-  const tier=(typeof _xtrkTier==='function')?_xtrkTier(miss):null;
-  const key=tier?tier.key:(miss!=null&&miss<=1.5?'direct':miss!=null&&miss<=6?'nearby':'passing');
+  const perpMissMi=(brief&&brief.perpMissMi!=null&&isFinite(brief.perpMissMi))?brief.perpMissMi:((eta&&eta.perpMissMi!=null)?eta.perpMissMi:null);
+  const tierObj=(typeof _xtrkTier==='function')?_xtrkTier(perpMissMi):null;
+  const tier=tierObj?tierObj.key:(perpMissMi!=null?(perpMissMi<=1.5?'direct':perpMissMi<=6?'nearby':'passing'):null);
+  const impactPct=(brief&&brief.impactScore!=null)?Math.round(brief.impactScore*100):(eta?eta.impact||0:0);
+  const impactTier=tier==='direct'?'high':tier==='nearby'?'medium':tier==='passing'?'low':'none';
+  const m={
+    brief,eta,mv,perpMissMi,tier,impactTier,impactPct,
+    classification:brief?brief.classification:(eta?eta.perpTier:null),
+    etaMin:eta?eta.eta:null,
+    closingSpeed:(brief&&brief.closingMph!=null)?brief.closingMph:(eta?eta.closingSpeed:0),
+    estDbzAtUser:brief?brief.estDbzAtUser:null,
+    sideBearing:brief?brief.sideBearing:null,
+    approaching:eta?eta.approaching:false,
+  };
+  storm._m=m;storm._mScanId=S._stormScanId;
+  return m;
+}
+// v5.97/v5.99: storm-cell NOTIFICATION text, read straight off the master record
+// (one X-TRK model). Returns a SHORT line for the phone/browser notification
+// (which truncates) and a FULL, detailed line for the 📢 log. ETA follows the
+// v5.95 rule: Direct → ETA+clock, Nearby → possible ETA, Passing → none.
+function _stormNotifMsg(storm){
+  const m=(typeof stormMaster==='function')?stormMaster(storm):null;
+  const b=m?m.brief:null;
+  const mv=m?m.mv:null;
+  const miss=m?m.perpMissMi:null;
+  const key=(m&&m.tier)?m.tier:'passing';
   const label=key==='direct'?'🎯 Direct impact':key==='nearby'?'🟠 Nearby pass':'⚪ Passing wide';
   const shortTier=key==='direct'?'direct':key==='nearby'?'nearby':'passing';
   let etaMin=null,arrMs=null;
-  try{const se=storm._eta||calcStormETA(storm);if(se&&se.eta!=null&&se.eta>0){etaMin=Math.max(0,se.eta-radarAgeMin());arrMs=Date.now()+etaMin*60000;}}catch(e){}
+  if(m&&m.etaMin!=null&&m.etaMin>0){etaMin=Math.max(0,m.etaMin-radarAgeMin());arrMs=Date.now()+etaMin*60000;}
   let etaFull='',etaShort='';
   if(arrMs&&key==='direct'){etaFull=` — ETA ${formatStormEta(etaMin)} (~${fmtClockShort(new Date(arrMs))})`;etaShort=` · ETA ${formatStormEta(etaMin)}`;}
   else if(arrMs&&key==='nearby'){etaFull=` — possible ETA ~${fmtClockShort(new Date(arrMs))} (path may shift)`;etaShort=` · ~${fmtClockShort(new Date(arrMs))}`;}
@@ -3598,7 +3628,9 @@ function _renderStormsCore(){
   function buildCard(s){
       const cat=stormCat(s.dbz);
       const eta=s._eta;
-      let _b=null;try{_b=calcStormETAForBriefing(s);s._brief=_b}catch(e){}
+      // v5.99: read the briefing off the single master record (same cached object)
+      // so the cards and the alerts can never diverge; fall back to a direct call.
+      let _b=null;try{const _mm=(typeof stormMaster==='function')?stormMaster(s):null;_b=_mm?_mm.brief:calcStormETAForBriefing(s);s._brief=_b}catch(e){}
       const isInboundClass=!!(_b&&(typeof isInboundTier==='function'?isInboundTier(_b.classification):(_b.classification==='direct'||_b.classification==='near_direct'||_b.classification==='near_miss'||_b.classification==='miss'||_b.classification==='distant'||_b.classification==='far'||_b.classification==='nearby')));
       const hasValidClosing=!!(_b&&_b.closingMph>0);
       const bImpPct=(_b&&_b.impactScore!=null)?Math.round(_b.impactScore*100):0;

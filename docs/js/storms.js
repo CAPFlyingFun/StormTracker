@@ -3816,6 +3816,9 @@ if(typeof window!=='undefined')window.toggleConeFocus=toggleConeFocus;
 // closes the other two. Remembered in S._stormGroupOpen across re-renders.
 function _toggleStormGroup(ev,key){
   if(ev&&ev.preventDefault)ev.preventDefault();
+  // v6.29: an empty tier (0 items) can't open — keep it collapsed on tap.
+  const _el=document.querySelector('details.storm-tier-group[data-grp="'+key+'"]');
+  if(_el&&_el.classList.contains('is-empty'))return false;
   // Accordion toggle: tapping the open group closes it (all collapse); tapping a
   // closed group opens it and closes the other two.
   const wasOpen=S._stormGroupOpen===key;
@@ -4366,15 +4369,20 @@ function _renderStormsCore(){
   if(_openKey===undefined)_openKey=_firstNonEmpty;
   else if(_openKey!==null&&!tierSecs.find(t=>t.key===_openKey&&t.items.length))_openKey=_firstNonEmpty;
   S._stormGroupOpen=_openKey;
+  // v6.29: ALWAYS render all three tiers, even at 0 — an empty tier (e.g. Direct)
+  // shows as a dimmed, collapsed header instead of vanishing, so the tab layout is
+  // stable and the highest-priority NON-empty tier is the one auto-expanded.
   for(const sec of tierSecs){
-    if(!sec.items.length)continue;
-    const cards=sec.items.slice(0,_GRP_CAP).map(buildCard).join('');
+    const has=sec.items.length>0;
+    const cards=has?sec.items.slice(0,_GRP_CAP).map(buildCard).join(''):'';
     const more=sec.items.length>_GRP_CAP?`<div class="text-hint" style="text-align:center;padding:6px 0">+${sec.items.length-_GRP_CAP} more — narrow with filters</div>`:'';
-    groupHtml+=`<details class="storm-group storm-tier-group" data-grp="${sec.key}" ${sec.key===_openKey?'open':''}>
-      <summary class="storm-group-header" style="border-left:3px solid ${sec.color}" onclick="return _toggleStormGroup(event,'${sec.key}')">
+    const body=has?`${cards}${more}`:`<div class="text-hint" style="text-align:center;padding:8px 0;opacity:0.55">None right now</div>`;
+    const openAttr=(has&&sec.key===_openKey)?'open':'';
+    groupHtml+=`<details class="storm-group storm-tier-group${has?'':' is-empty'}" data-grp="${sec.key}" ${openAttr}>
+      <summary class="storm-group-header" style="border-left:3px solid ${sec.color}${has?'':';opacity:0.5'}" onclick="return _toggleStormGroup(event,'${sec.key}')">
         ${sec.label} <span class="storm-group-count">${sec.items.length}</span>
       </summary>
-      <div class="storm-group-body">${cards}${more}</div>
+      <div class="storm-group-body">${body}</div>
     </details>`;
   }
   let gridHtml='';

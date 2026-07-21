@@ -851,6 +851,7 @@ async function maybeRunOuterScan(){
     const near=sys.some(s=>s&&s.lat!=null&&s.lon!=null&&haversine(S.lat,S.lon,s.lat,s.lon)<=300);
     // gate: zones on + a tropical system in range. Otherwise clear + bail.
     if(!S._showZones||!near){ _clearOuterScan(); return; }
+    _ensureOuterRing(); // draw the 200 mi ring NOW — before the (slow) radar fetch
     if(_outerScanBusy)return;
     if(S._outerScanTime&&(Date.now()-S._outerScanTime)<10*60000&&S._outerScanPts&&S._outerScanPts.length)return;
     _outerScanBusy=true;
@@ -872,13 +873,16 @@ function _clearOuterScan(){
   if(S._outerScanLayer){try{S._outerScanLayer.clearLayers()}catch(e){}}
   if(S._outerRangeCircle&&S.map){try{S.map.removeLayer(S._outerRangeCircle)}catch(e){}S._outerRangeCircle=null;}
 }
+function _ensureOuterRing(){
+  if(!S.map||S.lat==null)return;
+  if(!S._outerRangeCircle){S._outerRangeCircle=L.circle([S.lat,S.lon],{radius:200*1609.34,color:'#3b82f6',fill:false,weight:1,opacity:0.45,dashArray:'2 8',interactive:false}).addTo(S.map);}
+  else S._outerRangeCircle.setLatLng([S.lat,S.lon]);
+}
 function renderOuterScan(map){
   if(!map)return;
   if(!S._outerScanLayer)S._outerScanLayer=L.layerGroup().addTo(map);
   else S._outerScanLayer.clearLayers();
-  // 200 mi outer range ring (fainter + finer dashes than the 80 mi ring)
-  if(!S._outerRangeCircle){S._outerRangeCircle=L.circle([S.lat,S.lon],{radius:200*1609.34,color:'#3b82f6',fill:false,weight:1,opacity:0.45,dashArray:'2 8',interactive:false});S._outerRangeCircle.addTo(map);}
-  else S._outerRangeCircle.setLatLng([S.lat,S.lon]);
+  _ensureOuterRing(); // 200 mi outer range ring
   for(const p of (S._outerScanPts||[])){
     const c=(typeof dbzHex==='function')?dbzHex(p.dbz):'#22d3ee';
     L.circleMarker([p.lat,p.lng],{radius:2.5,color:c,fillColor:c,fillOpacity:0.45,weight:0,interactive:false}).addTo(S._outerScanLayer);
@@ -976,6 +980,7 @@ async function scanRadarForView(){
     });
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
     if(S.map)showViewScanCircle(S.map,cLat,cLng,radius,S.storms.length);
+    if(typeof maybeRunOuterScan==='function')maybeRunOuterScan(); // v6.24: outer awareness on radar-tab scans too
     hideScanOverlay();
     toast(`${S.storms.length.toLocaleString()} cells in ${radius} mi radius (${srcLabel})`);
     scheduleAutoScan();

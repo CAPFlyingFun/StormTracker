@@ -3414,6 +3414,10 @@ function _anchorTrail(latlngs, mk) {
   if (Math.abs(dLat) < 1e-6 && Math.abs(dLon) < 1e-6) return latlngs; // already aligned
   return latlngs.map(c => [c[0] + dLat, c[1] + dLon]);
 }
+// v6.24: past-track history is DISABLED for now (the observed/reconstructed/GDACS
+// trail wasn't matching reliably). Forecast track, cone, marker and forecast dots
+// still draw. Flip this back to true to re-enable the past trail.
+const _SHOW_PAST_TRACK = false;
 function plotNHCTracks(map) {
   // v5.87: generation counter — the async ST Model draw checks this so a slow
   // model run can never paint onto a map that has since been re-plotted.
@@ -3455,7 +3459,7 @@ function plotNHCTracks(map) {
     if (ot.stormName) _obsKeys.add('nm:' + String(ot.stormName).toLowerCase());
   }
   const _hasObs = (id, name) => _obsKeys.has('id:' + String(id || '').toLowerCase()) || _obsKeys.has('nm:' + String(name || '').toLowerCase());
-  for (const ot of (_lpTracks === 'off' ? [] : (_nhcData.observed || []))) {
+  for (const ot of ((!_SHOW_PAST_TRACK || _lpTracks === 'off') ? [] : (_nhcData.observed || []))) {
     if (!_isStormVisible(ot.stormId, ot.stormName)) continue;
     if (!showAll && ot.stormName.toLowerCase() !== selectedName?.toLowerCase() && ot.stormId !== selectedName) continue;
     if (!ot.coords || ot.coords.length < 2) continue;
@@ -3481,7 +3485,7 @@ function plotNHCTracks(map) {
     S._nhcTrackLayers.push(line);
   }
   // v5.86: PAST track (history) from GDACS — solid muted trail behind the storm
-  for (const hist of (_lpTracks === 'off' ? [] : (_nhcData.history || []))) {
+  for (const hist of ((!_SHOW_PAST_TRACK || _lpTracks === 'off') ? [] : (_nhcData.history || []))) {
     if (!_isStormVisible(hist.stormId, hist.stormName)) continue;
     if (!showAll && hist.stormName.toLowerCase() !== selectedName?.toLowerCase() && hist.stormId !== selectedName) continue;
     if (_hasObs(hist.stormId, hist.stormName)) continue; // NOAA observed track wins
@@ -3545,7 +3549,7 @@ function plotNHCTracks(map) {
       const _pastLL = _pts.slice(0, _curIdx + 1).filter(p => p.lat != null && p.lon != null).map(p => [p.lat, p.lon]);
       // Skip the reconstructed past line when NOAA's observed track (layer 3) exists
       // for this storm — that authoritative line is drawn above and matches NOAA.
-      if (_pastLL.length >= 2 && !_hasObs(fp.stormId, fp.stormName)) {
+      if (_SHOW_PAST_TRACK && _pastLL.length >= 2 && !_hasObs(fp.stormId, fp.stormName)) {
         const _pastAnchored = _fpStorm ? _anchorTrail(_pastLL, [_fpStorm.lat, _fpStorm.lon]) : _pastLL;
         const _pl = L.polyline(_smoothTrack(_pastAnchored), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
         _pl.addTo(map);
@@ -3557,6 +3561,7 @@ function plotNHCTracks(map) {
         // reliable past/future without trusting observed timestamps: past fixes carry
         // the `past` flag; forecast fixes carry a tau (>0 = future, 0 = current).
         const future = pt.past ? false : (pt.tau != null ? pt.tau > 0 : (pt.t != null && pt.t > nowT));
+        if (!_SHOW_PAST_TRACK && !future) continue; // v6.24: history off — draw forecast dots only
         const _mv = _mvBetween(pt, _pts[_i + 1]) || _mvBetween(_pts[_i - 1], pt);
         const dot = L.circleMarker([pt.lat, pt.lon], {
           radius: 3.5, color: future ? '#22d3ee' : '#94a3b8',

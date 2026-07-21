@@ -2192,19 +2192,45 @@ async function fetchNHCData() {
     // v6.03: forecast-track dots carry per-point intensity when NHC provides it.
     // Group NHC's forecast points (all taus, each with max wind / gust / pressure)
     // by storm; GDACS points (time only) fill in for storms NHC doesn't cover.
-    if (gis && gis.forecastPoints && gis.forecastPoints.length) {
+    // v6.07: past observed positions (layer 1) are merged in too, so the track
+    // table and map dots span the FULL history → forecast, not just the forecast.
+    if (gis && ((gis.forecastPoints && gis.forecastPoints.length) || (gis.pastPoints && gis.pastPoints.length))) {
       const byStorm = {};
-      for (const q of gis.forecastPoints) {
-        const k = (q.stormId || '') + '|' + (q.stormName || '').toLowerCase();
-        (byStorm[k] || (byStorm[k] = { stormId: q.stormId, stormName: q.stormName, pts: [], _src: 'nhc' })).pts.push({
+      const bucket = q => { const k = (q.stormId || '') + '|' + (q.stormName || '').toLowerCase(); return (byStorm[k] || (byStorm[k] = { stormId: q.stormId, stormName: q.stormName, pts: [], _src: 'nhc' })); };
+      for (const q of (gis.forecastPoints || [])) {
+        bucket(q).pts.push({
           lat: q.lat, lon: q.lon, t: (q.validTime || (Date.now() + (q.tau || 0) * 3600000)),
           label: q.label || (q.tau != null ? ('+' + q.tau + 'h') : ''),
           maxWind: q.maxWind, gusts: q.gusts, minPressure: q.minPressure, type: q.type, tau: q.tau
         });
       }
-      // Only use NHC as the dot source when it's a real multi-point forecast track;
-      // if it only returned the current position, leave GDACS to supply the dots.
-      for (const k in byStorm) { if (byStorm[k].pts.length >= 2) { byStorm[k].pts.sort((a, b) => (a.tau || 0) - (b.tau || 0)); _nhcData.fcstPoints.push(byStorm[k]); } }
+      for (const q of (gis.pastPoints || [])) {
+        if (q.validTime == null) continue; // need a real time to place it on the timeline
+        bucket(q).pts.push({
+          lat: q.lat, lon: q.lon, t: q.validTime, label: q.label || '',
+          maxWind: q.maxWind, gusts: q.gusts, minPressure: q.minPressure, type: q.type, tau: null, past: true
+        });
+      }
+      // Sort each storm's points chronologically and drop any near-duplicate fixes
+      // (a past observation and the tau-0 forecast can land on the same hour) —
+      // keep whichever carries more detail (prefer one with a pressure reading).
+      for (const k in byStorm) {
+        const b = byStorm[k];
+        b.pts.sort((a, b2) => (a.t || 0) - (b2.t || 0));
+        const dedup = [];
+        for (const pt of b.pts) {
+          const prev = dedup[dedup.length - 1];
+          if (prev && Math.abs((prev.t || 0) - (pt.t || 0)) < 90 * 60000) {
+            if ((pt.minPressure && !prev.minPressure) || (pt.maxWind && !prev.maxWind && prev.tau == null)) dedup[dedup.length - 1] = pt;
+            continue;
+          }
+          dedup.push(pt);
+        }
+        b.pts = dedup;
+      }
+      // Only use NHC as the dot source when it's a real multi-point track; if it
+      // only returned a single fix, leave GDACS to supply the dots.
+      for (const k in byStorm) { if (byStorm[k].pts.length >= 2) _nhcData.fcstPoints.push(byStorm[k]); }
     }
     const _normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const _attachGdacsGeo = (gd, stormId, stormName) => {
@@ -2254,10 +2280,14 @@ async function fetchNHCData() {
 async function _fetchNHCGIS() {
   const base = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
   const q = 'where=1%3D1&outFields=*&f=geojson&resultRecordCount=500';
-  const result = { positions: [], tracks: [], cones: [], windRadii: [], forecastPoints: [] };
+  const result = { positions: [], tracks: [], cones: [], windRadii: [], forecastPoints: [], pastPoints: [] };
   try {
-    const [posRes, trkRes, coneRes, wr34Res, wr50Res, wr64Res] = await Promise.allSettled([
+    // Layer 1 = Observed Position (past track fixes, each with its own wind/gust/
+    // pressure) — pulled alongside the forecast layers so the track table can show
+    // the FULL history, not just the forecast half. (v6.07)
+    const [posRes, pastRes, trkRes, coneRes, wr34Res, wr50Res, wr64Res] = await Promise.allSettled([
       fetch(`${base}/0/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
+      fetch(`${base}/1/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/2/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/4/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/7/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
@@ -2265,11 +2295,38 @@ async function _fetchNHCGIS() {
       fetch(`${base}/9/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null)
     ]);
     const posData = posRes.status === 'fulfilled' ? posRes.value : null;
+    const pastData = pastRes.status === 'fulfilled' ? pastRes.value : null;
     const trkData = trkRes.status === 'fulfilled' ? trkRes.value : null;
     const coneData = coneRes.status === 'fulfilled' ? coneRes.value : null;
     const wr34Data = wr34Res.status === 'fulfilled' ? wr34Res.value : null;
     const wr50Data = wr50Res.status === 'fulfilled' ? wr50Res.value : null;
     const wr64Data = wr64Res.status === 'fulfilled' ? wr64Res.value : null;
+    if (pastData && pastData.features) {
+      // find a plausible valid-time epoch among the numeric props, whatever the
+      // observed layer happens to call its date field (DTG/SYNOPTIME/esri date…).
+      const _findT = props => {
+        const lo = Date.now() - 90 * 86400000, hi = Date.now() + 3 * 86400000;
+        for (const k in props) { const v = props[k]; if (typeof v === 'number' && v > lo && v < hi && v > 1e11) return v; }
+        return null;
+      };
+      for (const f of pastData.features) {
+        const p = f.properties || {};
+        const coords = f.geometry?.coordinates;
+        // guard: this layer must be points ([lon,lat]); ignore anything else so a
+        // schema surprise can't scatter bogus markers across the map.
+        if (f.geometry?.type !== 'Point' || !Array.isArray(coords) || typeof coords[0] !== 'number' || typeof coords[1] !== 'number') continue;
+        const name = p.STORMNAME || p.NAME || 'Unknown';
+        const stormId = p.STORMID || p.ATCFID || '';
+        const _valKt = v => (typeof v === 'number' && isFinite(v) && v > 0 && v < 999) ? v : null;
+        const windKt = _valKt(p.MAXWIND) || _valKt(p.INTENSITY);
+        const maxWind = windKt ? Math.round(windKt * 1.15078) : null;
+        const gustKt = _valKt(p.GUST);
+        const gusts = gustKt ? Math.round(gustKt * 1.15078) : null;
+        const minPressure = (typeof p.MSLP === 'number' && p.MSLP >= 850 && p.MSLP <= 1050) ? p.MSLP : null;
+        const stormType = p.STORMTYPE || p.DVLBL || (maxWind >= 74 ? 'Hurricane' : maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression');
+        result.pastPoints.push({ stormId, stormName: name, lat: coords[1], lon: coords[0], validTime: _findT(p), maxWind, gusts, minPressure, type: stormType, label: p.DATELBL || p.FLDATELBL || null });
+      }
+    }
     if (posData && posData.features) {
       const seen = new Set();
       for (const f of posData.features) {
@@ -3111,39 +3168,39 @@ function showStormTrackTable(idOrName) {
       ? (p.maxWind + (p.gusts ? `<span style="color:var(--text-muted,#7a8699);font-size:0.85em"> G${p.gusts}</span>` : ''))
       : _fc;
     const presCell = p.minPressure ? (p.minPressure + '') : _fc;
-    bodyRows += `<tr style="border-top:1px solid var(--border-subtle,#243040);${isCur ? 'background:rgba(34,211,238,0.16)' : (future ? '' : 'opacity:0.62')}">
-      <td style="padding:7px 8px;white-space:nowrap;font-weight:${isCur ? '700' : '500'}">${escHtml(dateStr)}<div style="font-size:0.82em;color:var(--text-secondary,#9fb0c3)">${escHtml(timeStr)}</div></td>
-      <td style="padding:7px 4px;text-align:center"><span title="${escHtml(bd.label)}" style="display:inline-block;min-width:20px;padding:2px 6px;border-radius:5px;background:${bd.color};color:#0b1220;font-weight:800;font-size:0.9em">${bd.ltr}</span></td>
-      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums;font-weight:${isCur ? '700' : '500'}">${windCell}</td>
-      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${presCell}</td>
+    bodyRows += `<tr style="border-top:1px solid var(--border-subtle,#243040);${isCur ? 'background:rgba(34,211,238,0.16)' : (future ? '' : 'opacity:0.6')}">
+      <td style="padding:4px 8px;white-space:nowrap;font-weight:${isCur ? '700' : '500'}">${escHtml(dateStr)}<span style="font-size:0.85em;color:var(--text-secondary,#9fb0c3);margin-left:5px">${escHtml(timeStr)}</span></td>
+      <td style="padding:4px 4px;text-align:center"><span title="${escHtml(bd.label)}" style="display:inline-block;min-width:18px;padding:1px 5px;border-radius:4px;background:${bd.color};color:#0b1220;font-weight:800;font-size:0.85em">${bd.ltr}</span></td>
+      <td style="padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums;font-weight:${isCur ? '700' : '500'}">${windCell}</td>
+      <td style="padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums">${presCell}</td>
     </tr>`;
   }
   closeStormTrackTable();
   const panel = document.createElement('div');
   panel.id = 'storm-track-panel';
-  panel.setAttribute('style', 'position:fixed;top:64px;left:50%;transform:translateX(-50%);width:min(400px,94vw);max-height:72vh;display:flex;flex-direction:column;background:var(--bg-surface,#0f1520);border:1px solid var(--border-subtle,#243040);border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,0.62);z-index:4000;overflow:hidden;font-family:system-ui;color:var(--text-primary,#e6edf5)');
+  panel.setAttribute('style', 'position:fixed;top:56px;left:50%;transform:translateX(-50%);width:min(340px,90vw);max-height:64vh;display:flex;flex-direction:column;background:var(--bg-surface,#0f1520);border:1px solid var(--border-subtle,#243040);border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.6);z-index:4000;overflow:hidden;font-family:system-ui;color:var(--text-primary,#e6edf5)');
   panel.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border-subtle,#243040)">
-      <span style="display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;background:${headCat.color};color:#0b1220;font-weight:800;font-size:0.95em">${_trackBadge(storm ? storm.maxWind : (rows[0] || {}).maxWind).ltr}</span>
+    <div style="display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(--border-subtle,#243040)">
+      <span style="display:inline-block;min-width:19px;padding:1px 6px;border-radius:5px;background:${headCat.color};color:#0b1220;font-weight:800;font-size:0.9em">${_trackBadge(storm ? storm.maxWind : (rows[0] || {}).maxWind).ltr}</span>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:700;font-size:1.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(type)} ${escHtml(name)}</div>
-        <div style="font-size:0.72em;color:var(--text-secondary,#9fb0c3)">Forecast track · times in your local zone (${tzStr})</div>
+        <div style="font-weight:700;font-size:0.95em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(type)} ${escHtml(name)}</div>
+        <div style="font-size:0.66em;color:var(--text-secondary,#9fb0c3)">Full track · your local time (${tzStr})</div>
       </div>
-      <button onclick="closeStormTrackTable()" aria-label="Close" style="background:none;border:none;color:var(--text-secondary,#9fb0c3);font-size:1.4em;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>
+      <button onclick="closeStormTrackTable()" aria-label="Close" style="background:none;border:none;color:var(--text-secondary,#9fb0c3);font-size:1.3em;line-height:1;cursor:pointer;padding:2px 5px">&times;</button>
     </div>
     <div style="overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">
-      <table style="width:100%;border-collapse:collapse;font-size:0.86em">
-        <thead><tr style="position:sticky;top:0;background:var(--bg-surface,#0f1520);color:var(--text-muted,#7a8699);font-size:0.82em;text-align:left">
-          <th style="padding:8px;font-weight:600">DATE / TIME</th>
-          <th style="padding:8px 4px;text-align:center;font-weight:600">TYPE</th>
-          <th style="padding:8px;text-align:right;font-weight:600">WIND<div style="font-weight:400;font-size:0.85em">mph</div></th>
-          <th style="padding:8px;text-align:right;font-weight:600">PRESS<div style="font-weight:400;font-size:0.85em">mb</div></th>
+      <table style="width:100%;border-collapse:collapse;font-size:0.8em">
+        <thead><tr style="position:sticky;top:0;background:var(--bg-surface,#0f1520);color:var(--text-muted,#7a8699);font-size:0.8em;text-align:left">
+          <th style="padding:5px 8px;font-weight:600">DATE / TIME</th>
+          <th style="padding:5px 4px;text-align:center;font-weight:600">TYPE</th>
+          <th style="padding:5px 8px;text-align:right;font-weight:600">WIND<span style="font-weight:400;opacity:0.7"> mph</span></th>
+          <th style="padding:5px 8px;text-align:right;font-weight:600">PRESS<span style="font-weight:400;opacity:0.7"> mb</span></th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </div>
-    <div style="padding:8px 14px;border-top:1px solid var(--border-subtle,#243040);font-size:0.68em;color:var(--text-muted,#7a8699);display:flex;justify-content:space-between;align-items:center">
-      <span>▲ later &nbsp;·&nbsp; now highlighted &nbsp;·&nbsp; earlier ▼</span>
+    <div style="padding:6px 11px;border-top:1px solid var(--border-subtle,#243040);font-size:0.64em;color:var(--text-muted,#7a8699);display:flex;justify-content:space-between;align-items:center">
+      <span>▲ later · now · earlier ▼</span>
       <span>NHC/JTWC</span>
     </div>`;
   document.body.appendChild(panel);

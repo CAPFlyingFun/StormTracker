@@ -401,13 +401,33 @@
   function buildBottomLine(d){
     const c=d.classified;
     const alerts=d.alerts||[];
-    const hasExtreme=alerts.some(a=>((a.properties||a).severity||'').toLowerCase()==='extreme');
+    const _sev=a=>((a.properties||a).severity||'').toLowerCase();
+    const _ev=a=>((a.properties||a).event||'').trim();
+    const hasExtreme=alerts.some(a=>_sev(a)==='extreme');
+    const hasSevere=alerts.some(a=>_sev(a)==='severe');
+    // A Warning (Tropical Storm / Hurricane / Severe Thunderstorm / Tornado /
+    // High Surf etc.) is a call to action regardless of how NWS tags severity.
+    const hasWarning=alerts.some(a=>/warning/i.test(_ev(a)));
     const peak=c.inbound.length?Math.max(...c.inbound.map(x=>x.s.dbz)):0;
+    // v6.36: the Bottom Line used to only look at inbound cell dBZ + "extreme"
+    // alerts, so an active Tropical Storm Warning with no cell on a direct track
+    // read as "All quiet" — flatly contradicting the alerts listed right above.
+    // Name the most significant active alert so the two agree.
+    const _order={extreme:4,severe:3,moderate:2,minor:1,unknown:0};
+    let _topAlert=null,_bo=-1;
+    for(const a of alerts){const o=_order[_sev(a)]!=null?_order[_sev(a)]:0;if(o>_bo){_bo=o;_topAlert=_ev(a)||_topAlert;}}
     let line;
-    if(hasExtreme||peak>=60)line='[!red]**Active severe threat — take protective action now.**[/!]';
-    else if(peak>=52)line='[!orange]**Strong storms approaching — be ready to move indoors.**[/!]';
-    else if(c.inbound.length)line='[!yellow]Rain is on the way — plan for a wet window then clearing.[/!]';
-    else line='[!green]All quiet — no storm impact expected.[/!]';
+    if(hasExtreme||peak>=60){
+      line='[!red]**Active severe threat — take protective action now.**[/!]'+(_topAlert?` (${_topAlert} in effect)`:'');
+    }else if(hasSevere||hasWarning||peak>=52){
+      line=`[!orange]**${_topAlert||'Warning'} in effect — heed the alert and be ready to act.**[/!]`;
+    }else if(alerts.length){
+      line=`[!yellow]${_topAlert||'Advisory'} in effect${c.inbound.length?' — rain on the way too':''}. Review the alerts below and stay weather-aware.[/!]`;
+    }else if(c.inbound.length){
+      line='[!yellow]Rain is on the way — plan for a wet window then clearing.[/!]';
+    }else{
+      line='[!green]All quiet — no storm impact expected.[/!]';
+    }
     return '⏬ Bottom Line Summary\n'+line;
   }
 

@@ -2057,7 +2057,15 @@ S._showNHCTracks = (() => { try { const v = localStorage.getItem('st_nhc_tracks'
 // wind: all|h64|off · fronts/st/flow/dots: on|off. Persisted; read live.
 const _NHC_OPT_DEFAULTS = { tracks: 'all', wind: 'all', fronts: 'on', st: 'on', flow: 'on', dots: 'on' };
 S._nhcLayerOpts = (() => { try { return Object.assign({}, _NHC_OPT_DEFAULTS, JSON.parse(localStorage.getItem('st_nhcLayers') || '{}')); } catch(e) { return Object.assign({}, _NHC_OPT_DEFAULTS); } })();
-function _nhcOpt(k) { return (S._nhcLayerOpts || _NHC_OPT_DEFAULTS)[k]; }
+function _nhcOpt(k) {
+  // v6.0: our CUSTOM hurricane overlays are off for now — the map shows only the
+  // OFFICIAL NHC source (cone + forecast track + forecast points/positions). The
+  // ST Model prediction, surface fronts, flow particles and wind fields are our
+  // own additions; disabled here until we revisit them. Re-enable by deleting
+  // this override (the panel controls and tropical-model.js are left intact).
+  if (k === 'st' || k === 'fronts' || k === 'flow' || k === 'wind') return 'off';
+  return (S._nhcLayerOpts || _NHC_OPT_DEFAULTS)[k];
+}
 function setNHCLayerOpt(k, v) {
   S._nhcLayerOpts[k] = v;
   try { localStorage.setItem('st_nhcLayers', JSON.stringify(S._nhcLayerOpts)); } catch(e) {}

@@ -27,18 +27,24 @@ function initRadar(){
         <div class="map-ctrl-btn" id="radar-scan-view" title="Scan map center">${_ri('scan-view')}</div>
         <div class="map-ctrl-btn" id="radar-scan-hires" title="HD Scan (15mi zoom 12)">${_ri('scan-hires')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-src" title="Toggle radar source">${_ri(S.radarSource==='nexrad'?'source-nex':'source-rv')}</div>
+        <div class="map-ctrl-btn" id="btn-radar-overlay" title="Radar overlay on/off" onclick="toggleRadarOverlay()" style="opacity:${S._radarOverlayVisible?1:0.4}">${_ri('radar-overlay')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-units" title="Toggle mi/km">${_ri(S.radarMetric?'units-km':'units')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-airports" title="Toggle airports">${_ri('airports')}</div>
         <div class="map-ctrl-btn" id="radar-anim-btn" title="Animate radar">${_ri('play')}</div>
         <div class="map-ctrl-btn" id="btn-lightning" title="Toggle lightning strikes" onclick="toggleLightning()" style="opacity:${(typeof _ltgShown==='function'&&!_ltgShown())?0.4:1};font-size:15px;display:flex;align-items:center;justify-content:center">⚡</div>
       </div>
       <div class="map-controls map-controls-right">
-        <div class="map-ctrl-btn" id="btn-layers-panel" title="Map layers" onclick="toggleLayersPanel()" style="font-size:14px;display:flex;align-items:center;justify-content:center">🗂️</div>
+        <div class="map-ctrl-btn" id="btn-points" title="Storm points" onclick="toggleStormPoints()" style="opacity:${S._pointsMode&&S._pointsMode!=='off'?1:0.4}">${_ri(S._pointsMode==='inbound'?'points-12':'points')}</div>
+        <div class="map-ctrl-btn" id="btn-tracks" title="Track cones" onclick="toggleStormTracks()" style="opacity:${S._tracksMode&&S._tracksMode!=='off'?1:0.4}">${_ri(S._tracksMode==='inbound'?'tracks-12':'tracks')}</div>
+        <div class="map-ctrl-btn" id="btn-zones" title="Storm zones" onclick="toggleStormZones()" style="opacity:${S._showZones?1:0.4}">${_ri('zones')}</div>
+        <div class="map-ctrl-btn" id="btn-path-arrows" title="Path arrows" onclick="togglePathArrows()" style="opacity:${S._showPathArrows?1:0.4}">${_ri('path-arrows')}</div>
+        <div class="map-ctrl-btn" id="btn-relmotion" title="Motion vectors" onclick="toggleRelMotion()" style="font-weight:700;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;opacity:${S._relMotionMode&&S._relMotionMode!=='off'?1:0.4}">${S._relMotionMode==='all'?'∡A':S._relMotionMode==='inbound'?'∡12':'∡'}</div>
+        <div class="map-ctrl-btn" id="btn-mping" title="mPING reports" onclick="toggleMping()" style="opacity:${S._mpingVisible?1:0.4}">${_ri('mping')}</div>
+        <div class="map-ctrl-btn" id="btn-alert-polys" title="NWS alert areas" onclick="toggleAlertPolygons()" style="opacity:0.4">${_ri('alert-polys')}</div>
         <div class="map-ctrl-btn" id="btn-iso-3d" title="3D Storm Terrain" onclick="show3DView()">${_ri('terrain-3d')}</div>
         <div class="map-ctrl-btn" id="radar-clear-cone" title="Clear track" style="display:none" onclick="clearStormCone()">${_ri('clear')}</div>
         <div class="map-ctrl-btn" id="clutter-toggle" title="Clutter hidden (tap to show)" style="display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);border-color:#555" onclick="toggleClutter()">${_ri('clutter')}</div>
       </div>
-      <div id="map-layers-panel" style="display:none;position:absolute;top:8px;right:52px;z-index:1002;width:178px;max-height:72%;overflow-y:auto;background:rgba(8,14,28,0.94);border:1px solid var(--border-subtle);border-radius:10px;padding:8px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)">${_layersPanelHTML()}</div>
       <div class="radar-anim-bar" id="radar-anim-bar" style="display:none">
         <input type="range" id="radar-anim-slider" min="0" max="0" value="0" class="flex-1">
         <span id="radar-anim-time" style="font-size:0.65em;color:var(--text-secondary);min-width:50px;text-align:right"></span>

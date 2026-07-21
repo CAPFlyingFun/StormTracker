@@ -999,7 +999,7 @@ async function sendAIChat(){
   // rate limit, 402 quota) skip the retry — those won't fix themselves
   // by trying again. Network errors / timeouts / 5xx server errors retry.
   const MAX_ATTEMPTS=3;
-  const PER_ATTEMPT_MS=60000;
+  const PER_ATTEMPT_MS=120000; // v6.14: 5000-token briefings take longer to generate — give each attempt 2 min so a long full briefing isn't aborted mid-stream
   const sysPrompt=getAISystemPrompt();
   const history=_aiChatHistory.slice(-10);
   let attempt=0;
@@ -1010,7 +1010,7 @@ async function sendAIChat(){
     const ctrl=new AbortController();
     const to=setTimeout(()=>ctrl.abort(),PER_ATTEMPT_MS);
     try{
-      const result=await _aiComplete(history,sysPrompt,{maxTokens:2500,temperature:0.4,signal:ctrl.signal});
+      const result=await _aiComplete(history,sysPrompt,{maxTokens:5000,temperature:0.4,signal:ctrl.signal});
       clearTimeout(to);
       _stopAICountdown();
 

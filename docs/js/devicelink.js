@@ -172,11 +172,14 @@
           </div>
           <div id="devlink-code-msg" style="font-size:0.8em;margin-top:10px;text-align:center;min-height:1em"></div>
           <details style="margin-top:14px">
-            <summary style="font-size:0.78em;color:var(--text-muted,#8aa);cursor:pointer">No internet on one device? Use an offline QR / link</summary>
+            <summary style="font-size:0.78em;color:var(--text-muted,#8aa);cursor:pointer">Send a link — AirDrop, QR, or copy (works offline)</summary>
             <div style="margin-top:10px">
-              <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN (4–8 digits)</label>
+              <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN (4–8 digits) — needed on the other device to open</label>
               <input id="devlink-send-pin" inputmode="numeric" maxlength="8" placeholder="e.g. 4821" style="${_IN};font-family:var(--font-mono,monospace);font-size:1.1em;letter-spacing:3px;margin-bottom:10px">
-              <button onclick="dlGenerate()" style="${_BTN}">Show QR / link</button>
+              <div style="display:flex;gap:6px;margin-bottom:2px">
+                <button onclick="dlShare()" style="${_BTN};flex:1">📤 Share (AirDrop…)</button>
+                <button onclick="dlGenerate()" style="flex:1;padding:10px;background:rgba(255,255,255,0.06);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);cursor:pointer;font-weight:600">Show QR</button>
+              </div>
               <div id="devlink-send-out" style="display:none;margin-top:12px;text-align:center">
                 <canvas id="devlink-qr" width="288" height="288" style="width:min(288px,72vw);height:auto;background:#fff;border-radius:10px;padding:8px;box-sizing:border-box"></canvas>
                 <div id="devlink-qr-note" style="font-size:0.72em;color:var(--text-muted,#8aa);margin:8px 0"></div>
@@ -310,6 +313,28 @@
       const nKeys=Object.keys(data).length;
       _el('devlink-qr-note').textContent=ok?`Scan with your other device's camera · ${nKeys} settings${includeKeys?' (incl. keys)':''}`:`Too much data for a QR — use Copy link · ${nKeys} settings`;
     }catch(e){alert('Could not generate: '+e.message);}
+  };
+  // AirDrop-style: hand the encrypted link to the native share sheet. On iPhone/
+  // Mac that sheet includes AirDrop; tapping the received link reopens the app on
+  // the #link= handler, which auto-fills Import. Encrypted with the PIN, so the
+  // shared link is ciphertext. Falls back to copy where navigator.share is absent.
+  window.dlShare=async function(){
+    _ensureModal();
+    const pin=(_el('devlink-send-pin').value||'').trim();
+    if(pin.length<4){alert('Choose a PIN of at least 4 digits first.');return;}
+    const includeKeys=_el('devlink-send-keys').checked;
+    try{
+      const data=window.DL_collect(includeKeys);
+      _lastCode=await window.DL_encrypt(data,pin,{t:1});
+      _lastLink=_appBase()+'#link='+_lastCode;
+      if(navigator.share){
+        try{ await navigator.share({title:'StormTracker settings',text:'Open on your other device to import these StormTracker settings (PIN required).',url:_lastLink}); }
+        catch(e){ /* user cancelled the share sheet — no-op */ }
+      }else{
+        try{ await navigator.clipboard.writeText(_lastLink); alert('Direct share isn’t available in this browser — the link was copied instead. Paste it into Receive on your other device.'); }
+        catch(e){ alert('Direct share isn’t available here. Use “Show QR” or Copy link instead.'); }
+      }
+    }catch(e){alert('Could not prepare share: '+e.message);}
   };
   window.dlCopy=async function(which){
     const txt=which==='link'?_lastLink:_lastCode;if(!txt)return;

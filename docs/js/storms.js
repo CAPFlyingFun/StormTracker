@@ -3312,6 +3312,31 @@ function toggleNHCTracks(on) {
   if (btn) btn.style.opacity = on ? '1' : '0.4';
   toast(on ? 'Hurricane tracks shown on map' : 'Hurricane tracks hidden');
 }
+// v6.20: Catmull-Rom spline — hurricanes/storms curve, so draw their tracks as a
+// smooth curve THROUGH the real fixes rather than straight segments between them.
+// Passes exactly through every input point; only the between-point path is curved.
+// Input/output are [lat,lon] arrays. segsPerSpan = interpolation density.
+function _smoothTrack(latlngs, segsPerSpan) {
+  const pts = (latlngs || []).filter(p => p && p[0] != null && p[1] != null);
+  if (pts.length < 3) return pts; // nothing to curve
+  const seg = segsPerSpan || 14;
+  const out = [];
+  const n = pts.length;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || pts[i + 1];
+    for (let t = 0; t < seg; t++) {
+      const s = t / seg, s2 = s * s, s3 = s2 * s;
+      const lat = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * s + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * s2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * s3);
+      const lon = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * s + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * s2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * s3);
+      out.push([lat, lon]);
+    }
+  }
+  out.push(pts[n - 1]); // ensure the final real fix is included
+  return out;
+}
 function plotNHCTracks(map) {
   // v5.87: generation counter — the async ST Model draw checks this so a slow
   // model run can never paint onto a map that has since been re-plotted.
@@ -3349,7 +3374,7 @@ function plotNHCTracks(map) {
     if (!track.coords || track.coords.length < 2) continue;
     const storm = (_nhcData.systems || []).find(s => s.id === track.stormId || s.name.toLowerCase() === track.stormName.toLowerCase());
     const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
-    const latlngs = track.coords.map(c => [c[1], c[0]]);
+    const latlngs = _smoothTrack(track.coords.map(c => [c[1], c[0]]));
     const line = L.polyline(latlngs, {
       color: cat.color || '#9333EA', weight: 3, opacity: 0.9,
       dashArray: '8,6', interactive: false
@@ -3364,7 +3389,7 @@ function plotNHCTracks(map) {
     if (!hist.coords || hist.coords.length < 2) continue;
     const storm = (_nhcData.systems || []).find(s => s.id === hist.stormId || s.name.toLowerCase() === hist.stormName.toLowerCase());
     const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
-    const line = L.polyline(hist.coords.map(c => [c[1], c[0]]), {
+    const line = L.polyline(_smoothTrack(hist.coords.map(c => [c[1], c[0]])), {
       color: cat.color || '#9333EA', weight: 2, opacity: 0.5, interactive: false
     });
     line.addTo(map);
@@ -3419,7 +3444,7 @@ function plotNHCTracks(map) {
       if (_curIdx < 0) _curIdx = _pts.length - 1;
       const _pastLL = _pts.slice(0, _curIdx + 1).filter(p => p.lat != null && p.lon != null).map(p => [p.lat, p.lon]);
       if (_pastLL.length >= 2) {
-        const _pl = L.polyline(_pastLL, { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
+        const _pl = L.polyline(_smoothTrack(_pastLL), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
         _pl.addTo(map);
         S._nhcTrackLayers.push(_pl);
       }

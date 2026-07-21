@@ -2227,6 +2227,23 @@ async function fetchNHCData() {
           dedup.push(pt);
         }
         b.pts = dedup;
+        // v6.08: reject implausible outliers — a tropical cyclone CENTER never
+        // jumps >70 mph between fixes, so a point that implies more than that is a
+        // bad/mislocated fix (the "scattered" dots). Drop it rather than plot it.
+        const _R2 = 3958.8, clean = [];
+        for (const pt of b.pts) {
+          const prev = clean[clean.length - 1];
+          if (prev && prev.t != null && pt.t != null && pt.lat != null && prev.lat != null) {
+            const φ1 = prev.lat * Math.PI / 180, φ2 = pt.lat * Math.PI / 180;
+            const dφ = φ2 - φ1, dλ = (pt.lon - prev.lon) * Math.PI / 180;
+            const hv = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+            const distMi = 2 * _R2 * Math.asin(Math.min(1, Math.sqrt(hv)));
+            const hrs = Math.abs(pt.t - prev.t) / 3600000;
+            if (hrs > 0 && distMi / hrs > 70) continue; // outlier — skip
+          }
+          clean.push(pt);
+        }
+        b.pts = clean;
       }
       // Only use NHC as the dot source when it's a real multi-point track; if it
       // only returned a single fix, leave GDACS to supply the dots.
@@ -3304,6 +3321,18 @@ function plotNHCTracks(map) {
         const mph = (hrs > 0 && distMi >= 0) ? Math.round(distMi / hrs) : null;
         return { dir: (typeof _degToCompass === 'function' ? _degToCompass(brg) : Math.round(brg) + '°'), mph };
       };
+      // v6.08: CONNECT the past fixes into a continuous trail (they read as
+      // scattered dots otherwise). Solid muted line in the storm's category color,
+      // built from the SAME points the dots use so the two always agree. The
+      // forecast half already has its own dashed track line (layer 2) + cone.
+      const _fpStorm = (_nhcData.systems || []).find(s => (s.name || '').toLowerCase() === fp.stormName.toLowerCase() || s.id === fp.stormId);
+      const _fpCat = _fpStorm ? (_fpStorm.category || _saffirSimpson(_fpStorm.maxWind)) : { color: '#94a3b8' };
+      const _pastLL = _pts.filter(p => p.lat != null && p.lon != null && p.t != null && p.t <= nowT).map(p => [p.lat, p.lon]);
+      if (_pastLL.length >= 2) {
+        const _pl = L.polyline(_pastLL, { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
+        _pl.addTo(map);
+        S._nhcTrackLayers.push(_pl);
+      }
       for (let _i = 0; _i < _pts.length; _i++) {
         const pt = _pts[_i];
         if (pt.lat == null || pt.lon == null) continue;

@@ -1249,9 +1249,9 @@ function buildStormCone(storm,mv,rangeOverride){
 // distance, floored so close storms still show their near-path core, capped at scan radius),
 // so "in path" reflects the rain this storm actually brings toward you — not the whole radius.
 function getStormConeRain(s){
-  if(!s)return{count:0,maxDbz:0};
+  if(!s)return{count:0,minDbz:0,avgDbz:0,maxDbz:0};
   if(s._coneRainScanId===S._stormScanId&&s._coneRain)return s._coneRain;
-  let res={count:0,maxDbz:0};
+  let res={count:0,minDbz:0,avgDbz:0,maxDbz:0};
   try{
     const mv=(typeof getHybridMovement==='function'?getHybridMovement(s):null)
       ||(typeof getSteeringMv==='function'?getSteeringMv():null)
@@ -1262,13 +1262,10 @@ function getStormConeRain(s){
       if(pts)res=_coneRainStats(pts)||res;
     }
   }catch(e){}
-  // v6.31: the cone samples the corridor AHEAD of the storm (from its apex
-  // forward), so it excludes the cell's own core — which is why a 55 dBZ cell
-  // could report "in path · 45 dBZ max" (the strongest thing already sitting in
-  // the path ahead). But the storm itself is the leading edge of its own path, so
-  // the path max should never read weaker than the cell. Fold the cell's peak in.
-  const _sd=Math.round(s.dbz||0);
-  if(res.count>0&&_sd>res.maxDbz)res.maxDbz=_sd;
+  // v6.32: the cone samples the corridor AHEAD of the storm (from its apex
+  // forward), so its numbers describe the rain already sitting in the path
+  // between this cell and you — reported as a min·avg·max spread rather than a
+  // lone max that just duplicated the card's Peak dBZ.
   s._coneRain=res;s._coneRainScanId=S._stormScanId;
   return res;
 }
@@ -4290,7 +4287,7 @@ function _renderStormsCore(){
         }
       }
       const _cr=getStormConeRain(s);
-      const _coneRainLine=(_cr&&_cr.count>0)?`<div title="${tStr('Rain returns inside the projected track path')}" style="margin-top:5px;font-size:0.68em;color:#5bc0ff;display:flex;align-items:center;gap:5px"><span>💧</span><span style="font-weight:600;color:var(--text-secondary)">${tStr('In path')}:</span><span style="font-weight:700">${_cr.count}</span><span style="color:var(--text-secondary)">${tStr('returns')}</span>${_cr.maxDbz?`<span style="color:var(--text-secondary)">·</span><span style="font-weight:700">${_cr.maxDbz} dBZ</span><span style="color:var(--text-secondary)">${tStr('max')}</span>`:''}</div>`:'';
+      const _coneRainLine=(_cr&&_cr.count>0)?`<div title="${tStr('Rain returns inside the projected track path — min · avg · max dBZ')}" style="margin-top:5px;font-size:0.68em;color:#5bc0ff;display:flex;align-items:center;gap:5px"><span>💧</span><span style="font-weight:600;color:var(--text-secondary)">${tStr('In path')}:</span><span style="font-weight:700">${_cr.count}</span><span style="color:var(--text-secondary)">${tStr('returns')}</span>${_cr.maxDbz?`<span style="color:var(--text-secondary)">·</span><span style="font-weight:700">${_cr.minDbz} / ${_cr.avgDbz} / ${_cr.maxDbz}</span><span style="color:var(--text-secondary)">dBZ</span><span style="color:var(--text-secondary);opacity:0.7;font-size:0.9em">${tStr('min·avg·max')}</span>`:''}</div>`:'';
       // v5.64: hybrid view — plain-English readout above, boxes below. The view
       // toggle (filter bar) flips between hybrid / text-only / boxes-only.
       const _viewMode=_stormView();

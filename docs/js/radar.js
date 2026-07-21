@@ -2706,10 +2706,12 @@ function clearStormTracks(){
 }
 function _coneRainStats(pts){
   const raw=S._rawScanPts;
-  if(!pts||pts.length<3||!raw||!raw.length)return{count:0,maxDbz:0};
+  if(!pts||pts.length<3||!raw||!raw.length)return{count:0,minDbz:0,avgDbz:0,maxDbz:0};
   let minLat=90,maxLat=-90,minLng=180,maxLng=-180;
   for(const p of pts){if(p[0]<minLat)minLat=p[0];if(p[0]>maxLat)maxLat=p[0];if(p[1]<minLng)minLng=p[1];if(p[1]>maxLng)maxLng=p[1];}
-  let count=0,maxDbz=0;
+  // v6.32: track min / sum / max so the card can show the FULL intensity spread
+  // in the corridor (min·avg·max), not just a max that duplicates Peak dBZ.
+  let count=0,maxDbz=0,minDbz=999,sumDbz=0;
   for(let k=0;k<raw.length;k++){
     const rp=raw[k];const y=rp.lat,x=rp.lng;
     if(y<minLat||y>maxLat||x<minLng||x>maxLng)continue;
@@ -2718,9 +2720,9 @@ function _coneRainStats(pts){
       const yi=pts[i][0],xi=pts[i][1],yj=pts[j][0],xj=pts[j][1];
       if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;
     }
-    if(inside){count++;if((rp.dbz||0)>maxDbz)maxDbz=rp.dbz||0;}
+    if(inside){count++;const d=rp.dbz||0;if(d>maxDbz)maxDbz=d;if(d<minDbz)minDbz=d;sumDbz+=d;}
   }
-  return{count,maxDbz};
+  return{count,minDbz:count?minDbz:0,avgDbz:count?Math.round(sumDbz/count):0,maxDbz};
 }
 function plotStormTracks(map){
   clearStormTracks();

@@ -2280,10 +2280,14 @@ async function _fetchNHCGIS() {
         const stormId = p.STORMID || p.ATCFID || '';
         const tauRaw = (p.TAU != null ? p.TAU : (p.ADVDATE != null ? p.ADVDATE : 0));
         const tau = (typeof tauRaw === 'number') ? tauRaw : (parseInt(tauRaw, 10) || 0);
-        const windKt = p.MAXWIND || p.INTENSITY || null;
+        // NHC uses 9999 / -9999 / 0 as "missing" sentinels for MSLP, wind and gust
+        // in the forecast-point layer — never let those leak into the popup.
+        const _valKt = v => (typeof v === 'number' && isFinite(v) && v > 0 && v < 999) ? v : null;
+        const windKt = _valKt(p.MAXWIND) || _valKt(p.INTENSITY);
         const maxWind = windKt ? Math.round(windKt * 1.15078) : null;
-        const gusts = p.GUST ? Math.round(p.GUST * 1.15078) : null;
-        const minPressure = p.MSLP || null;
+        const gustKt = _valKt(p.GUST);
+        const gusts = gustKt ? Math.round(gustKt * 1.15078) : null;
+        const minPressure = (typeof p.MSLP === 'number' && p.MSLP >= 850 && p.MSLP <= 1050) ? p.MSLP : null;
         const stormType = p.STORMTYPE || (maxWind >= 74 ? 'Hurricane' : maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression');
         // v6.03: keep EVERY forecast point (all forecast hours), each with its own
         // max wind / gust / pressure, so the track-dot popups can show the forecast
@@ -3137,9 +3141,29 @@ function plotNHCTracks(map) {
     for (const fp of ((typeof _nhcOpt === 'function' && _nhcOpt('dots') === 'off') ? [] : (_nhcData.fcstPoints || []))) {
       if (fp.stormName.toLowerCase() !== selectedName.toLowerCase() && fp.stormId !== selectedName) continue;
       const nowT = Date.now();
-      for (const pt of (fp.pts || [])) {
+      const _pts = fp.pts || [];
+      // v6.05: forecast movement (direction + speed) at each dot. NHC's point layer
+      // has no per-tau motion vector, so derive it from the leg to the NEXT dot
+      // (great-circle bearing + distance ÷ time). Last dot reuses the leg into it.
+      const _R = 3958.8; // Earth radius, miles
+      const _mvBetween = (a, b) => {
+        if (!a || !b || a.lat == null || b.lat == null || a.t == null || b.t == null) return null;
+        const φ1 = a.lat * Math.PI / 180, φ2 = b.lat * Math.PI / 180;
+        const dφ = φ2 - φ1, dλ = (b.lon - a.lon) * Math.PI / 180;
+        const h = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+        const distMi = 2 * _R * Math.asin(Math.min(1, Math.sqrt(h)));
+        const y = Math.sin(dλ) * Math.cos(φ2);
+        const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
+        const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        const hrs = (b.t - a.t) / 3600000;
+        const mph = (hrs > 0 && distMi >= 0) ? Math.round(distMi / hrs) : null;
+        return { dir: (typeof _degToCompass === 'function' ? _degToCompass(brg) : Math.round(brg) + '°'), mph };
+      };
+      for (let _i = 0; _i < _pts.length; _i++) {
+        const pt = _pts[_i];
         if (pt.lat == null || pt.lon == null) continue;
         const future = pt.t != null && pt.t > nowT;
+        const _mv = _mvBetween(pt, _pts[_i + 1]) || _mvBetween(_pts[_i - 1], pt);
         const dot = L.circleMarker([pt.lat, pt.lon], {
           radius: 3.5, color: future ? '#22d3ee' : '#94a3b8',
           fillColor: future ? '#22d3ee' : '#94a3b8', fillOpacity: 0.85, weight: 1, interactive: false
@@ -3155,6 +3179,7 @@ function plotNHCTracks(map) {
           if (pt.type || (_cat && _cat.label)) _lines.push(`<div style="font-weight:700;color:${_cat ? _cat.color : '#22d3ee'}">${escHtml(pt.type || (_cat ? _cat.label : ''))}</div>`);
           if (pt.maxWind != null) _lines.push(`💨 ${pt.maxWind} mph${pt.gusts ? ' (G' + pt.gusts + ')' : ''}`);
           if (pt.minPressure) _lines.push(`🔵 ${pt.minPressure} mb`);
+          if (_mv && _mv.mph != null) _lines.push(`➡️ ${escHtml(_mv.dir)} at ${_mv.mph} mph`);
           const _intHtml = _lines.length ? '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.14);margin:4px 0">' + _lines.join('<br>') : '';
           // v6.04: show the valid time in the USER's local zone (weekday + date +
           // clock, honoring their 12/24h setting), not NHC's basin-zone label.

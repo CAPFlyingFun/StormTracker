@@ -1254,8 +1254,17 @@ function plotStormMarkers(map){
   clearStormCone();
   clearStormTracks();
   updateClutterButton();
-  const stormList=getVisibleStormList();
+  let stormList=getVisibleStormList();
   if(!stormList.length)return;
+  // v6.28: bound how many cell markers we DRAW so a wide scan (up to 200 mi) can't
+  // flood the map / choke mobile. Full scan is unchanged — only the on-map draw is
+  // capped, keeping the cells most likely to reach you (smallest projected miss), so
+  // wide passers (>6 mi off-track) are dropped FIRST when over the cap.
+  const _MAX_DRAWN_CELLS=600;
+  if(stormList.length>_MAX_DRAWN_CELLS){
+    const _missMi=s=>{try{const m=(typeof stormMaster==='function')?stormMaster(s):null;return (m&&m.perpMissMi!=null&&isFinite(m.perpMissMi))?m.perpMissMi:(s.distance!=null?s.distance:9999);}catch(e){return s.distance!=null?s.distance:9999}};
+    stormList=stormList.map(s=>[s,_missMi(s)]).sort((a,b)=>a[1]-b[1]).slice(0,_MAX_DRAWN_CELLS).map(x=>x[0]);
+  }
   const mv=(typeof getSteeringMv==='function')?getSteeringMv():(S.stormMovement&&S.stormMovement.speed>=2?S.stormMovement:null);
   const sc=zoomScale(map);
   const pending=[];
@@ -2723,6 +2732,12 @@ function plotStormTracks(map){
         return k==='direct'||k==='near_direct'||k==='near_miss';
       }).sort((a,b)=>(b._eta.impact||0)-(a._eta.impact||0)).slice(0,12);
     }
+  }
+  // v6.28: 'all' mode — cap cones by relevance (smallest projected miss first) so a
+  // wide scan can't draw hundreds of overlapping cones. Full list still tracked.
+  if(S._tracksMode!=='inbound'&&storms.length>500){
+    const _missMi=s=>{try{const m=(typeof stormMaster==='function')?stormMaster(s):null;return (m&&m.perpMissMi!=null&&isFinite(m.perpMissMi))?m.perpMissMi:(s.distance!=null?s.distance:9999);}catch(e){return s.distance!=null?s.distance:9999}};
+    storms=storms.map(s=>[s,_missMi(s)]).sort((a,b)=>a[1]-b[1]).slice(0,500).map(x=>x[0]);
   }
   const _coneFloor=(typeof getConeMinDbz==='function')?getConeMinDbz():30;
   storms.forEach(s=>{

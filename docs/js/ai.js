@@ -450,6 +450,35 @@ function buildWeatherContext(){
     }
   }catch(e){}
 
+  // v6.18: TROPICAL SYSTEMS — feed the NHC/JTWC vitals (max sustained wind, PEAK
+  // GUSTS, MIN CENTRAL PRESSURE, motion, category) directly, so the briefing reports
+  // the storm's real numbers instead of inferring them from alert text (which caused
+  // pressure + gusts to go missing). When NHC doesn't publish a field, say so.
+  try{
+    const _sys=(typeof _nhcData!=='undefined'&&_nhcData&&Array.isArray(_nhcData.systems))?_nhcData.systems:[];
+    if(_sys.length&&S.lat!=null){
+      const _rows=_sys.map(s=>{
+        const d=(s.dist!=null)?s.dist:((s.lat!=null&&s.lon!=null&&typeof haversine==='function')?haversine(S.lat,S.lon,s.lat,s.lon):null);
+        const b=(s.lat!=null&&s.lon!=null&&typeof bearingDeg==='function')?bearingDeg(S.lat,S.lon,s.lat,s.lon):null;
+        return {s,d,b};
+      }).filter(x=>x.d==null||x.d<=1500).sort((a,b)=>(a.d==null?9e9:a.d)-(b.d==null?9e9:b.d)).slice(0,5);
+      if(_rows.length){
+        parts.push(`\nTROPICAL SYSTEMS (NHC/JTWC live vitals — report these numbers directly; when a field reads "not published", state that rather than guessing or omitting it):`);
+        for(const {s,d,b} of _rows){
+          const cat=(s.category&&s.category.label)?s.category.label:(s.type||'System');
+          const dTxt=(d!=null)?`${S.radarMetric?(d*1.60934).toFixed(0)+' km':d.toFixed(0)+' mi'} to the ${b!=null?degToDir(b):'?'}`:'distance unknown';
+          const wind=(s.maxWind!=null)?`max sustained ${fmtWind(s.maxWind*1.60934)}`:'max sustained wind not published';
+          const gust=(s.gusts!=null)?`peak gusts ${fmtWind(s.gusts*1.60934)}`:'peak gusts not published';
+          const pres=(s.minPressure!=null)?`min central pressure ${fmtPres(s.minPressure)}`:'central pressure not published';
+          const mov=(s.moveDir)?`moving ${s.moveDir}${s.moveSpeed!=null?' at '+fmtWind(s.moveSpeed*1.60934):''}`:'motion not published';
+          const src=s._source==='jtwc'?'JTWC':s._source==='gdacs'?'GDACS':'NHC';
+          parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]`);
+        }
+        parts.push(`  ALWAYS include the nearest/affecting system's max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE in the Bottom Line or Situation Overview. If a value is "not published", say so explicitly (e.g. "central pressure not published by NHC") — do NOT invent one or quietly drop it.`);
+      }
+    }
+  }catch(e){}
+
   // STORM CONTEXT — consume the SAME post-filter snapshot the Storms tab cards
   // and System Briefing render from, so all three surfaces agree on the cell
   // list. This block replaces the prior raw-storm rebuild.
@@ -970,6 +999,7 @@ Combined section for pilots and mariners. IMPORTANT: Always include knots alongs
 RULES:
 - IMPORTANT: Use the units specified in USER UNITS for ALL measurements in your response. If the user has wind set to km/h, report winds in km/h — not mph or knots. If temperature is °C, use °C. If distance is km, use km. Match their preferences exactly.
 - Reference specific numbers from the data whenever possible
+- TROPICAL SYSTEMS — VITALS + TORNADO THREAT: for any tropical storm/hurricane affecting or approaching the user, (1) report its max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE from the TROPICAL SYSTEMS data — and if a value is "not published", say so rather than omitting it or guessing; and (2) ALWAYS address the tornado threat — tropical systems commonly spawn brief tornadoes in their outer rain bands (especially the right-front quadrant relative to motion). If a Tornado Watch/Warning is in the alerts, lead with it; otherwise state the potential in plain terms (usually low but non-zero in the outer bands) and what to do if a warning is issued. If the risk is genuinely negligible, say "tornadoes are not expected" — never leave tornadoes out of a tropical briefing entirely, and include a tornado line in any Risk Assessment summary.
 - Work with the data you have; briefly disclose a missing, stale, or unavailable source ONLY when it materially changes your confidence or the conclusion (e.g. "the nearest weather station is 60 mi away, so overhead conditions are estimated"). Don't clutter a calm briefing with caveats that don't matter.
 - GEOGRAPHY YOU CAN'T VERIFY: you are given the USER's coordinates, but NOT coordinates for the cities/highways/counties named inside alerts or the AFD. So you may state a distance/direction to such a landmark ONLY when the data explicitly provides that relationship. Otherwise, relay the official place name as written and describe its position in general terms you can support (e.g. "to your west, inland") — never fabricate a specific mileage or precise bearing to a landmark you haven't been given coordinates for.
 - Keep total response under 1200 words for standard detail, under 400 for minimal, under 2000 for technical

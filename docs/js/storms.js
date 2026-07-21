@@ -2273,39 +2273,49 @@ async function fetchNHCData() {
           maxWind: q.maxWind, gusts: q.gusts, minPressure: q.minPressure, type: q.type, tau: null, past: true
         });
       }
-      // Sort each storm's points chronologically and drop any near-duplicate fixes
-      // (a past observation and the tau-0 forecast can land on the same hour) —
-      // keep whichever carries more detail (prefer one with a pressure reading).
+      // v6.19: order each storm's track. Forecast points carry a reliable tau, so
+      // they order by tau. The OBSERVED-position layer's timestamps are unreliable
+      // (they scrambled the past trail into a zig-zag), so DON'T time-sort the past:
+      // a cyclone track is a simple open path, so rebuild it SPATIALLY — start at the
+      // current center and walk nearest-neighbour outward, dropping any fix that would
+      // imply an impossible jump (a real fix is never ~>350 mi from its neighbour).
+      const _R2 = 3958.8;
+      const _gc = (a, c) => {
+        const φ1 = a.lat * Math.PI / 180, φ2 = c.lat * Math.PI / 180;
+        const dφ = φ2 - φ1, dλ = (c.lon - a.lon) * Math.PI / 180;
+        const hv = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+        return 2 * _R2 * Math.asin(Math.min(1, Math.sqrt(hv)));
+      };
       for (const k in byStorm) {
         const b = byStorm[k];
-        b.pts.sort((a, b2) => (a.t || 0) - (b2.t || 0));
-        const dedup = [];
-        for (const pt of b.pts) {
-          const prev = dedup[dedup.length - 1];
-          if (prev && Math.abs((prev.t || 0) - (pt.t || 0)) < 90 * 60000) {
-            if ((pt.minPressure && !prev.minPressure) || (pt.maxWind && !prev.maxWind && prev.tau == null)) dedup[dedup.length - 1] = pt;
+        const withPos = b.pts.filter(p => p.lat != null && p.lon != null);
+        const fcst = withPos.filter(p => !p.past).sort((a, c) => ((a.tau != null ? a.tau : 0) - (c.tau != null ? c.tau : 0)) || ((a.t || 0) - (c.t || 0)));
+        const past = withPos.filter(p => p.past);
+        const anchor = fcst[0] || past[0]; // current center = tau-0 forecast fix
+        const chained = [];
+        if (anchor && past.length) {
+          let cur = anchor; const rem = past.slice();
+          while (rem.length) {
+            let bi = -1, bd = Infinity;
+            for (let i = 0; i < rem.length; i++) { const d = _gc(cur, rem[i]); if (d < bd) { bd = d; bi = i; } }
+            if (bi < 0 || bd > 350) break; // next fix is incoherently far — stop the trail
+            cur = rem[bi]; chained.push(cur); rem.splice(bi, 1);
+          }
+        }
+        // chained runs newest→oldest; reverse to chronological, then append forecast.
+        let ordered = chained.reverse().concat(fcst);
+        // collapse near-duplicate fixes at the same spot (keep the richer record).
+        const out = [];
+        for (const pt of ordered) {
+          const prev = out[out.length - 1];
+          if (prev && _gc(prev, pt) < 5) {
+            if ((pt.minPressure && !prev.minPressure) || (pt.tau != null && prev.tau == null)) out[out.length - 1] = pt;
             continue;
           }
-          dedup.push(pt);
+          out.push(pt);
         }
-        b.pts = dedup;
-        // v6.08: reject implausible outliers — a tropical cyclone CENTER never
-        // jumps >70 mph between fixes, so a point that implies more than that is a
-        // bad/mislocated fix (the "scattered" dots). Drop it rather than plot it.
-        const _R2 = 3958.8, clean = [];
-        for (const pt of b.pts) {
-          const prev = clean[clean.length - 1];
-          if (prev && prev.t != null && pt.t != null && pt.lat != null && prev.lat != null) {
-            const φ1 = prev.lat * Math.PI / 180, φ2 = pt.lat * Math.PI / 180;
-            const dφ = φ2 - φ1, dλ = (pt.lon - prev.lon) * Math.PI / 180;
-            const hv = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
-            const distMi = 2 * _R2 * Math.asin(Math.min(1, Math.sqrt(hv)));
-            const hrs = Math.abs(pt.t - prev.t) / 3600000;
-            if (hrs > 0 && distMi / hrs > 55) continue; // outlier — skip (TC centers rarely exceed ~45 mph)
-          }
-          clean.push(pt);
-        }
-        b.pts = clean;
+        out.forEach((p, i) => { p._ord = i; }); // monotonic path index (drives table + line order)
+        b.pts = out;
       }
       // Only use NHC as the dot source when it's a real multi-point track; if it
       // only returned a single fix, leave GDACS to supply the dots.
@@ -3226,22 +3236,26 @@ function showStormTrackTable(idOrName) {
   const type = (storm && storm.type) || 'Storm';
   if (!fp || !fp.pts || !fp.pts.length) { if (typeof toast === 'function') toast('No track data for ' + name); return; }
   const nowT = Date.now();
-  const rows = fp.pts.slice().filter(p => p.t != null).sort((a, b) => b.t - a.t); // future on top
-  // "current" = the point nearest to now (the row we highlight + scroll to)
-  let curT = null, best = Infinity;
-  for (const p of rows) { const d = Math.abs(p.t - nowT); if (d < best) { best = d; curT = p.t; } }
+  // v6.19: order by the reliable path index (_ord), newest/forecast on top — NOT by
+  // the observed layer's unreliable timestamps (which scrambled the row order).
+  const _hasOrd = fp.pts.length && fp.pts.every(p => p._ord != null);
+  const rows = fp.pts.slice().filter(p => p.lat != null).sort((a, b) => _hasOrd ? (b._ord - a._ord) : ((b.t || 0) - (a.t || 0)));
+  // "current" = the current center (tau-0 forecast fix), the row we highlight + scroll to
+  const _curPt = fp.pts.find(p => !p.past && p.tau != null && p.tau <= 0) || fp.pts.find(p => !p.past && p.tau != null);
+  const _curOrd = _curPt ? _curPt._ord : null;
   const off = -new Date().getTimezoneOffset() / 60;
   const offStr = (Number.isInteger(off) ? Math.abs(off) : Math.abs(off).toFixed(1));
   const tzStr = 'UTC' + (off >= 0 ? '+' : '−') + offStr;
-  const headCat = _saffirSimpson(storm ? storm.maxWind : (rows.find(r => r.t <= nowT) || rows[rows.length - 1] || {}).maxWind);
+  const headCat = _saffirSimpson(storm ? storm.maxWind : (_curPt || rows[0] || {}).maxWind);
   let bodyRows = '';
   for (const p of rows) {
     const d = new Date(p.t);
     const dateStr = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
     const timeStr = (typeof fmtClock === 'function') ? fmtClock(d) : d.toLocaleTimeString();
     const bd = _trackBadge(p.maxWind);
-    const isCur = p.t === curT;
-    const future = p.t > nowT;
+    const isCur = (_curOrd != null && p._ord != null) ? (p._ord === _curOrd) : (p.t === (_curPt ? _curPt.t : null));
+    // forecast vs past without trusting the observed timestamp
+    const future = p.past ? false : (p.tau != null ? p.tau > 0 : (p.t != null && p.t > nowT));
     const _fc = '<span style="color:var(--text-muted,#7a8699);font-style:italic">Forecast</span>';
     const windCell = (p.maxWind != null)
       ? (p.maxWind + (p.gusts ? `<span style="color:var(--text-muted,#7a8699);font-size:0.85em"> G${p.gusts}</span>` : ''))
@@ -3395,41 +3409,26 @@ function plotNHCTracks(map) {
       // forecast half already has its own dashed track line (layer 2) + cone.
       const _fpStorm = (_nhcData.systems || []).find(s => (s.name || '').toLowerCase() === fp.stormName.toLowerCase() || s.id === fp.stormId);
       const _fpCat = _fpStorm ? (_fpStorm.category || _saffirSimpson(_fpStorm.maxWind)) : { color: '#94a3b8' };
-      const _pastPts = _pts.filter(p => p.lat != null && p.lon != null && p.t != null && p.t <= nowT);
-      // Draw the trail in SEGMENTS, breaking wherever consecutive fixes imply an
-      // impossible jump (a TC center never moves >45 mph, and real fixes are ≤6h
-      // apart). This stops a single stray/mislocated fix from drawing a ghost line
-      // clear across the map while still connecting the genuine track.
-      const _segMi = (a, b) => {
-        const φ1 = a.lat * Math.PI / 180, φ2 = b.lat * Math.PI / 180;
-        const dφ = φ2 - φ1, dλ = (b.lon - a.lon) * Math.PI / 180;
-        const hh = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
-        return 2 * _R * Math.asin(Math.min(1, Math.sqrt(hh)));
-      };
-      let _seg = [];
-      const _flushSeg = () => {
-        if (_seg.length >= 2) {
-          const _pl = L.polyline(_seg.map(p => [p.lat, p.lon]), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
-          _pl.addTo(map);
-          S._nhcTrackLayers.push(_pl);
-        }
-        _seg = [];
-      };
-      for (const p of _pastPts) {
-        const prev = _seg[_seg.length - 1];
-        if (prev) {
-          const d = _segMi(prev, p);
-          const hrs = Math.abs(p.t - prev.t) / 3600000;
-          const maxStep = Math.max(200, hrs * 45); // mi allowed for this gap
-          if (d > maxStep) _flushSeg(); // break the trail here
-        }
-        _seg.push(p);
+      // v6.19: the past trail is now pre-ordered SPATIALLY in the grouping (nearest-
+      // neighbour chain from the current center), so the past fixes sit contiguously
+      // at the START of _pts, up to and including the current center (the first
+      // forecast/tau point). Draw that ordered slice as ONE clean polyline — no more
+      // time-based segment-breaking, which the unreliable observed timestamps defeated
+      // and which produced the zig-zag trail.
+      let _curIdx = _pts.findIndex(p => !p.past && p.tau != null);
+      if (_curIdx < 0) _curIdx = _pts.length - 1;
+      const _pastLL = _pts.slice(0, _curIdx + 1).filter(p => p.lat != null && p.lon != null).map(p => [p.lat, p.lon]);
+      if (_pastLL.length >= 2) {
+        const _pl = L.polyline(_pastLL, { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
+        _pl.addTo(map);
+        S._nhcTrackLayers.push(_pl);
       }
-      _flushSeg();
       for (let _i = 0; _i < _pts.length; _i++) {
         const pt = _pts[_i];
         if (pt.lat == null || pt.lon == null) continue;
-        const future = pt.t != null && pt.t > nowT;
+        // reliable past/future without trusting observed timestamps: past fixes carry
+        // the `past` flag; forecast fixes carry a tau (>0 = future, 0 = current).
+        const future = pt.past ? false : (pt.tau != null ? pt.tau > 0 : (pt.t != null && pt.t > nowT));
         const _mv = _mvBetween(pt, _pts[_i + 1]) || _mvBetween(_pts[_i - 1], pt);
         const dot = L.circleMarker([pt.lat, pt.lon], {
           radius: 3.5, color: future ? '#22d3ee' : '#94a3b8',

@@ -702,7 +702,7 @@ function buildWeatherContext(){
     parts.push(`\nWIND SHEAR ANALYSIS (NWS/Aviation Standard):`);
     parts.push(`  Vector shear magnitude: ${shearInfo.vectorShear} (${shearInfo.severity})`);
     parts.push(`  Directional change: ${shearInfo.dirDiff}°`);
-    parts.push(`  Surface: ${shearInfo.surfaceWind}`);
+    parts.push(`  Surface (model 10 m analysis — used ONLY for the shear vector; this is NOT the reported current surface wind, use CURRENT CONDITIONS / METAR for that): ${shearInfo.surfaceWind}`);
     parts.push(`  Upper level: ${shearInfo.upperWind}`);
     parts.push(`  Aviation impact: ${shearInfo.impact}`);
   }
@@ -721,9 +721,40 @@ function buildWeatherContext(){
     if(stab.cin!=null)parts.push(`  Convective Inhibition (CIN): ${stab.cin} J/kg`);
     parts.push(`  Assessment: ${stab.stabDesc}`);
     parts.push(`\n3. LIFTING MECHANISMS (${stab.liftRat}/10):`);
-    if(S._windShear)parts.push(`  Wind shear: ${fmtWind(S._windShear.speedDiff)} speed diff, ${S._windShear.dirDiff}° directional`);
+    if(S._windShear){
+      const _shMs=(S._windShear.speedDiff!=null)?(S._windShear.speedDiff/3.6):null; // km/h → m/s
+      const _shBand=_shMs==null?'':(_shMs<10?'weak (single-pulse cells)':_shMs<18?'moderate (organized multicell)':'strong (supercell-capable)');
+      const _dirDiff=S._windShear.dirDiff||0;
+      const _mostly=_dirDiff<30?' — almost pure SPEED shear (winds nearly aligned; limited storm rotation)':_dirDiff<60?' — mixed speed + directional shear':' — strong DIRECTIONAL shear (favors rotating storms)';
+      parts.push(`  0–6 km bulk wind shear: ${fmtWind(S._windShear.speedDiff)}${_shMs!=null?` (${_shMs.toFixed(1)} m/s)`:''}, ${_dirDiff}° directional change`);
+      if(_shBand)parts.push(`  Convective classification: ${_shBand}${_mostly}. Bands: <10 m/s weak · 10–18 moderate · ≥18 strong.`);
+    }
     parts.push(`\nOVERALL THUNDERSTORM POTENTIAL: ${stab.overall}/10 (${stab.risk})`);
   }
+
+  // v6.10: today's forecast PEAK temp + heat index, so heat-index language is tied
+  // to the daytime high (and its hour) rather than the current/overnight reading.
+  try{
+    const fh=S.forecast&&S.forecast.hourly;
+    if(fh&&fh.time&&fh.apparent_temperature&&fh.temperature_2m){
+      const now=new Date();
+      let peakT=-999,peakHI=-999,peakHrT=null,peakHrHI=null;
+      for(let i=0;i<fh.time.length;i++){
+        const d=new Date(fh.time[i]);
+        if(d.getDate()!==now.getDate()||d.getMonth()!==now.getMonth()||d.getFullYear()!==now.getFullYear())continue; // today only
+        if(d.getTime()<now.getTime()-3600000)continue; // remaining hours today
+        const t=fh.temperature_2m[i], hi=fh.apparent_temperature[i];
+        if(t!=null&&t>peakT){peakT=t;peakHrT=d;}
+        if(hi!=null&&hi>peakHI){peakHI=hi;peakHrHI=d;}
+      }
+      if(peakHI>-900){
+        parts.push(`\nTODAY'S PEAK HEAT (forecast):`);
+        if(peakT>-900)parts.push(`  Afternoon high temp: ${fmtTemp(peakT)}${peakHrT&&typeof fmtClockShort==='function'?' (~'+fmtClockShort(peakHrT)+')':''}`);
+        parts.push(`  Peak heat index / feels-like: ${fmtTemp(peakHI)}${peakHrHI&&typeof fmtClockShort==='function'?' (~'+fmtClockShort(peakHrHI)+')':''}`);
+        parts.push(`  NOTE: heat-index / "feels-like" values describe the AFTERNOON PEAK above — tie any heat language to this daytime high and its time, NOT to the current or overnight temperature.`);
+      }
+    }
+  }catch(e){}
 
   if(S._terrainData){
     const td=S._terrainData;
@@ -818,6 +849,10 @@ Your professional standards:
 - Projected-miss phrasing: use natural language — "projected miss around NN mi". Only append "to your <direction>" if the direction has NOT already been stated earlier in the same bullet/sentence (e.g. the storm position "14 mi NW" or the classification label "PASSING TO YOUR NW" both count as already-stated). Never restate direction twice in the same sentence.
 - Distances: round to 1 decimal place (e.g. "14.3 mi"). Don't repeat the same distance for multiple cells unless they are genuinely at the same range.
 - Never invent PWAT (precipitable water) values. Only mention PWAT if it appears explicitly in the data above (it usually won't). If PWAT isn't given, talk about moisture using dewpoint / humidity / CAPE instead.
+- GEOGRAPHIC GROUNDING: the user's exact position is in LOCATION above (address + lat/lon). Anchor every geographic reference — cities, counties, interstates, coastlines, "north/south of" reference lines — to those actual coordinates, and verify the feature genuinely lies near them before naming it. Do NOT cite a highway, city, or landmark unless it is truly close to the user's coordinates. (E.g. a coastal Pensacola location near 30.4°N/87.2°W sits just SOUTH of I-10 and along the Gulf; it is NOT near I-65, which runs through Mobile to the west — use I-10, the actual town/neighborhood, or the coastline as the reference.) Prefer the nearest genuinely-relevant references so directional guidance ("just south of I-10", "east of downtown Pensacola") is correct for THIS user.
+- SURFACE WIND — ONE CONSISTENT NUMBER: report a single current surface wind throughout, taken from CURRENT CONDITIONS (or METAR when present). The "Surface" value inside WIND SHEAR ANALYSIS is a gridded 10 m model wind used only to compute the shear vector and will often differ — never quote it as the current/observed wind. If they differ, the observed CURRENT CONDITIONS / METAR wind is what the user feels and what you report.
+- CONVECTIVE SHEAR BANDS: when judging shear for THUNDERSTORM organization (not aviation turbulence), use the 0–6 km bulk-shear bands provided in the data: <10 m/s = weak (single-pulse cells), 10–18 m/s = moderate (organized multicell), ≥18 m/s = strong (supercell-capable). Do not call ~10–13 m/s "strong". Also separate SPEED shear from DIRECTIONAL shear — if the surface and upper winds point nearly the same way it is mostly speed shear (limited rotation potential) even when the magnitude looks sizable; say so rather than implying supercell risk.
+- HEAT INDEX TIMING: heat-index / "feels-like" values apply to the AFTERNOON PEAK (see TODAY'S PEAK HEAT). Never derive a 100°+ heat index from the current or overnight temperature — state the peak value with its approximate time of day (e.g. "heat index near 103°F this afternoon, around 3 PM"), and keep the current/overnight temperature separate.
 - Rip Current Statements: if an alert with event "Rip Current Statement" appears in ACTIVE NWS ALERTS, include the exact expiration time from the alert's Ends/Expires field. Do not paraphrase to "later today".
 - Aviation section: when storms within ~30 mi are APPROACHING DIRECTLY or NEAR MISS, lead with convective hazards (turbulence, microburst, lightning, IFR in TSRA, icing if cold) rather than the VFR/MVFR ceiling-visibility category. It is misleading to call conditions VFR while severe turbulence is expected — if you mention the flight category, you must immediately qualify it with the convective threat.
 - Marine section: when storms are approaching or grazing, explicitly note that gusty outflow winds (and a possible wind shift) may arrive before the storm core itself reaches the coast/water. Boaters should reduce sail and seek shelter ahead of the visible cell.

@@ -40,9 +40,13 @@ function saveAIProvider(v){const next=v==='anthropic'?'anthropic':'openai';const
   _applyAIProviderUI();_syncAiKeyState();if(typeof _applyAIPanelMode==='function')_applyAIPanelMode();if(typeof renderPushAlertSettings==='function'){try{renderPushAlertSettings();}catch(e){}}if(typeof syncPushAlerts==='function')syncPushAlerts();}
 function saveAnthropicKey(v){const t=(v||'').trim();localStorage.setItem('st_aiKeyAnthropic',t);_syncAiKeyState();if(typeof syncPushAlerts==='function')syncPushAlerts();}
 function getAnthropicKey(){return localStorage.getItem('st_aiKeyAnthropic')||'';}
-const _AI_MODELS_ANTHROPIC=['claude-haiku-4-5','claude-sonnet-5','claude-sonnet-4-6','claude-opus-4-8'];
+// v6.35: valid Anthropic model IDs only. Haiku uses its canonical DATED id
+// (the undated 'claude-haiku-4-5' alias 404s), and 'claude-sonnet-4-6' was
+// removed — it's not a real model, so selecting it errored. A stale persisted
+// value now falls back to the Haiku default via the includes() check below.
+const _AI_MODELS_ANTHROPIC=['claude-haiku-4-5-20251001','claude-sonnet-5','claude-opus-4-8'];
 function saveAnthropicModel(v){localStorage.setItem('st_aiModelAnthropic',v);}
-function getAnthropicModel(){const m=localStorage.getItem('st_aiModelAnthropic');return _AI_MODELS_ANTHROPIC.includes(m)?m:'claude-haiku-4-5';}
+function getAnthropicModel(){const m=localStorage.getItem('st_aiModelAnthropic');return _AI_MODELS_ANTHROPIC.includes(m)?m:'claude-haiku-4-5-20251001';}
 // Active (provider-aware) key/model — the single source every AI call site reads.
 function getActiveAIKey(){return getAIProvider()==='anthropic'?getAnthropicKey():getAIKey();}
 function getActiveAIModel(){return getAIProvider()==='anthropic'?getAnthropicModel():getAIModel();}

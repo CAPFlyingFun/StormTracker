@@ -2807,6 +2807,70 @@ function _stormTextSummary(s,_b,_sMv,eta){
   }
   return `${icon} ${strength} — ${distStr} to your ${posDir} (${Math.round(s.bearing)}°), ${moveClause}. ${impact}`;
 }
+// ── v6.1: Thunderstorm shear + storm-relative inflow (Stull, Practical
+// Meteorology §14.5). The winds-aloft profile (S._aloftData: surface / 925 /
+// 850 / 700 / 500 hPa ≈ the 0–6 km layer) tells us how a convective cell will
+// evolve, independent of the radar dBZ trend:
+//   • 0–6 km BULK SHEAR = vector diff (surface → ~500 hPa) → organization &
+//     longevity. WEAK (<10 m/s ≈ 20 kt): a single "pulse" cell rains into its
+//     own updraft and rides along WITH its boundary-layer fuel, depleting it →
+//     dies in ~15–60 min. MODERATE (10–18): organized multicell. STRONG
+//     (≥18 m/s ≈ 35 kt): tilted updraft, long-lived, supercell-capable.
+//   • MEAN 0–6 km WIND = the "normal" storm motion; a cell tracking to the
+//     RIGHT of it in strong shear is a right-moving supercell signature (Bunkers).
+//   • STORM-RELATIVE low-level inflow = low-level wind − the cell's own motion;
+//     near-zero means it's riding with its air (starving), large means it's
+//     ingesting fresh fuel (Stull's "vacuum cleaner").
+// Winds aloft are sampled at the user's location, so this is the LOCAL
+// environment — a good approximation across one radar scan, not a per-pixel value.
+function _windToward(spdMs, dirFromDeg){ const r = dirFromDeg * Math.PI / 180; return { u: -spdMs * Math.sin(r), v: -spdMs * Math.cos(r) }; }
+function computeShearProfile(){
+  const a = S._aloftData;
+  if(!a || a.length < 2) return null;
+  if(S._shearProfile && S._shearProfileFor === a) return S._shearProfile; // cache until winds-aloft refetched
+  const sfc = a.find(x => x.isSfc || x.p >= 1000) || a[0];
+  let top = null; for(const x of a){ if(x.p >= 470 && x.p <= 530){ top = x; break; } }
+  if(!top) top = a[a.length - 1]; // deepest available if no ~500 hPa level
+  const vs = _windToward(sfc.rawMs, sfc.dir), vt = _windToward(top.rawMs, top.dir);
+  const bulkShearMs = Math.hypot(vt.u - vs.u, vt.v - vs.v);
+  let mu = 0, mvv = 0, n = 0; for(const x of a){ const w = _windToward(x.rawMs, x.dir); mu += w.u; mvv += w.v; n++; }
+  mu /= n; mvv /= n;
+  const meanDirTo = (Math.atan2(mu, mvv) * 180 / Math.PI + 360) % 360;
+  const tier = bulkShearMs >= 18 ? 'strong' : bulkShearMs >= 10 ? 'moderate' : 'weak';
+  const org = bulkShearMs >= 18 ? 'supercell-capable' : bulkShearMs >= 10 ? 'organized multicell' : 'pulse';
+  const prof = { bulkShearMs, meanU: mu, meanV: mvv, meanSpdMs: Math.hypot(mu, mvv), meanDirTo, tier, org, lowU: vs.u, lowV: vs.v, topP: top.p };
+  S._shearProfile = prof; S._shearProfileFor = a;
+  return prof;
+}
+// Per-cell convective signal. mv = cell movement { direction(toward,°), speed(mph) }.
+function _cellShearSignal(mv, dbz){
+  if(dbz == null || dbz < 30) return null; // only genuinely convective cells
+  const prof = computeShearProfile();
+  if(!prof) return null;
+  let srInflowMs = null, rightMover = false;
+  if(mv && mv.speed >= 2 && mv.direction != null){
+    const cMs = mv.speed * 0.44704; // mph → m/s
+    const cu = cMs * Math.sin(mv.direction * Math.PI / 180), cv = cMs * Math.cos(mv.direction * Math.PI / 180); // toward
+    srInflowMs = Math.hypot(prof.lowU - cu, prof.lowV - cv);
+    const cross = prof.meanU * cv - prof.meanV * cu; // < 0 → cell is right of the mean wind
+    let dAng = Math.abs(mv.direction - prof.meanDirTo); if(dAng > 180) dAng = 360 - dAng;
+    rightMover = (prof.tier === 'strong' && cross < 0 && dAng >= 15 && dAng <= 90);
+  }
+  const starving = (srInflowMs != null && srInflowMs < 4); // riding with its own air
+  let trend, note;
+  if(prof.tier === 'weak' || starving){
+    trend = 'weakening';
+    note = (starving && prof.tier !== 'weak')
+      ? 'moving with the low-level flow — starving its own inflow, likely to weaken'
+      : 'weak shear — pulse cell, likely to weaken within ~30–60 min';
+  } else if(prof.tier === 'strong'){
+    trend = 'organized';
+    note = rightMover ? 'strong shear — supercell-capable, right-moving' : 'strong shear — supercell-capable, long-lived';
+  } else {
+    trend = 'steady'; note = 'moderate shear — organized multicell';
+  }
+  return { bulkShearMs: prof.bulkShearMs, tier: prof.tier, org: prof.org, srInflowMs, rightMover, trend, note, starving: !!starving };
+}
 // v5.99: THE single per-scan "master" record for a storm cell. Cards, the ETA
 // box, the ticker, notifications, the storm-cell alert gate and sorting all read
 // THIS one X-TRK model instead of independently re-deriving impact / ETA / tier.
@@ -2835,6 +2899,7 @@ function stormMaster(storm){
     estDbzAtUser:brief?brief.estDbzAtUser:null,
     sideBearing:brief?brief.sideBearing:null,
     approaching:eta?eta.approaching:false,
+    shear:_cellShearSignal(mv,storm.dbz), // v6.1: convective shear/inflow read
   };
   storm._m=m;storm._mScanId=S._stormScanId;
   return m;
@@ -3694,6 +3759,16 @@ function _renderStormsCore(){
         const estCat=stormCat(_b.estDbzAtUser);
         estLine=`<div style="margin-top:4px;font-size:0.7em;color:var(--text-secondary)">${tStr('Est. at you')}: <span style="color:${estCat.color};font-weight:700">${_b.estDbzAtUser} dBZ</span> <span style="color:${estCat.color}">(${tStr(estCat.label)})</span></div>`;
       }
+      // v6.1: convective shear / inflow read (Stull §14.5) — organization & longevity
+      let shearLine='';
+      const _sh=(typeof stormMaster==='function')?(stormMaster(s).shear):null;
+      if(_sh){
+        const col=_sh.trend==='organized'?'#f97316':_sh.trend==='weakening'?'#4ade80':'#facc15';
+        const ic=_sh.trend==='organized'?'🌀':_sh.trend==='weakening'?'🌥️':'⛈️';
+        const f=S.radarMetric?3.6:2.237,u=S.radarMetric?'km/h':'mph';
+        const inflow=(_sh.srInflowMs!=null)?` · inflow ${Math.round(_sh.srInflowMs*f)} ${u}`:'';
+        shearLine=`<div style="margin-top:4px;font-size:0.68em;color:var(--text-secondary);line-height:1.4" title="0–6 km bulk wind shear (Stull, Practical Meteorology §14.5). Weak → short-lived 'pulse' cell that depletes its own fuel; strong → tilted updraft, long-lived / supercell-capable. Storm-relative inflow = whether it's ingesting fresh low-level fuel. Uses winds aloft at your location — a local-environment estimate.">${ic} Shear ${Math.round(_sh.bulkShearMs*f)} ${u} <span style="color:${col};font-weight:700">(${_sh.tier})</span> — ${_sh.note}${inflow}</div>`;
+      }
       const hex=dbzHex(s.dbz);
       const isHook=s._rotation;
       const tier=s.dbz>=65?'extreme':s.dbz>=60?'severe':s.dbz>=52?'strong':'';
@@ -3742,6 +3817,7 @@ function _renderStormsCore(){
       return`<div class="storm-cell-card ${pulse}" style="border-color:${borderColor};--pulse-color:${borderColor}${isHook?';animation:tornado-pulse 1.8s ease-in-out infinite,storm-pulse-severe 2s ease-in-out infinite':''}">
         <div class="storm-header"><span style="font-weight:700">${cellIcon} ${cellName}</span>${hookBadge}${clsBadge}<span class="storm-badge" style="background:${hex}22;color:${hex};border:1px solid ${hex}44">${tStr(cat.label)}</span></div>
         ${_textBlock}
+        ${shearLine}
         ${_detailBlock}
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
           <span class="text-hint">

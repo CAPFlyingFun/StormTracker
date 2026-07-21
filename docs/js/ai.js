@@ -453,7 +453,9 @@ function buildWeatherContext(){
         const pct=b.closenessPct!=null?` (${b.closenessPct}% max intensity at user)`:'';
         const estDbz=b.estDbzAtUser!=null?`, ~${b.estDbzAtUser} dBZ expected at user`:'';
         const mov=(b.movSpdMph&&b.movDirDeg!=null)?` (motion ${degToDir(b.movDirDeg)} @ ${b.movSpdMph} mph)`:'';
-        parts.push(`  ${e} ${lbl}${pct}: ${s.dbz} dBZ cell at ${fmtD(s.distance)} ${degToDir(s.bearing)} closing ${close}${eta}, projected miss ${miss}${estDbz}${mov}.`);
+        const _shm=(typeof stormMaster==='function')?(stormMaster(s).shear):null; // v6.1: convective shear/inflow read
+        const shear=_shm?` [0–6km shear ${Math.round(_shm.bulkShearMs*2.237)} mph, ${_shm.tier} — ${_shm.trend}: ${_shm.note}]`:'';
+        parts.push(`  ${e} ${lbl}${pct}: ${s.dbz} dBZ cell at ${fmtD(s.distance)} ${degToDir(s.bearing)} closing ${close}${eta}, projected miss ${miss}${estDbz}${mov}${shear}.`);
       }
       if(inboundRest.length){
         const peak=Math.max(...inboundRest.map(it=>it.s.dbz));

@@ -2111,7 +2111,7 @@ function plotNWSWarningPolygons(map) {
 // ==========================================
 // NHC TROPICAL CYCLONE TRACKING
 // ==========================================
-const _nhcData = { systems: null, forecast: null, cones: null, windRadii: null, fcstPoints: null, _lastFetch: 0 };
+const _nhcData = { systems: null, forecast: null, observed: null, cones: null, windRadii: null, fcstPoints: null, _lastFetch: 0 };
 S._nhcTrackLayers = [];
 S._nhcSelectedStorm = null;
 S._showNHCTracks = (() => { try { const v = localStorage.getItem('st_nhc_tracks'); return v === null ? true : v === '1'; } catch(e) { return true; } })();
@@ -2212,6 +2212,7 @@ async function fetchNHCData() {
     if (gis && gis.positions && gis.positions.length) {
       storms = gis.positions;
       _nhcData.forecast = gis.tracks || [];
+      _nhcData.observed = gis.observedTracks || []; // v6.22: NOAA's own past-track line
       _nhcData.cones = gis.cones || [];
       _nhcData.windRadii = gis.windRadii || [];
       for (const rs of rssStorms) {
@@ -2229,6 +2230,7 @@ async function fetchNHCData() {
     } else {
       storms = rssStorms;
       _nhcData.forecast = [];
+      _nhcData.observed = [];
       _nhcData.cones = [];
       _nhcData.windRadii = [];
     }
@@ -2369,15 +2371,19 @@ async function fetchNHCData() {
 async function _fetchNHCGIS() {
   const base = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
   const q = 'where=1%3D1&outFields=*&f=geojson&resultRecordCount=500';
-  const result = { positions: [], tracks: [], cones: [], windRadii: [], forecastPoints: [], pastPoints: [] };
+  const result = { positions: [], tracks: [], observedTracks: [], cones: [], windRadii: [], forecastPoints: [], pastPoints: [] };
   try {
     // Layer 1 = Observed Position (past track fixes, each with its own wind/gust/
     // pressure) — pulled alongside the forecast layers so the track table can show
     // the FULL history, not just the forecast half. (v6.07)
-    const [posRes, pastRes, trkRes, coneRes, wr34Res, wr50Res, wr64Res] = await Promise.allSettled([
+    // Layer 3 = Observed/best-track LINE — NOAA's own past-track polyline, already in
+    // correct time order. We draw THIS as the past track (v6.22) so it matches the
+    // official NOAA tracker exactly, instead of reconstructing it from points.
+    const [posRes, pastRes, trkRes, obsTrkRes, coneRes, wr34Res, wr50Res, wr64Res] = await Promise.allSettled([
       fetch(`${base}/0/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/1/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/2/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
+      fetch(`${base}/3/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/4/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/7/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
       fetch(`${base}/8/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
@@ -2386,6 +2392,7 @@ async function _fetchNHCGIS() {
     const posData = posRes.status === 'fulfilled' ? posRes.value : null;
     const pastData = pastRes.status === 'fulfilled' ? pastRes.value : null;
     const trkData = trkRes.status === 'fulfilled' ? trkRes.value : null;
+    const obsTrkData = obsTrkRes.status === 'fulfilled' ? obsTrkRes.value : null;
     const coneData = coneRes.status === 'fulfilled' ? coneRes.value : null;
     const wr34Data = wr34Res.status === 'fulfilled' ? wr34Res.value : null;
     const wr50Data = wr50Res.status === 'fulfilled' ? wr50Res.value : null;
@@ -2471,6 +2478,24 @@ async function _fetchNHCGIS() {
           coords: Array.isArray(coords[0]) && Array.isArray(coords[0][0]) ? coords[0] : coords,
           forecastPeriod: p.FCSTPRD || '120'
         });
+      }
+    }
+    // v6.22: layer 3 = NOAA's observed/best-track line (already time-ordered).
+    if (obsTrkData && obsTrkData.features) {
+      for (const f of obsTrkData.features) {
+        const p = f.properties || {};
+        const geom = f.geometry;
+        if (!geom || !geom.coordinates) continue;
+        // LineString → [[lon,lat],...]; MultiLineString → [[[lon,lat],...],...]
+        const parts = (geom.type === 'MultiLineString') ? geom.coordinates : [geom.coordinates];
+        for (const seg of parts) {
+          if (!Array.isArray(seg) || seg.length < 2) continue;
+          result.observedTracks.push({
+            stormId: p.STORMID || p.ATCFID || '',
+            stormName: p.STORMNAME || '',
+            coords: seg
+          });
+        }
       }
     }
     if (coneData && coneData.features) {
@@ -3383,6 +3408,27 @@ function plotNHCTracks(map) {
     poly.addTo(map);
     S._nhcTrackLayers.push(poly);
   }
+  // v6.22: NOAA's OWN observed/best-track line (layer 3) is the authoritative past
+  // track. Draw it (anchored to the marker, lightly smoothed) and remember which
+  // storms have it so we can suppress the reconstructed + GDACS trails for them —
+  // that way the past track matches the official NOAA tracker exactly.
+  const _obsKeys = new Set();
+  for (const ot of (_nhcData.observed || [])) {
+    if (ot.stormId) _obsKeys.add('id:' + String(ot.stormId).toLowerCase());
+    if (ot.stormName) _obsKeys.add('nm:' + String(ot.stormName).toLowerCase());
+  }
+  const _hasObs = (id, name) => _obsKeys.has('id:' + String(id || '').toLowerCase()) || _obsKeys.has('nm:' + String(name || '').toLowerCase());
+  for (const ot of (_lpTracks === 'off' ? [] : (_nhcData.observed || []))) {
+    if (!_isStormVisible(ot.stormId, ot.stormName)) continue;
+    if (!showAll && ot.stormName.toLowerCase() !== selectedName?.toLowerCase() && ot.stormId !== selectedName) continue;
+    if (!ot.coords || ot.coords.length < 2) continue;
+    const storm = (_nhcData.systems || []).find(s => s.id === ot.stormId || s.name.toLowerCase() === ot.stormName.toLowerCase());
+    const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
+    const _obsLL = _anchorTrail(ot.coords.map(c => [c[1], c[0]]), storm ? [storm.lat, storm.lon] : null);
+    const line = L.polyline(_smoothTrack(_obsLL), { color: cat.color || '#9333EA', weight: 2, opacity: 0.55, interactive: false });
+    line.addTo(map);
+    S._nhcTrackLayers.push(line);
+  }
   for (const track of (_lpTracks === 'off' ? [] : (_nhcData.forecast || []))) {
     if (!_isStormVisible(track.stormId, track.stormName)) continue;
     if (!showAll && track.stormName.toLowerCase() !== selectedName?.toLowerCase() && track.stormId !== selectedName) continue;
@@ -3401,6 +3447,7 @@ function plotNHCTracks(map) {
   for (const hist of (_lpTracks === 'off' ? [] : (_nhcData.history || []))) {
     if (!_isStormVisible(hist.stormId, hist.stormName)) continue;
     if (!showAll && hist.stormName.toLowerCase() !== selectedName?.toLowerCase() && hist.stormId !== selectedName) continue;
+    if (_hasObs(hist.stormId, hist.stormName)) continue; // NOAA observed track wins
     if (!hist.coords || hist.coords.length < 2) continue;
     const storm = (_nhcData.systems || []).find(s => s.id === hist.stormId || s.name.toLowerCase() === hist.stormName.toLowerCase());
     const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
@@ -3459,7 +3506,9 @@ function plotNHCTracks(map) {
       let _curIdx = _pts.findIndex(p => !p.past && p.tau != null);
       if (_curIdx < 0) _curIdx = _pts.length - 1;
       const _pastLL = _pts.slice(0, _curIdx + 1).filter(p => p.lat != null && p.lon != null).map(p => [p.lat, p.lon]);
-      if (_pastLL.length >= 2) {
+      // Skip the reconstructed past line when NOAA's observed track (layer 3) exists
+      // for this storm — that authoritative line is drawn above and matches NOAA.
+      if (_pastLL.length >= 2 && !_hasObs(fp.stormId, fp.stormName)) {
         const _pastAnchored = _fpStorm ? _anchorTrail(_pastLL, [_fpStorm.lat, _fpStorm.lon]) : _pastLL;
         const _pl = L.polyline(_smoothTrack(_pastAnchored), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
         _pl.addTo(map);

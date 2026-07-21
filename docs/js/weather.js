@@ -2634,7 +2634,7 @@ function renderRainClock(){
   else if(!data.windows.length){
     if(_omPart){centerLines=['Waiting on','Open-Meteo…'];_phrases.push({title:'Waiting on Open-Meteo',body:'Forecast service is slow or unreachable right now. The Rain Clock will fill in as soon as data arrives.'});}
     else if(data.stale&&!data.forecastReady){centerLines=['Radar stale','run a scan'];_phrases.push({title:'Radar is stale',body:'Run a fresh scan to update the Rain Clock with the latest radar.'});}
-    else{centerLines=['No rain expected',_spanWord];_phrases.push({title:'No rain expected',body:`Nothing showing up on radar for the ${_spanWord}.`});}
+    else{centerLines=['No rain expected',_spanWord];_phrases.push({title:'No rain expected',body:`Nothing showing up on radar for the ${_spanWord}. Disclaimer: radar can sometimes be delayed or miss certain conditions (like light drizzle or mist). If you're seeing or feeling it but it's not on here — congratulations, you beat the radar to it! 🤣`});}
   } else {
     const w=data.windows[0];
     const w2=data.windows[1];

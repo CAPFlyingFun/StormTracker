@@ -194,6 +194,7 @@
     const c=d.classified;
     if(c.totalCount===0){
       lines.push('Radar is [!green]clear[/!] across the scan radius — no precipitation detected.');
+      lines.push('_Disclaimer: radar can sometimes be delayed or miss certain conditions (like light drizzle or mist). If you\'re seeing or feeling it but it\'s not on here — congratulations, you beat the radar to it! 🤣_');
     }else if(c.inbound.length===0){
       const bits=[];
       if(c.background.length)bits.push(`${c.background.length} background`);

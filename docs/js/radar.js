@@ -79,6 +79,30 @@ function initRadar(){
     S._rangeCircle=L.circle([S.lat,S.lon],{radius:S.scanRadius*1609.34,color:'#3b82f6',fill:false,weight:1,dashArray:'6 4'}).addTo(map);
     S._userMarker=L.circleMarker([S.lat,S.lon],{radius:5,color:'#3b82f6',fillColor:'#3b82f6',fillOpacity:1}).addTo(map);
     S.map=map;
+    // v6.25: floating AUTO-DISTANCE readout — live distance + direction from YOUR
+    // location to the map center (the crosshair). Pan the map so the crosshair sits
+    // over any rainband/cell and read exactly how far out it is (great for the far
+    // field where a 200 mi ring runs off-screen). Hidden when centered on home.
+    try{
+      const _dr=document.createElement('div');
+      _dr.id='radar-dist-readout';
+      _dr.style.cssText='position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:650;background:rgba(10,15,25,0.72);color:#e6edf5;font:600 12px/1.2 system-ui;padding:5px 11px;border-radius:14px;border:1px solid rgba(59,130,246,0.45);pointer-events:none;white-space:nowrap;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:none';
+      map.getContainer().appendChild(_dr);
+      S._distReadout=_dr;
+      S._updDistReadout=function(){
+        try{
+          if(S.lat==null||!S._distReadout){return}
+          const c=map.getCenter();
+          const mi=haversine(S.lat,S.lon,c.lat,c.lng);
+          if(mi<2){S._distReadout.style.display='none';return}
+          const brg=bearingDeg(S.lat,S.lon,c.lat,c.lng);
+          const dTxt=S.radarMetric?(mi*1.60934).toFixed(0)+' km':mi.toFixed(0)+' mi';
+          S._distReadout.textContent='📏 '+dTxt+' '+degToDir(brg)+' of you';
+          S._distReadout.style.display='';
+        }catch(e){}
+      };
+      map.on('move',S._updDistReadout);
+    }catch(e){}
     // v5.94: the map's UI overlays (button rails, legend, time chip, anim bar,
     // layers panel) sit ABOVE the Leaflet canvas. Without this, a touch that
     // starts on one of them and drags still reached the map and panned it — so
@@ -127,6 +151,9 @@ function initRadar(){
       }
     }catch(e){}
     showRadarLayer(map);
+    // v6.25: kick the outer 80–200 mi awareness scan shortly after the radar opens
+    // (gated to a tropical system in range + zones on; throttled internally).
+    if(typeof maybeRunOuterScan==='function')setTimeout(()=>{try{maybeRunOuterScan()}catch(e){}},1600);
     document.getElementById('radar-scan').addEventListener('click',()=>{recenterMap()});
     document.getElementById('radar-scan-view').addEventListener('click',()=>{scanHere()});
     document.getElementById('radar-scan-hires').addEventListener('click',()=>{showHdScanDialog()});

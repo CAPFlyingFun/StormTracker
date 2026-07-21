@@ -809,12 +809,16 @@ function getWindShearAnalysis(){
   const upper=S._aloftData[S._aloftData.length-1];
   const vecShearKmh=S._windShear.speedDiff;
   const vecShearMph=vecShearKmh*0.621371;
-  let severity='Light';
-  if(vecShearMph>=25)severity='Strong';else if(vecShearMph>=15)severity='Moderate';
-  let impact='Minimal turbulence expected';
-  if(vecShearMph>=25)impact='Significant turbulence likely — hazardous for light aircraft';
-  else if(vecShearMph>=15)impact='Moderate turbulence possible — use caution';
-  else if(vecShearMph>=8)impact='Light chop possible';
+  // v6.11: classify by the STANDARD 0–6 km bulk-shear m/s bands (<10 weak, 10–18
+  // moderate, ≥18 strong) so the aviation + structured briefings agree with the
+  // convective read — a deep-layer bulk value of ~12 m/s is moderate, not "strong".
+  const vecShearMs=vecShearKmh/3.6;
+  let severity='Weak';
+  if(vecShearMs>=18)severity='Strong';else if(vecShearMs>=10)severity='Moderate';
+  let impact='Minimal deep-layer shear — turbulence unlikely outside convection';
+  if(vecShearMs>=18)impact='Strong deep-layer shear — turbulence likely in and near storms; caution for light aircraft';
+  else if(vecShearMs>=10)impact='Moderate deep-layer shear — expect turbulence mainly in and near storm cores';
+  else if(vecShearMs>=6)impact='Light chop possible near convection';
   const pToAlt={1013:'Surface',925:'~2,500 ft',850:'~5,000 ft',700:'~10,000 ft',500:'~18,000 ft'};
   return{
     vectorShear:fmtWind(vecShearKmh),

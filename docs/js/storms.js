@@ -3066,6 +3066,94 @@ function _selectNHCStorm(idOrName) {
   const storm = findStorm();
   toast(`Showing forecast for ${storm ? storm.name : idOrName}`);
 }
+// v6.06: Zoom.earth-style scrollable track table — the whole track in one card,
+// FUTURE on top → PAST/now at the bottom, current position highlighted, and a
+// "Forecast" tag in place of any value NHC didn't provide.
+function _trackBadge(maxWind) {
+  const c = _saffirSimpson(maxWind);
+  let ltr;
+  if (c.num >= 1) ltr = String(c.num);        // hurricane category number
+  else if (maxWind >= 39) ltr = 'S';          // tropical storm
+  else if (maxWind > 0) ltr = 'D';            // tropical depression
+  else ltr = '•';
+  return { ltr, color: c.color, label: c.label };
+}
+function closeStormTrackTable() {
+  const el = document.getElementById('storm-track-panel');
+  if (el) el.remove();
+}
+function showStormTrackTable(idOrName) {
+  const key = String(idOrName || '').toLowerCase();
+  const fp = (_nhcData.fcstPoints || []).find(f => (f.stormId || '').toLowerCase() === key || (f.stormName || '').toLowerCase() === key);
+  const storm = (_nhcData.systems || []).find(s => (s.id || '').toLowerCase() === key || (s.name || '').toLowerCase() === key);
+  const name = (storm && storm.name) || (fp && fp.stormName) || idOrName;
+  const type = (storm && storm.type) || 'Storm';
+  if (!fp || !fp.pts || !fp.pts.length) { if (typeof toast === 'function') toast('No track data for ' + name); return; }
+  const nowT = Date.now();
+  const rows = fp.pts.slice().filter(p => p.t != null).sort((a, b) => b.t - a.t); // future on top
+  // "current" = the point nearest to now (the row we highlight + scroll to)
+  let curT = null, best = Infinity;
+  for (const p of rows) { const d = Math.abs(p.t - nowT); if (d < best) { best = d; curT = p.t; } }
+  const off = -new Date().getTimezoneOffset() / 60;
+  const offStr = (Number.isInteger(off) ? Math.abs(off) : Math.abs(off).toFixed(1));
+  const tzStr = 'UTC' + (off >= 0 ? '+' : '−') + offStr;
+  const headCat = _saffirSimpson(storm ? storm.maxWind : (rows.find(r => r.t <= nowT) || rows[rows.length - 1] || {}).maxWind);
+  let bodyRows = '';
+  for (const p of rows) {
+    const d = new Date(p.t);
+    const dateStr = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const timeStr = (typeof fmtClock === 'function') ? fmtClock(d) : d.toLocaleTimeString();
+    const bd = _trackBadge(p.maxWind);
+    const isCur = p.t === curT;
+    const future = p.t > nowT;
+    const _fc = '<span style="color:var(--text-muted,#7a8699);font-style:italic">Forecast</span>';
+    const windCell = (p.maxWind != null)
+      ? (p.maxWind + (p.gusts ? `<span style="color:var(--text-muted,#7a8699);font-size:0.85em"> G${p.gusts}</span>` : ''))
+      : _fc;
+    const presCell = p.minPressure ? (p.minPressure + '') : _fc;
+    bodyRows += `<tr style="border-top:1px solid var(--border-subtle,#243040);${isCur ? 'background:rgba(34,211,238,0.16)' : (future ? '' : 'opacity:0.62')}">
+      <td style="padding:7px 8px;white-space:nowrap;font-weight:${isCur ? '700' : '500'}">${escHtml(dateStr)}<div style="font-size:0.82em;color:var(--text-secondary,#9fb0c3)">${escHtml(timeStr)}</div></td>
+      <td style="padding:7px 4px;text-align:center"><span title="${escHtml(bd.label)}" style="display:inline-block;min-width:20px;padding:2px 6px;border-radius:5px;background:${bd.color};color:#0b1220;font-weight:800;font-size:0.9em">${bd.ltr}</span></td>
+      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums;font-weight:${isCur ? '700' : '500'}">${windCell}</td>
+      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${presCell}</td>
+    </tr>`;
+  }
+  closeStormTrackTable();
+  const panel = document.createElement('div');
+  panel.id = 'storm-track-panel';
+  panel.setAttribute('style', 'position:fixed;top:64px;left:50%;transform:translateX(-50%);width:min(400px,94vw);max-height:72vh;display:flex;flex-direction:column;background:var(--bg-surface,#0f1520);border:1px solid var(--border-subtle,#243040);border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,0.62);z-index:4000;overflow:hidden;font-family:system-ui;color:var(--text-primary,#e6edf5)');
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border-subtle,#243040)">
+      <span style="display:inline-block;min-width:22px;padding:2px 7px;border-radius:6px;background:${headCat.color};color:#0b1220;font-weight:800;font-size:0.95em">${_trackBadge(storm ? storm.maxWind : (rows[0] || {}).maxWind).ltr}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:1.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(type)} ${escHtml(name)}</div>
+        <div style="font-size:0.72em;color:var(--text-secondary,#9fb0c3)">Forecast track · times in your local zone (${tzStr})</div>
+      </div>
+      <button onclick="closeStormTrackTable()" aria-label="Close" style="background:none;border:none;color:var(--text-secondary,#9fb0c3);font-size:1.4em;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>
+    </div>
+    <div style="overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">
+      <table style="width:100%;border-collapse:collapse;font-size:0.86em">
+        <thead><tr style="position:sticky;top:0;background:var(--bg-surface,#0f1520);color:var(--text-muted,#7a8699);font-size:0.82em;text-align:left">
+          <th style="padding:8px;font-weight:600">DATE / TIME</th>
+          <th style="padding:8px 4px;text-align:center;font-weight:600">TYPE</th>
+          <th style="padding:8px;text-align:right;font-weight:600">WIND<div style="font-weight:400;font-size:0.85em">mph</div></th>
+          <th style="padding:8px;text-align:right;font-weight:600">PRESS<div style="font-weight:400;font-size:0.85em">mb</div></th>
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+    <div style="padding:8px 14px;border-top:1px solid var(--border-subtle,#243040);font-size:0.68em;color:var(--text-muted,#7a8699);display:flex;justify-content:space-between;align-items:center">
+      <span>▲ later &nbsp;·&nbsp; now highlighted &nbsp;·&nbsp; earlier ▼</span>
+      <span>NHC/JTWC</span>
+    </div>`;
+  document.body.appendChild(panel);
+  // scroll so the current row sits near the middle (future above, past below)
+  try {
+    const cur = panel.querySelector('tr[style*="34,211,238"]');
+    const scroller = panel.querySelector('div[style*="overflow-y:auto"]');
+    if (cur && scroller) scroller.scrollTop = Math.max(0, cur.offsetTop - scroller.clientHeight / 2);
+  } catch (e) {}
+}
 function toggleNHCTracks(on) {
   S._showNHCTracks = on;
   try { localStorage.setItem('st_nhc_tracks', on ? '1' : '0'); } catch(e) {}
@@ -3193,8 +3281,9 @@ function plotNHCTracks(map) {
             }
           }
           if (!_timeHtml && pt.label) _timeHtml = '<br>' + escHtml(pt.label);
+          const _tblKey = _escStormName(fp.stormId || fp.stormName);
           const hit = L.circleMarker([pt.lat, pt.lon], { radius: 12, stroke: false, fillColor: '#000', fillOpacity: 0.02 });
-          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${_timeHtml}${_intHtml}</div>`);
+          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${_timeHtml}${_intHtml}<div style="margin-top:5px"><a href="#" onclick="event.preventDefault();showStormTrackTable('${_tblKey}')" style="color:var(--accent-cyan)">📋 Full track table</a></div></div>`);
           hit.addTo(map);
           S._nhcTrackLayers.push(hit);
         }
@@ -3226,7 +3315,10 @@ function plotNHCTracks(map) {
       ${s.moveDir ? `<div class="text-sm">➡️ Moving: <b>${s.moveDir} ${s.moveSpeed || ''} mph</b></div>` : ''}
       ${s._gdacs ? `<div title="${_GDACS_TITLE}" style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">🌍 Humanitarian impact: ${_GDACS_IMPACT_WORDS[s._gdacs.alertlevel] || s._gdacs.alertlevel} (GDACS ${s._gdacs.alertlevel})</div><div style="font-size:0.58em;color:#94a3b8;margin-top:1px">population-scale estimate — not your personal risk</div>` : ''}
       ${s.dist != null ? `<div style="font-size:0.75em;color:#aaa;margin-top:4px">${Math.round(s.dist)} mi from you</div>` : ''}
-      <div style="margin-top:6px"><a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">Show forecast track →</a></div>
+      <div style="margin-top:6px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">Show track →</a>
+        <a href="#" onclick="event.preventDefault();showStormTrackTable('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">📋 Track table</a>
+      </div>
     </div>`);
     marker.addTo(map);
     S._nhcTrackLayers.push(marker);

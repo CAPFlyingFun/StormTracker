@@ -834,6 +834,57 @@ async function commitScanResults(rawPoints,opts){
   return true;
 }
 
+// ==========================================================================
+// v6.23 (Stage 2): OUTER AWARENESS SCAN — an additive 80–200 mi annulus scan for
+// regional heads-up (hurricane rainbands well before they enter the 80 mi bubble).
+// It is completely separate from the inner scan: its own coarse pass, its own state
+// (S._outerScanPts), its own layer. It NEVER touches S._rawScanPts / S.storms / ETA.
+// Gated to run only when the hex zones are on AND a tropical system is within ~300 mi,
+// throttled to ~10 min. This stage renders the raw annulus echoes as faint dots so
+// the coverage is testable; Stage 3/5 replace that with grouped rainband zones.
+// ==========================================================================
+let _outerScanBusy=false;
+async function maybeRunOuterScan(){
+  try{
+    if(S.lat==null||S.lon==null)return;
+    const sys=(typeof _nhcData!=='undefined'&&_nhcData&&Array.isArray(_nhcData.systems))?_nhcData.systems:[];
+    const near=sys.some(s=>s&&s.lat!=null&&s.lon!=null&&haversine(S.lat,S.lon,s.lat,s.lon)<=300);
+    // gate: zones on + a tropical system in range. Otherwise clear + bail.
+    if(!S._showZones||!near){ _clearOuterScan(); return; }
+    if(_outerScanBusy)return;
+    if(S._outerScanTime&&(Date.now()-S._outerScanTime)<10*60000&&S._outerScanPts&&S._outerScanPts.length)return;
+    _outerScanBusy=true;
+    const useNexrad=S.radarSource==='nexrad';
+    // coarse pass: wide radius, low zoom, big pixel step, ≥25 dBZ — cheap regional look.
+    const result=await runRadarScan({lat:S.lat,lon:S.lon,radiusMi:200,zoom:useNexrad?7:6,step:4,minDbz:25,source:useNexrad?'nexrad':'rainviewer'});
+    _outerScanBusy=false;
+    if(!result||!result.points)return;
+    // keep ONLY the 80–200 mi annulus — the inner ≤80 mi is the detailed scan's job
+    // (and dropping it here prevents duplicate cells across the two passes).
+    const ann=result.points.filter(p=>{const d=haversine(S.lat,S.lon,p.lat,p.lng);return d>80&&d<=200;});
+    S._outerScanPts=ann; S._outerScanTime=Date.now();
+    console.log('[OuterScan] '+ann.length+' echoes in 80–200 mi annulus (zoom '+result.zoom+')');
+    if(S.map)renderOuterScan(S.map);
+  }catch(e){_outerScanBusy=false;console.warn('[OuterScan] failed',e);}
+}
+function _clearOuterScan(){
+  S._outerScanPts=[];
+  if(S._outerScanLayer){try{S._outerScanLayer.clearLayers()}catch(e){}}
+  if(S._outerRangeCircle&&S.map){try{S.map.removeLayer(S._outerRangeCircle)}catch(e){}S._outerRangeCircle=null;}
+}
+function renderOuterScan(map){
+  if(!map)return;
+  if(!S._outerScanLayer)S._outerScanLayer=L.layerGroup().addTo(map);
+  else S._outerScanLayer.clearLayers();
+  // 200 mi outer range ring (fainter + finer dashes than the 80 mi ring)
+  if(!S._outerRangeCircle){S._outerRangeCircle=L.circle([S.lat,S.lon],{radius:200*1609.34,color:'#3b82f6',fill:false,weight:1,opacity:0.45,dashArray:'2 8',interactive:false});S._outerRangeCircle.addTo(map);}
+  else S._outerRangeCircle.setLatLng([S.lat,S.lon]);
+  for(const p of (S._outerScanPts||[])){
+    const c=(typeof dbzHex==='function')?dbzHex(p.dbz):'#22d3ee';
+    L.circleMarker([p.lat,p.lng],{radius:2.5,color:c,fillColor:c,fillOpacity:0.45,weight:0,interactive:false}).addTo(S._outerScanLayer);
+  }
+}
+
 // v5.69: real WarPulse strikes on the radar map. Age-faded dots (bright yellow
 // <5 min, orange 5-10, dim 10-15); capped at 400 for mobile perf. Cleared and
 // redrawn on every scan commit + every successful strike fetch. When live data
@@ -2206,8 +2257,10 @@ function toggleStormZones(){
   try{localStorage.setItem('st_zones',S._showZones?'1':'0')}catch(e){}
   if(S._showZones&&S._rawScanPts.length&&S.map){
     buildStormZones(S.map,S._rawScanPts);
+    if(typeof maybeRunOuterScan==='function')maybeRunOuterScan(); // v6.23: re-arm outer awareness
   }else{
     clearStormZones();
+    if(typeof _clearOuterScan==='function')_clearOuterScan(); // v6.23: hide outer scan when zones off
     if(S.radarLayer&&S.map&&!S.map.hasLayer(S.radarLayer)){try{S.radarLayer.addTo(S.map)}catch(e){}}
   }
   const btn=document.getElementById('btn-zones');

@@ -1503,6 +1503,10 @@ async function scanRadarForStorms(){
     if(!committed){hideScanOverlay();return}
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
     if(S.map){plotSPCWatchPolygons(S.map);plotNWSWarningPolygons(S.map);plotSPCReports(S.map);plotNHCTracks(S.map)}
+    // v6.23 (Stage 2): fire-and-forget the outer 80–200 mi awareness scan (gated to
+    // tropical systems in range + zones on; throttled internally). Fully additive —
+    // it can't affect the inner scan / storm cards / ETA above.
+    if(typeof maybeRunOuterScan==='function')maybeRunOuterScan();
     hideScanOverlay();
     toast(`${S.storms.length} cell${S.storms.length!==1?'s':''} found (${srcLabel})`);
     if(typeof _bootStepDone==='function')_bootStepDone('scan',`Radar scan: ${S.storms.length} cell${S.storms.length!==1?'s':''}`);

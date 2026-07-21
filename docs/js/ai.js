@@ -414,12 +414,39 @@ function buildWeatherContext(){
       }else{
         parts.push(`  Status: no rain expected on the nowcast horizon.`);
       }
-      if(rc.totalMm>0.01&&typeof fmtPrecip==='function')parts.push(`  Expected total (next ~3 h): ${fmtPrecip(rc.totalMm)}.`);
+      if(rc.totalMm>0.01&&typeof fmtPrecip==='function'){
+        const _spanH=rc.span?Math.max(1,Math.round(rc.span/60)):12;
+        parts.push(`  Expected total over the dial's SHORT-RANGE nowcast window (next ~${_spanH} h): ${fmtPrecip(rc.totalMm)}. This figure covers only the next ~${_spanH} h — do NOT present it as the storm's total rainfall; heavier rain arriving later is captured by the 48 h forecast total below, not here.`);
+      }
       if(rc.nearest&&rc.nearest.mi!=null){
         const nm=S.radarMetric?(rc.nearest.mi*1.60934).toFixed(1)+' km':rc.nearest.mi.toFixed(1)+' mi';
         parts.push(`  Nearest precipitation: ${nm} to the ${rc.nearest.dir} (${Math.round(rc.nearest.brg)}°).`);
       }
       parts.push(`  Use this nowcast for "when will it rain / stop" questions; it reflects the exact dial the user is looking at.`);
+    }
+  }catch(e){}
+
+  // v6.16: LONGER-RANGE forecast rain (next 48 h) — the same hourly precipitation the
+  // app's "Total Precipitation (next 48 hrs)" graph plots. The Rain Clock above is a
+  // SHORT-range (≤12 h) nowcast, so on a multi-day system its total can look tiny next
+  // to the storm's real rainfall; give the AI the 48 h picture so the two agree and it
+  // doesn't say "only 0.05 in" when a wetter day is coming just beyond the dial.
+  try{
+    const h48=S._hourlyData;
+    if(h48&&h48.time&&h48.precipitation&&typeof fmtPrecip==='function'){
+      const now48=Date.now(); let sum48=0,peakHrMm=0,firstWetMin=null;
+      for(let i=0;i<h48.time.length;i++){
+        const ts=new Date(h48.time[i]).getTime(); if(isNaN(ts))continue;
+        const off=(ts-now48)/60000; if(off<-60||off>48*60)continue;
+        const mm=h48.precipitation[i]||0;
+        if(mm>0){ sum48+=mm; if(mm>peakHrMm)peakHrMm=mm; if(firstWetMin==null&&off>5&&mm>=0.5)firstWetMin=off; }
+      }
+      if(sum48>0.05){
+        const _c=(min)=>fmtClock(new Date(now48+min*60000));
+        parts.push(`\nFORECAST RAIN — NEXT 48 h (matches the app's Total Precipitation graph; longer-range than the Rain Clock nowcast):`);
+        parts.push(`  Total expected: ${fmtPrecip(sum48)}${peakHrMm>0?`, heaviest hour ~${fmtPrecip(peakHrMm)}/hr`:''}.${firstWetMin!=null?` First meaningful rain around ${_c(firstWetMin)}.`:''}`);
+        parts.push(`  When the Rain Clock's short-range total is small but this 48 h total is larger, the wetter rain is arriving BEYOND the dial's window — describe the fuller picture from this line, and be explicit about WHEN (today vs tonight vs tomorrow).`);
+      }
     }
   }catch(e){}
 

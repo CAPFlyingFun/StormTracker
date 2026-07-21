@@ -2706,7 +2706,10 @@ function renderRainClock(){
     let amtTxt;
     if(typeof fmtPrecip==='function'){amtTxt=fmtPrecip(data.totalMm)}
     else{const inches=data.totalMm/25.4;amtTxt=inches<0.1?data.totalMm.toFixed(1)+' mm':inches.toFixed(2)+' in'}
-    amountLine=`~${amtTxt} expected`;
+    // v6.16: state the HORIZON so this short-range figure doesn't look like it
+    // contradicts the 48 h Total Precipitation graph (heavier rain can arrive
+    // beyond the dial's ≤12 h window — that rain lives on the 48 h graph, not here).
+    amountLine=`~${amtTxt} · next ${(typeof _rcSpanLabel==='function')?_rcSpanLabel(data.span||720):'12h'}`;
   }
   let center='';
   const totalLines=centerLines.length+(amountLine?1:0);

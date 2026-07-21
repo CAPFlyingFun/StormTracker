@@ -3909,14 +3909,20 @@ function _renderStormsCore(){
       const hex=dbzHex(c.maxDbz);
       let etaInfo=null;
       if(mv&&mv.speed>=2){
-        const travelDir=mv.direction;
-        const diff=Math.abs(((travelDir-midBear+180)%360)-180);
-        if(diff<=30){
-          const closingSpd=mv.speed*Math.cos(diff*Math.PI/180);
-          if(closingSpd>0.5){
-            const etaMin=midDist/closingSpd*60;
-            etaInfo={approaching:true,eta:etaMin,color:'#ef4444'};
-          }
+        // v6.2 FIX: a zone approaches only if the storm moves FROM the zone TOWARD
+        // the user — i.e. travel direction ≈ (bearing + 180), the zone→user
+        // heading. The old code compared travel to the raw user→zone bearing
+        // (no +180 flip), so a zone SSW of you with storms moving SSW read as
+        // "inbound, ETA 2h" when it was actually receding. Closing speed is now
+        // signed: positive = closing on you (show ETA), negative = moving away
+        // (no time). Matches the storm-cell convention.
+        const bearToUser=(midBear+180)%360;                               // zone → user
+        const diff=Math.abs(((mv.direction-bearToUser+180)%360)-180);     // 0° = straight at you
+        const closingSpd=mv.speed*Math.cos(diff*Math.PI/180);             // + toward, − away
+        if(closingSpd>0.5&&diff<=45){
+          etaInfo={approaching:true,eta:midDist/closingSpd*60,color:'#ef4444'};
+        }else if(closingSpd<-0.5){
+          etaInfo={approaching:false,receding:true};                      // moving away — no ETA
         }
       }
       zones.push({q:c.q,r:c.r,maxDbz:c.maxDbz,count:c.count,midBear,midDist,cat,hex,etaInfo});
@@ -3937,6 +3943,8 @@ function _renderStormsCore(){
           const sec=Math.round(z.etaInfo.eta*60);
           const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
           etaStr=`<span style="color:#ef4444;font-weight:600;font-family:var(--font-mono);font-size:0.85em">⏱ ${h>0?h+'h:'+String(m).padStart(2,'0')+'m':m+'m:'+String(s).padStart(2,'0')+'s'}</span>`;
+        }else if(z.etaInfo&&z.etaInfo.receding){
+          etaStr=`<span style="color:var(--text-muted);font-weight:600;font-size:0.68em">↘ moving away</span>`;
         }
         return`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-left:3px solid ${z.hex};background:${z.hex}08;border-radius:4px;margin-bottom:4px">
           <div class="flex-1" style="min-width:0">

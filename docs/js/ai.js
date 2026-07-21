@@ -157,6 +157,34 @@ function fmtAIText(raw){
   s=s.replace(/^# (.+)$/gm,'<span style="display:block;font-weight:800;font-size:1.05em;color:var(--accent-cyan);margin-top:8px">$1</span>');
   s=s.replace(/^[-•] (.+)$/gm,'<span style="display:block;padding-left:12px;text-indent:-10px">• $1</span>');
   s=s.replace(/^\d+\.\s+(.+)$/gm,function(m,p1,offset,str){return '<span style="display:block;padding-left:12px">'+m+'</span>'});
+  // v6.11: render markdown tables (| a | b |) as a compact mobile card grid — the
+  // model uses one for the Risk Assessment summary and raw "| pipes |" look bad.
+  s=s.replace(/(?:^[ \t]*\|.*\|[ \t]*(?:\n|$))+/gm, block=>{
+    const rows=block.trim().split('\n').map(r=>r.trim()).filter(Boolean);
+    const cells=rows.map(r=>r.replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim()));
+    const isSep=r=>r.length&&r.every(c=>/^:?-{2,}:?$/.test(c));
+    const data=cells.filter(r=>!isSep(r));
+    if(data.length<2)return block; // need a header + at least one data row
+    const header=data[0], body=data.slice(1);
+    const _sevColor=v=>{const t=(v||'').toLowerCase();if(/sever|extreme|critical|\bhigh\b/.test(t))return '#ff3355';if(/moderate|elevated/.test(t))return '#eab308';if(/margin|\blow\b|minimal/.test(t))return '#22c55e';return 'var(--text-secondary,#9fb0c3)';};
+    let html='<div style="display:flex;flex-direction:column;gap:6px;margin:8px 0">';
+    for(const r of body){
+      if(!r[0])continue;
+      html+='<div style="border:1px solid var(--border-subtle,#243040);border-radius:8px;padding:7px 10px;background:rgba(255,255,255,0.02)">';
+      html+=`<div style="font-weight:700;margin-bottom:2px">${r[0]}</div>`;
+      const bits=[];
+      for(let i=1;i<header.length;i++){
+        if(r[i]==null||r[i]==='')continue;
+        const isSev=/sever/i.test(header[i]||'');
+        const val=isSev?`<span style="color:${_sevColor(r[i])};font-weight:600">${r[i]}</span>`:r[i];
+        bits.push(`<span><span style="color:var(--text-muted,#7a8699)">${header[i]}:</span> ${val}</span>`);
+      }
+      html+=`<div style="font-size:0.9em;line-height:1.45;display:flex;flex-direction:column;gap:1px">${bits.join('')}</div></div>`;
+    }
+    return html+'</div>';
+  });
+  // horizontal rule (the model sometimes emits a bare "---" divider line)
+  s=s.replace(/^\s*---+\s*$/gm,'<hr style="border:none;border-top:1px solid var(--border-subtle,#243040);margin:8px 0">');
   // v6.09: make the "N/10 thunderstorm potential" index tappable — opens a clean
   // explainer of how StormTracker scores it (keeps the math out of the prose).
   s=s.replace(/(\d{1,2}\s*\/\s*10\s+thunderstorm potential|thunderstorm potential[:\s]*\(?\s*\d{1,2}\s*\/\s*10\)?)/gi, m=>`<span onclick="if(typeof showTstormIndexInfo==='function')showTstormIndexInfo()" style="cursor:pointer;border-bottom:1px dotted currentColor" title="How is this scored?">${m} ⓘ</span>`);

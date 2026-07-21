@@ -2301,7 +2301,7 @@ async function fetchNHCData() {
             const hv = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
             const distMi = 2 * _R2 * Math.asin(Math.min(1, Math.sqrt(hv)));
             const hrs = Math.abs(pt.t - prev.t) / 3600000;
-            if (hrs > 0 && distMi / hrs > 70) continue; // outlier — skip
+            if (hrs > 0 && distMi / hrs > 55) continue; // outlier — skip (TC centers rarely exceed ~45 mph)
           }
           clean.push(pt);
         }
@@ -3362,8 +3362,14 @@ function plotNHCTracks(map) {
   // v5.86: timestamped position fixes (GDACS) — dots shown for the SELECTED
   // storm only (past = grey, forecast = cyan); tap a dot for its date/time.
   if (selectedName) {
+    const _drawnFp = new Set(); // v6.11: one source per storm — the same storm can
+    // appear in fcstPoints from BOTH NHC and GDACS; drawing both crisscrosses the
+    // map with "ghost" track lines. Draw only the first (NHC preferred, pushed first).
     for (const fp of ((typeof _nhcOpt === 'function' && _nhcOpt('dots') === 'off') ? [] : (_nhcData.fcstPoints || []))) {
       if (fp.stormName.toLowerCase() !== selectedName.toLowerCase() && fp.stormId !== selectedName) continue;
+      const _fpKey = (fp.stormName || fp.stormId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (_drawnFp.has(_fpKey)) continue;
+      _drawnFp.add(_fpKey);
       const nowT = Date.now();
       const _pts = fp.pts || [];
       // v6.05: forecast movement (direction + speed) at each dot. NHC's point layer
@@ -3389,12 +3395,37 @@ function plotNHCTracks(map) {
       // forecast half already has its own dashed track line (layer 2) + cone.
       const _fpStorm = (_nhcData.systems || []).find(s => (s.name || '').toLowerCase() === fp.stormName.toLowerCase() || s.id === fp.stormId);
       const _fpCat = _fpStorm ? (_fpStorm.category || _saffirSimpson(_fpStorm.maxWind)) : { color: '#94a3b8' };
-      const _pastLL = _pts.filter(p => p.lat != null && p.lon != null && p.t != null && p.t <= nowT).map(p => [p.lat, p.lon]);
-      if (_pastLL.length >= 2) {
-        const _pl = L.polyline(_pastLL, { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
-        _pl.addTo(map);
-        S._nhcTrackLayers.push(_pl);
+      const _pastPts = _pts.filter(p => p.lat != null && p.lon != null && p.t != null && p.t <= nowT);
+      // Draw the trail in SEGMENTS, breaking wherever consecutive fixes imply an
+      // impossible jump (a TC center never moves >45 mph, and real fixes are ≤6h
+      // apart). This stops a single stray/mislocated fix from drawing a ghost line
+      // clear across the map while still connecting the genuine track.
+      const _segMi = (a, b) => {
+        const φ1 = a.lat * Math.PI / 180, φ2 = b.lat * Math.PI / 180;
+        const dφ = φ2 - φ1, dλ = (b.lon - a.lon) * Math.PI / 180;
+        const hh = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+        return 2 * _R * Math.asin(Math.min(1, Math.sqrt(hh)));
+      };
+      let _seg = [];
+      const _flushSeg = () => {
+        if (_seg.length >= 2) {
+          const _pl = L.polyline(_seg.map(p => [p.lat, p.lon]), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
+          _pl.addTo(map);
+          S._nhcTrackLayers.push(_pl);
+        }
+        _seg = [];
+      };
+      for (const p of _pastPts) {
+        const prev = _seg[_seg.length - 1];
+        if (prev) {
+          const d = _segMi(prev, p);
+          const hrs = Math.abs(p.t - prev.t) / 3600000;
+          const maxStep = Math.max(200, hrs * 45); // mi allowed for this gap
+          if (d > maxStep) _flushSeg(); // break the trail here
+        }
+        _seg.push(p);
       }
+      _flushSeg();
       for (let _i = 0; _i < _pts.length; _i++) {
         const pt = _pts[_i];
         if (pt.lat == null || pt.lon == null) continue;

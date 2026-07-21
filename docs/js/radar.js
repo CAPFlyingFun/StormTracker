@@ -872,7 +872,13 @@ async function commitScanResults(rawPoints,opts){
 // ==========================================================================
 let _outerScanBusy=false;
 async function maybeRunOuterScan(){
-  try{
+  // v6.26: SUPERSEDED by the user-selectable Scan Range setting (Settings → 📡 Scan
+  // Range, 80–200 mi). The main scan now covers the chosen radius directly, so this
+  // separate annulus pass is disabled to avoid duplicate coverage. Kept for a
+  // possible future "always-on far awareness independent of the main radius".
+  try{ _clearOuterScan(); }catch(e){}
+  return;
+  try{ // eslint-disable-line no-unreachable
     if(S.lat==null||S.lon==null)return;
     const sys=(typeof _nhcData!=='undefined'&&_nhcData&&Array.isArray(_nhcData.systems))?_nhcData.systems:[];
     const near=sys.some(s=>s&&s.lat!=null&&s.lon!=null&&haversine(S.lat,S.lon,s.lat,s.lon)<=300);

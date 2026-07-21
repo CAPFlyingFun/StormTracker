@@ -10,6 +10,8 @@ const S = {
   travelMode:false, travelWatchId:null, travelLastUpdate:0, travelMarker:null,
   showClutter:false,
 };
+// v6.26: user-selectable scan range (default 80 mi; 80–200 in 20-mi steps via Settings).
+try{const _sr=parseInt(localStorage.getItem('st_scanRadius'),10);if(isFinite(_sr)&&_sr>=80&&_sr<=200)S.scanRadius=_sr;}catch(e){}
 const TEMP_UNITS = ['°F','°C'];
 const WIND_UNITS = ['mph','kts','km/h','m/s'];
 const PRES_UNITS = ['inHg','mb','mmHg','kPa'];

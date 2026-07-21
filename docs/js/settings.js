@@ -17,6 +17,7 @@ const TUTORIAL_SECTIONS=[
   {title:'💡 Tips',text:'• Storm intensity is measured in <b>dBZ</b> (decibels of reflectivity). Higher = stronger: 15-30 light rain, 30-45 moderate, 45-55 heavy, 55+ severe/hail.<br>• The <b>Impact %</b> shown on storms estimates the likelihood of affecting your exact location. NWS warning polygons and terrain effects are factored in.<br>• Scan circle on the radar shows your current detection range.<br>• The sonar mini-map on the Weather tab updates with every scan — use the +/− buttons to zoom in for detail or out for a wider view.<br>• Use the <b>sonar settings gear</b> to customize the sweep animation, dot glow, grid brightness, and more.<br>• The ⚡ lightning icon on storm cells indicates radar-derived lightning potential (≥40 dBZ).<br>• Install StormTracker as a <b>standalone app</b> on your phone — tap "Add to Home Screen" in your browser menu for the best experience.'}
 ];
 const CHANGELOG=[
+  {ver:'v6.26',date:'2026-07-21',items:['📡 <b>Adjustable scan range (80–200 miles)</b><br>New setting: <b>Settings → 📡 Scan Range</b>. Pick how far out StormTracker scans — <b>80, 100, 120, 140, 160, 180, or 200 mi</b>. The range ring, hex zones, storm list and cards all use it, so a wider range gives you an earlier heads-up on distant systems (like a hurricane\'s outer rainbands). Changing it rescans immediately. Wider ranges cover a much larger area, so scans can be a little slower.'],},
   {ver:'v6.25',date:'2026-07-21',items:['📏 <b>Live distance readout on the radar</b><br>Pan the radar so the center crosshair sits over any rainband or cell, and a floating pill at the top shows exactly how far it is and in which direction from you (e.g. "📏 105&nbsp;mi SE of you"). Updates live as you move the map — a quick way to measure distance to distant storms without a giant range ring. (The outer awareness scan now also kicks off when you open the Radar tab.)'],},
   {ver:'v6.24',date:'2026-07-21',items:['⭕️ <b>200-mile ring now shows on the Radar tab</b><br>The outer-awareness scan was only firing from the Storms tab, so the 200-mile ring never appeared while you were on Radar. It now fires on radar scans too, and the ring draws immediately (before the scan finishes).','🌀 <b>Hurricane past-track history turned off for now</b><br>The past-track trail wasn\'t matching reliably, so it\'s disabled for the moment. The forecast track, cone, storm marker and forecast dots still show. (Easy to switch back on once it\'s reworked.)'],},
   {ver:'v6.23',date:'2026-07-21',items:['📡 <b>Outer awareness scan out to 200 miles (early hurricane heads-up)</b><br>When a tropical system is within range and Storm Zones are on, StormTracker now runs a second, coarser radar scan over the <b>80–200 mile ring</b> and shows those distant echoes (with a 200-mile range ring) — so you can see a hurricane\'s outer rainbands long before they reach the detailed 80-mile zone. This is the first piece of a bigger buildout; next it groups those echoes into labeled rainband zones with a steering-direction arrow. Your inner 80-mile storm tracking, cards, ETAs and arrows are unchanged.'],},
@@ -440,6 +441,18 @@ function toggleSettingsPanel(){
   },{passive:false});
   sa.addEventListener('touchstart',function(e){sa._lastTouchY=e.touches[0].clientY},{passive:true});
 })();
+// v6.26: user-selectable radar scan range (80–200 mi). Persists, resizes the range
+// ring, and rescans so the hex zones + storm list update to the new radius.
+function setScanRange(v){
+  let r=parseInt(v,10); if(!isFinite(r))return;
+  r=Math.max(80,Math.min(200,r));
+  S.scanRadius=r;
+  try{localStorage.setItem('st_scanRadius',String(r))}catch(e){}
+  if(S._rangeCircle){try{S._rangeCircle.setRadius(r*1609.34)}catch(e){}}
+  const unit=S.radarMetric?Math.round(r*1.60934)+' km':r+' mi';
+  if(typeof toast==='function')toast('📡 Scan range: '+unit+' — rescanning…');
+  if(typeof scanRadarForStorms==='function')scanRadarForStorms();
+}
 function syncSettingsPanel(){
   syncAISettings();
   syncUnitSelects();
@@ -461,6 +474,8 @@ function syncSettingsPanel(){
   }
   const rfSel=document.getElementById('settings-rain-floor');
   if(rfSel){rfSel.value=String(typeof getRainFloorDbz==='function'?getRainFloorDbz():25);}
+  const srSel=document.getElementById('settings-scan-range');
+  if(srSel){srSel.value=String(S.scanRadius||80);}
   const ohBtn=document.getElementById('settings-overhead-toggle');
   if(ohBtn){
     const ohOn=typeof isOverheadPollEnabled==='function'?isOverheadPollEnabled():true;

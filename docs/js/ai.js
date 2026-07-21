@@ -310,6 +310,41 @@ function _dbzEmoji(dbz){
   return'🔵';
 }
 
+// v6.37: compute the user's quadrant relative to a tropical system's MOTION,
+// in code, so the AI never has to infer right-front/left-front geometry from
+// prose (it got it wrong before — calling a NNW-of-center user "right-front, NE
+// of center"). Tornado risk in tropical systems peaks in the RIGHT-FRONT
+// quadrant. Returns {quadrant, confidence, userDir, note} or null.
+const _QUAD_COMPASS={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
+function _tropicalQuadrant(sys){
+  if(!sys||sys.lat==null||sys.lon==null||S.lat==null||S.lon==null||typeof bearingDeg!=='function')return null;
+  const compass=(typeof _COMPASS!=='undefined')?_COMPASS:_QUAD_COMPASS;
+  const motion=compass[String(sys.moveDir||'').toUpperCase().trim()];
+  const spd=parseFloat(sys.moveSpeed);
+  const brgToUser=bearingDeg(sys.lat,sys.lon,S.lat,S.lon); // storm center → user
+  const userDir=(typeof degToDir==='function')?degToDir(brgToUser):null;
+  // Motion unknown or quasi-stationary → the quadrant is undefined (no reliable
+  // "front"). Say so rather than guessing.
+  if(motion==null||!isFinite(spd)||spd<3){
+    return {quadrant:'uncertain',confidence:'low',userDir,
+      note:(motion==null?'storm motion not published':'storm nearly stationary ('+(isFinite(spd)?spd:'?')+' mph), so front/rear is undefined')};
+  }
+  const rel=((brgToUser-motion)%360+540)%360-180; // [-180,180]; + = right of motion, 0 = dead ahead
+  let quadrant;
+  if(rel>=0&&rel<90)quadrant='right-front';
+  else if(rel>=90)quadrant='right-rear';
+  else if(rel<=-90)quadrant='left-rear';
+  else quadrant='left-front';
+  // Near an axis (front/rear/left/right boundary) → lower confidence + a note.
+  const nearAxis=Math.min(Math.abs(rel),Math.abs(Math.abs(rel)-90),Math.abs(Math.abs(rel)-180));
+  const confidence=nearAxis<15?'moderate':'high';
+  let note=null;
+  if(Math.abs(rel)<15)note='nearly dead ahead of the storm (on the front axis)';
+  else if(Math.abs(Math.abs(rel)-180)<15)note='nearly directly behind the storm (rear axis)';
+  else if(Math.abs(Math.abs(rel)-90)<15)note='nearly abeam the storm (side)';
+  return {quadrant,confidence,userDir,rel:Math.round(rel),note};
+}
+
 function buildWeatherContext(){
   const parts=[];
   const now=new Date();
@@ -506,9 +541,21 @@ function buildWeatherContext(){
           const pres=(s.minPressure!=null)?`min central pressure ${fmtPres(s.minPressure)}`:'central pressure not published';
           const mov=(s.moveDir)?`moving ${s.moveDir}${s.moveSpeed!=null?' at '+fmtWind(s.moveSpeed*1.60934):''}`:'motion not published';
           const src=s._source==='jtwc'?'JTWC':s._source==='gdacs'?'GDACS':'NHC';
-          parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]`);
+          // v6.37: precomputed user quadrant relative to storm motion (tornado
+          // threat). Only meaningful when the system is close enough to matter.
+          let quadTxt='';
+          if(d!=null&&d<=300){
+            const q=_tropicalQuadrant(s);
+            if(q){
+              quadTxt=(q.quadrant==='uncertain')
+                ?` USER QUADRANT: uncertain — ${q.note}; state the quadrant is uncertain rather than guessing.`
+                :` USER QUADRANT (computed): ${q.quadrant} — you are ${q.userDir||'?'} of the center${q.note?', '+q.note:''} (confidence ${q.confidence}).`;
+            }
+          }
+          parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]${quadTxt}`);
         }
         parts.push(`  ALWAYS include the nearest/affecting system's max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE in the Bottom Line or Situation Overview. If a value is "not published", say so explicitly (e.g. "central pressure not published by NHC") — do NOT invent one or quietly drop it.`);
+        parts.push(`  TORNADO QUADRANT: use the "USER QUADRANT (computed)" value above VERBATIM — do NOT infer right-front/left-front geometry yourself (it is easy to get wrong from prose). Tropical tornado risk is highest in the RIGHT-FRONT quadrant relative to motion; if the computed quadrant is anything else, or reads "uncertain", say so plainly rather than defaulting to "right-front". State the user's direction from the center exactly as given.`);
         parts.push(`  SINGLE SOURCE OF TRUTH: this TROPICAL SYSTEMS block is the ONLY authority for present-tense tropical facts — current position, distance, bearing, motion direction & speed, wind, gust and pressure. State ONE current position and ONE current motion per system, taken from here. The Area Forecast Discussion (further down) may quote the storm's position/motion from its own issuance time — those are HISTORICAL context; never repeat them as the current position/motion, and never let the Bottom Line and the Situation Overview give two different "current" distances, bearings or motions for the same system.`);
       }
     }
@@ -1071,7 +1118,7 @@ Combined section for pilots and mariners. IMPORTANT: Always include knots alongs
 RULES:
 - IMPORTANT: Use the units specified in USER UNITS for ALL measurements in your response. If the user has wind set to km/h, report winds in km/h — not mph or knots. If temperature is °C, use °C. If distance is km, use km. Match their preferences exactly.
 - Reference specific numbers from the data whenever possible
-- TROPICAL SYSTEMS — VITALS + TORNADO THREAT: for any tropical storm/hurricane affecting or approaching the user, (1) report its max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE from the TROPICAL SYSTEMS data — and if a value is "not published", say so rather than omitting it or guessing; and (2) ALWAYS address the tornado threat — tropical systems commonly spawn brief tornadoes in their outer rain bands (especially the right-front quadrant relative to motion). If a Tornado Watch/Warning is in the alerts, lead with it; otherwise state the potential in plain terms (usually low but non-zero in the outer bands) and what to do if a warning is issued. If the risk is genuinely negligible, say "tornadoes are not expected" — never leave tornadoes out of a tropical briefing entirely, and include a tornado line in any Risk Assessment summary.
+- TROPICAL SYSTEMS — VITALS + TORNADO THREAT: for any tropical storm/hurricane affecting or approaching the user, (1) report its max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE from the TROPICAL SYSTEMS data — and if a value is "not published", say so rather than omitting it or guessing; and (2) ALWAYS address the tornado threat — tropical systems commonly spawn brief tornadoes in their outer rain bands, with the risk highest in the RIGHT-FRONT quadrant relative to motion. Use the precomputed "USER QUADRANT" from the TROPICAL SYSTEMS data to say which quadrant the user is in — do NOT infer the quadrant yourself, and do NOT assume "right-front" by default; if the computed quadrant is left-front/rear or "uncertain", say that plainly (the tornado risk is correspondingly lower or indeterminate). If a Tornado Watch/Warning is in the alerts, lead with it; otherwise state the potential in plain terms (usually low but non-zero in the outer bands, and lower still outside the right-front quadrant) and what to do if a warning is issued. If the risk is genuinely negligible, say "tornadoes are not expected" — never leave tornadoes out of a tropical briefing entirely, and include a tornado line in any Risk Assessment summary.
 - Work with the data you have; briefly disclose a missing, stale, or unavailable source ONLY when it materially changes your confidence or the conclusion (e.g. "the nearest weather station is 60 mi away, so overhead conditions are estimated"). Don't clutter a calm briefing with caveats that don't matter.
 - GEOGRAPHY YOU CAN'T VERIFY: you are given the USER's coordinates, but NOT coordinates for the cities/highways/counties named inside alerts or the AFD. So you may state a distance/direction to such a landmark ONLY when the data explicitly provides that relationship. Otherwise, relay the official place name as written and describe its position in general terms you can support (e.g. "to your west, inland") — never fabricate a specific mileage or precise bearing to a landmark you haven't been given coordinates for.
 - LENGTH & NO REPETITION: aim for 700–1000 words for standard detail (hard cap ~1000), under 400 for minimal, under 2000 for technical. State each safety action and each fact ONCE — do not repeat "secure loose items", "stay indoors", "avoid the water", or the rain timing across multiple sections. The Risk Assessment table SUMMARIZES the briefing in one row per hazard; it must NOT restate the full paragraphs above it.

@@ -4,7 +4,23 @@
 const _aiChatHistory=[];
 let _aiChatOpen=false;
 
-function saveAIKey(v){const t=(v||'').trim();localStorage.setItem('st_aiKey',t);_syncAiKeyState();if(typeof syncPushAlerts==='function')syncPushAlerts();}
+function saveAIKey(v){
+  const t=(v||'').trim();
+  // v6.35: a Claude key (sk-ant-…) pasted into the OpenAI field is the #1 setup
+  // mistake — OpenAI is the default provider, so on a fresh device its field is
+  // the only one shown, and the key then fails against OpenAI's API as "invalid".
+  // Auto-route it to the Claude slot and switch the provider instead.
+  if(/^sk-ant-/i.test(t)){
+    localStorage.setItem('st_aiKeyAnthropic',t);
+    const ael=document.getElementById('settings-ai-key-anthropic');if(ael)ael.value=t;
+    const oel=document.getElementById('settings-ai-key');if(oel)oel.value='';
+    const sel=document.getElementById('settings-ai-provider');if(sel)sel.value='anthropic';
+    if(typeof saveAIProvider==='function')saveAIProvider('anthropic'); // applies provider UI + syncs key state
+    else{localStorage.setItem('st_aiProvider','anthropic');_syncAiKeyState();}
+    return;
+  }
+  localStorage.setItem('st_aiKey',t);_syncAiKeyState();if(typeof syncPushAlerts==='function')syncPushAlerts();
+}
 function saveAITone(v){localStorage.setItem('st_aiTone',v);}
 function saveAIDetail(v){localStorage.setItem('st_aiDetail',v);}
 function saveAIModel(v){localStorage.setItem('st_aiModel',v);}

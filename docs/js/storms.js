@@ -2189,11 +2189,29 @@ async function fetchNHCData() {
     // also lights up IN-CONE detection and "Tap for forecast track" globally.
     _nhcData.history = [];
     _nhcData.fcstPoints = [];
+    // v6.03: forecast-track dots carry per-point intensity when NHC provides it.
+    // Group NHC's forecast points (all taus, each with max wind / gust / pressure)
+    // by storm; GDACS points (time only) fill in for storms NHC doesn't cover.
+    if (gis && gis.forecastPoints && gis.forecastPoints.length) {
+      const byStorm = {};
+      for (const q of gis.forecastPoints) {
+        const k = (q.stormId || '') + '|' + (q.stormName || '').toLowerCase();
+        (byStorm[k] || (byStorm[k] = { stormId: q.stormId, stormName: q.stormName, pts: [], _src: 'nhc' })).pts.push({
+          lat: q.lat, lon: q.lon, t: Date.now() + (q.tau || 0) * 3600000,
+          label: q.label || (q.tau != null ? ('+' + q.tau + 'h') : ''),
+          maxWind: q.maxWind, gusts: q.gusts, minPressure: q.minPressure, type: q.type, tau: q.tau
+        });
+      }
+      // Only use NHC as the dot source when it's a real multi-point forecast track;
+      // if it only returned the current position, leave GDACS to supply the dots.
+      for (const k in byStorm) { if (byStorm[k].pts.length >= 2) { byStorm[k].pts.sort((a, b) => (a.tau || 0) - (b.tau || 0)); _nhcData.fcstPoints.push(byStorm[k]); } }
+    }
     const _normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const _attachGdacsGeo = (gd, stormId, stormName) => {
       const sid = stormId || '', sname = (stormName || '').toLowerCase();
       if (gd.histTrack && gd.histTrack.length >= 2) _nhcData.history.push({ stormId: sid, stormName: stormName || '', coords: gd.histTrack, _src: 'gdacs' });
-      if (gd.fcstPoints && gd.fcstPoints.length) _nhcData.fcstPoints.push({ stormId: sid, stormName: stormName || '', pts: gd.fcstPoints, _src: 'gdacs' });
+      const hasFP = (_nhcData.fcstPoints || []).some(f => (sid && f.stormId === sid) || (f.stormName && sname && f.stormName.toLowerCase() === sname));
+      if (!hasFP && gd.fcstPoints && gd.fcstPoints.length) _nhcData.fcstPoints.push({ stormId: sid, stormName: stormName || '', pts: gd.fcstPoints, _src: 'gdacs' });
       const hasCone = (_nhcData.cones || []).some(c => (sid && c.stormId === sid) || (c.stormName && sname && c.stormName.toLowerCase() === sname));
       if (!hasCone && gd.cone && gd.cone.length >= 3) _nhcData.cones.push({ stormId: sid, stormName: stormName || '', coords: gd.cone, forecastPeriod: '120', _src: 'gdacs' });
       const hasTrack = (_nhcData.forecast || []).some(t => (sid && t.stormId === sid) || (t.stormName && sname && t.stormName.toLowerCase() === sname));
@@ -2236,7 +2254,7 @@ async function fetchNHCData() {
 async function _fetchNHCGIS() {
   const base = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
   const q = 'where=1%3D1&outFields=*&f=geojson&resultRecordCount=500';
-  const result = { positions: [], tracks: [], cones: [], windRadii: [] };
+  const result = { positions: [], tracks: [], cones: [], windRadii: [], forecastPoints: [] };
   try {
     const [posRes, trkRes, coneRes, wr34Res, wr50Res, wr64Res] = await Promise.allSettled([
       fetch(`${base}/0/query?${q}`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : null),
@@ -2260,19 +2278,27 @@ async function _fetchNHCGIS() {
         if (!coords) continue;
         const name = p.STORMNAME || p.NAME || 'Unknown';
         const stormId = p.STORMID || p.ATCFID || '';
-        const tau = p.TAU || p.ADVDATE || 0;
+        const tauRaw = (p.TAU != null ? p.TAU : (p.ADVDATE != null ? p.ADVDATE : 0));
+        const tau = (typeof tauRaw === 'number') ? tauRaw : (parseInt(tauRaw, 10) || 0);
+        const windKt = p.MAXWIND || p.INTENSITY || null;
+        const maxWind = windKt ? Math.round(windKt * 1.15078) : null;
+        const gusts = p.GUST ? Math.round(p.GUST * 1.15078) : null;
+        const minPressure = p.MSLP || null;
+        const stormType = p.STORMTYPE || (maxWind >= 74 ? 'Hurricane' : maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression');
+        // v6.03: keep EVERY forecast point (all forecast hours), each with its own
+        // max wind / gust / pressure, so the track-dot popups can show the forecast
+        // strength — not just the timestamp. (result.positions below still dedups
+        // to the current position per storm for the big center marker.)
+        result.forecastPoints.push({ stormId, stormName: name, lat: coords[1], lon: coords[0], tau, maxWind, gusts, minPressure, type: stormType, label: p.FLDATELBL || p.DATELBL || p.VALIDTIME || null });
         const key = name + '_' + stormId;
         if (seen.has(key)) continue;
         seen.add(key);
-        const windKt = p.MAXWIND || p.INTENSITY || null;
-        const maxWind = windKt ? Math.round(windKt * 1.15078) : null;
-        const stormType = p.STORMTYPE || (maxWind >= 74 ? 'Hurricane' : maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression');
         const basin = stormId.startsWith('EP') ? 'ep' : 'at';
         result.positions.push({
           id: stormId, name, type: stormType, basin,
           lat: coords[1], lon: coords[0],
-          maxWind, gusts: p.GUST ? Math.round(p.GUST * 1.15078) : null,
-          minPressure: p.MSLP || null,
+          maxWind, gusts,
+          minPressure,
           moveDir: p.STORMDIR ? _degToCompass(p.STORMDIR) : null,
           moveSpeed: p.STORMSPED ? Math.round(p.STORMSPED * 1.15078) : null,
           link: null, surgeData: null, forecastHr: tau
@@ -3116,9 +3142,17 @@ function plotNHCTracks(map) {
         dot.addTo(map);
         S._nhcTrackLayers.push(dot);
         // v5.92: the visible dot is tiny — a big invisible circle carries the tap
-        if (pt.label) {
+        // v6.03: show the FORECAST intensity at this point (max wind / gusts /
+        // pressure / category) when NHC provides it, not just the timestamp.
+        if (pt.label || pt.maxWind != null) {
+          const _cat = (pt.maxWind != null && typeof _saffirSimpson === 'function') ? _saffirSimpson(pt.maxWind) : null;
+          const _lines = [];
+          if (pt.type || (_cat && _cat.label)) _lines.push(`<div style="font-weight:700;color:${_cat ? _cat.color : '#22d3ee'}">${escHtml(pt.type || (_cat ? _cat.label : ''))}</div>`);
+          if (pt.maxWind != null) _lines.push(`💨 ${pt.maxWind} mph${pt.gusts ? ' (G' + pt.gusts + ')' : ''}`);
+          if (pt.minPressure) _lines.push(`🔵 ${pt.minPressure} mb`);
+          const _intHtml = _lines.length ? '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.14);margin:4px 0">' + _lines.join('<br>') : '';
           const hit = L.circleMarker([pt.lat, pt.lon], { radius: 12, stroke: false, fillColor: '#000', fillOpacity: 0.02 });
-          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center"><b>${future ? 'Forecast' : 'Past'} position</b><br>${escHtml(pt.label)}</div>`);
+          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${pt.label ? '<br>' + escHtml(pt.label) : ''}${_intHtml}</div>`);
           hit.addTo(map);
           S._nhcTrackLayers.push(hit);
         }

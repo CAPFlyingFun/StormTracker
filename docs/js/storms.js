@@ -2197,7 +2197,7 @@ async function fetchNHCData() {
       for (const q of gis.forecastPoints) {
         const k = (q.stormId || '') + '|' + (q.stormName || '').toLowerCase();
         (byStorm[k] || (byStorm[k] = { stormId: q.stormId, stormName: q.stormName, pts: [], _src: 'nhc' })).pts.push({
-          lat: q.lat, lon: q.lon, t: Date.now() + (q.tau || 0) * 3600000,
+          lat: q.lat, lon: q.lon, t: (q.validTime || (Date.now() + (q.tau || 0) * 3600000)),
           label: q.label || (q.tau != null ? ('+' + q.tau + 'h') : ''),
           maxWind: q.maxWind, gusts: q.gusts, minPressure: q.minPressure, type: q.type, tau: q.tau
         });
@@ -2289,7 +2289,12 @@ async function _fetchNHCGIS() {
         // max wind / gust / pressure, so the track-dot popups can show the forecast
         // strength — not just the timestamp. (result.positions below still dedups
         // to the current position per storm for the big center marker.)
-        result.forecastPoints.push({ stormId, stormName: name, lat: coords[1], lon: coords[0], tau, maxWind, gusts, minPressure, type: stormType, label: p.FLDATELBL || p.DATELBL || p.VALIDTIME || null });
+        // ArcGIS esriFieldTypeDate fields come back as epoch ms (UTC). Capture the
+        // real valid time so the popup can render it in the USER's local zone,
+        // instead of NHC's pre-formatted label (which is in the basin's zone).
+        const vtRaw = (p.VALIDTIME != null ? p.VALIDTIME : (p.FLDATELBL_DT != null ? p.FLDATELBL_DT : null));
+        const validTime = (typeof vtRaw === 'number' && isFinite(vtRaw) && vtRaw > 1e11) ? vtRaw : null;
+        result.forecastPoints.push({ stormId, stormName: name, lat: coords[1], lon: coords[0], tau, maxWind, gusts, minPressure, type: stormType, validTime, label: p.FLDATELBL || p.DATELBL || (typeof p.VALIDTIME === 'string' ? p.VALIDTIME : null) || null });
         const key = name + '_' + stormId;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -3151,8 +3156,20 @@ function plotNHCTracks(map) {
           if (pt.maxWind != null) _lines.push(`💨 ${pt.maxWind} mph${pt.gusts ? ' (G' + pt.gusts + ')' : ''}`);
           if (pt.minPressure) _lines.push(`🔵 ${pt.minPressure} mb`);
           const _intHtml = _lines.length ? '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.14);margin:4px 0">' + _lines.join('<br>') : '';
+          // v6.04: show the valid time in the USER's local zone (weekday + date +
+          // clock, honoring their 12/24h setting), not NHC's basin-zone label.
+          let _timeHtml = '';
+          if (pt.t != null) {
+            const _d = new Date(pt.t);
+            if (!isNaN(_d)) {
+              const _day = _d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+              const _clk = (typeof fmtClock === 'function') ? fmtClock(_d) : _d.toLocaleTimeString();
+              _timeHtml = '<br>' + escHtml(_day + ' · ' + _clk);
+            }
+          }
+          if (!_timeHtml && pt.label) _timeHtml = '<br>' + escHtml(pt.label);
           const hit = L.circleMarker([pt.lat, pt.lon], { radius: 12, stroke: false, fillColor: '#000', fillOpacity: 0.02 });
-          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${pt.label ? '<br>' + escHtml(pt.label) : ''}${_intHtml}</div>`);
+          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${_timeHtml}${_intHtml}</div>`);
           hit.addTo(map);
           S._nhcTrackLayers.push(hit);
         }

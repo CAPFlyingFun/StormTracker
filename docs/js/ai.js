@@ -157,6 +157,9 @@ function fmtAIText(raw){
   s=s.replace(/^# (.+)$/gm,'<span style="display:block;font-weight:800;font-size:1.05em;color:var(--accent-cyan);margin-top:8px">$1</span>');
   s=s.replace(/^[-•] (.+)$/gm,'<span style="display:block;padding-left:12px;text-indent:-10px">• $1</span>');
   s=s.replace(/^\d+\.\s+(.+)$/gm,function(m,p1,offset,str){return '<span style="display:block;padding-left:12px">'+m+'</span>'});
+  // v6.09: make the "N/10 thunderstorm potential" index tappable — opens a clean
+  // explainer of how StormTracker scores it (keeps the math out of the prose).
+  s=s.replace(/(\d{1,2}\s*\/\s*10\s+thunderstorm potential|thunderstorm potential[:\s]*\(?\s*\d{1,2}\s*\/\s*10\)?)/gi, m=>`<span onclick="if(typeof showTstormIndexInfo==='function')showTstormIndexInfo()" style="cursor:pointer;border-bottom:1px dotted currentColor" title="How is this scored?">${m} ⓘ</span>`);
   // v4.62: defensive sweep — strip any orphan [!...]/[/!] tokens that
   // survived the structured replacements above (e.g. mismatched pairs,
   // unknown tag names, or markup the model invented). Without this the

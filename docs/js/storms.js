@@ -745,6 +745,64 @@ function getStabilityData(){
   return{cape,li,cin,stabRat,stabDesc,moistRat,liftRat,overall,risk,dewp,temp,humid};
 }
 
+// v6.09: transparent "how is this scored?" explainer for the Thunderstorm
+// Potential index. Kept OUT of the briefing prose — the phrase in the briefing
+// is tappable and opens this clean second window instead (see fmtAIText).
+function closeTstormIndexInfo(){ const el=document.getElementById('tstorm-index-panel'); if(el)el.remove(); }
+function showTstormIndexInfo(){
+  const d = (typeof getStabilityData==='function') ? getStabilityData() : null;
+  const shear = (S._windShear && S._windShear.speedDiff!=null) ? Math.round(S._windShear.speedDiff) : null;
+  const _row = (icon,name,score,inputs,scale) => `
+    <div style="padding:9px 0;border-top:1px solid var(--border-subtle,#243040)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:1.1em">${icon}</span>
+        <span style="font-weight:700;flex:1">${name}</span>
+        <span style="font-weight:800;color:var(--accent-cyan,#22d3ee)">${score==null?'—':score+'/10'}</span>
+      </div>
+      ${inputs?`<div style="font-size:0.82em;color:var(--text-secondary,#9fb0c3);margin:3px 0 0 27px">${inputs}</div>`:''}
+      <div style="font-size:0.72em;color:var(--text-muted,#7a8699);margin:2px 0 0 27px">${scale}</div>
+    </div>`;
+  const cape=d?d.cape:null, li=d?d.li:null, cin=d?d.cin:null, humid=d?d.humid:null;
+  const spread=(d&&d.temp!=null&&d.dewp!=null)?Math.round((d.temp-d.dewp)*10)/10:null;
+  const moistIn = d?`RH ${humid!=null?Math.round(humid)+'%':'—'}${spread!=null?` · temp–dewpoint spread ${spread}°C`:''}`:'live values unavailable';
+  const stabIn = d?`CAPE ${cape!=null?Math.round(cape)+' J/kg':'—'} · Lifted Index ${li!=null?li+'°C':'—'}${cin!=null?` · CIN ${Math.round(cin)} J/kg`:''}`:'live values unavailable';
+  const liftIn = shear!=null?`0–6 km bulk wind shear ${shear} mph`:'shear data unavailable';
+  const overall = d?d.overall:null, risk = d?d.risk:'';
+  const riskColor = overall>=8?'#ff3355':overall>=6?'#f97316':overall>=4?'#eab308':'#22c55e';
+  closeTstormIndexInfo();
+  const panel=document.createElement('div');
+  panel.id='tstorm-index-panel';
+  panel.setAttribute('style','position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(400px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--bg-surface,#0f1520);border:1px solid var(--border-subtle,#243040);border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,0.62);z-index:5000;overflow:hidden;font-family:system-ui;color:var(--text-primary,#e6edf5)');
+  panel.innerHTML=`
+    <div style="display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--border-subtle,#243040)">
+      <span style="font-size:1.3em">⛈️</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700">Thunderstorm Potential</div>
+        <div style="font-size:0.72em;color:var(--text-secondary,#9fb0c3)">StormTracker's own 0–10 gauge — how it's scored</div>
+      </div>
+      <button onclick="closeTstormIndexInfo()" aria-label="Close" style="background:none;border:none;color:var(--text-secondary,#9fb0c3);font-size:1.4em;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>
+    </div>
+    <div style="overflow-y:auto;padding:6px 16px 14px">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 0 8px">
+        <div style="width:58px;height:58px;border-radius:50%;border:4px solid ${riskColor};display:flex;align-items:center;justify-content:center;flex:0 0 auto">
+          <span style="font-size:1.25em;font-weight:800">${overall==null?'—':overall}</span>
+        </div>
+        <div>
+          <div style="font-weight:800;color:${riskColor};font-size:1.05em">${risk||''} risk</div>
+          <div style="font-size:0.8em;color:var(--text-secondary,#9fb0c3)">Average of the three pillars below, each scored 0–10.</div>
+        </div>
+      </div>
+      ${_row('💧','Moisture', d?d.moistRat:null, moistIn, 'Higher when the air is humid and near saturation (small temp–dewpoint spread).')}
+      ${_row('🌡️','Instability', d?d.stabRat:null, stabIn, 'Average of CAPE (≥2500 = 9), Lifted Index (≤ −6 = 9) and CIN (a small cap scores higher).')}
+      ${_row('💨','Lift / shear', d?d.liftRat:null, liftIn, '0–6 km wind shear: ≥20 mph = 8, ≥10 = 6, ≥5 = 4. Helps organize and sustain storms.')}
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle,#243040);border-radius:9px;font-size:0.76em;color:var(--text-secondary,#9fb0c3);line-height:1.5">
+        Bands: <b>0–3 Low</b> · <b>4–5 Moderate</b> · <b>6–7 High</b> · <b>8–10 Extreme</b>.
+        This is a quick at-a-glance composite from live model data (Open-Meteo) — a screening tool, <b>not</b> an official NWS Convective Outlook. Always defer to NWS watches/warnings.
+      </div>
+    </div>`;
+  document.body.appendChild(panel);
+}
+
 function getWindShearAnalysis(){
   if(!S._windShear||!S._aloftData||S._aloftData.length<2)return null;
   const sfc=S._aloftData.find(a=>a.isSfc)||S._aloftData[0];

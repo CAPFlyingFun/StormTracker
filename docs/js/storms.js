@@ -2979,18 +2979,15 @@ function _tropicalStatusLabel(storm) {
 function _escStormName(name) {
   return (name || '').replace(/['"\\<>&]/g, '');
 }
-// v5.62: the storm-cell card badge's cross-track (X-TRK) proximity scale — how
-// far a cell's projected path passes from your exact location. Three plain tiers
-// replace the old six (direct/near_direct/near_miss/miss/distant/far) plus the
-// confusing closeness-% badge:
-//   🎯 Direct  ≤1.5 mi   ·   🟠 Nearby  1.5–6 mi   ·   ⚪ Passing  >6 mi
-// (Display only — the internal 6-tier classification still drives sorting,
-// grouping, alert thresholds and the background push scanner.)
+// v6.30: the storm-cell card badge's cross-track (X-TRK) proximity scale is now
+// derived from the ONE global XTRK_TIERS table (core.js) — 5 tiers matching the
+// ticker's own bands: 🎯 direct ≤1.5 · 🟠 nearby ≤6 · 🟡 near-miss ≤12 ·
+// 🔵 tracking ≤48 · ⚪ distant >48. This thin wrapper keeps the long-standing
+// `_xtrkTier(...)` call sites working while the definition lives in one place.
+// (Display only — the internal 6-tier PERP classification still drives sorting,
+// alert thresholds and the background push scanner.)
 function _xtrkTier(missMi){
-  if(missMi==null||isNaN(missMi))return null;
-  if(missMi<=1.5)return{key:'direct', label:'DIRECT', emoji:'🎯', color:'#ef4444'};
-  if(missMi<=6)  return{key:'nearby', label:'NEARBY', emoji:'🟠', color:'#f97316'};
-  return{key:'passing', label:'PASSING', emoji:'⚪', color:'#94a3b8'};
+  return (typeof xtrkTier==='function')?xtrkTier(missMi):null;
 }
 // v5.64: storm-card view mode — 'hybrid' (plain-English line above the boxes,
 // default) · 'text' (readout only) · 'cards' (boxes only, the pre-v5.64 look).
@@ -3019,29 +3016,30 @@ function _stormTextSummary(s,_b,_sMv,eta){
     impact='🟢 Drifting away — not a threat to you.';
   }else if(closing&&_b.perpMissMi!=null){
     const t=_xtrkTier(_b.perpMissMi);
-    const word=t.key==='direct'?'Direct impact':t.key==='nearby'?'Nearby pass':'Passing wide';
+    const word=t.word;
     const missStr=S.radarMetric?(_b.perpMissMi*1.60934).toFixed(1)+' km':_b.perpMissMi.toFixed(1)+' mi';
     // v5.65: arrival shows a LIVE countdown (ticks via the shared eta-countdown
     // updater) next to the fixed clock time. No data-storm-key here so it never
     // double-triggers the auto-rescan the box's countdown already owns.
-    // v5.95: ETA phrasing by X-TRK tier. DIRECT (≤1.5 mi) gets a live ticking
-    // countdown next to the clock time — it's aimed at you. NEARBY (1.5–6 mi)
-    // gets a fixed possible arrival time plus a "path may shift" nudge, no
-    // countdown. PASSING (>6 mi) gets no ETA — too far / too track-dependent to
-    // put a clock on. The presence of a countdown alone now reads direct.
+    // v6.30: ETA phrasing keys off the tier's `eta` flag (from XTRK_TIERS).
+    // 'live' (direct ≤1.5 mi) gets a live ticking countdown next to the clock
+    // time — it's aimed at you. 'fixed' (nearby 1.5–6 mi) gets a fixed possible
+    // arrival time plus a "path may shift" nudge, no countdown. 'none' (>6 mi:
+    // near-miss/tracking/distant) gets no ETA — too far / track-dependent to put
+    // a clock on. The presence of a countdown alone now reads direct.
     let arr='';
     const _clock=(_tgt&&_tgt>Date.now())?fmtClockShort(new Date(_tgt)):((eta&&eta.eta!=null)?fmtArrivalTime(eta.eta):null);
-    if(t.key==='direct'&&_clock){
+    if(t.eta==='live'&&_clock){
       if(_tgt&&_tgt>Date.now()){
         const _cd=fmtCountdown(Math.max(0,Math.round((_tgt-Date.now())/1000)));
         arr=`, arriving ~${_clock} (in <span class="eta-countdown" data-eta-sec="${Math.round(_tgt)}">${_cd}</span>)`;
       }else{
         arr=`, arriving ~${_clock}`;
       }
-    }else if(t.key==='nearby'&&_clock){
+    }else if(t.eta==='fixed'&&_clock){
       arr=`, possible ETA ~${_clock} — path may still shift, keep an eye on the radar`;
     }
-    // t.key==='passing' (>6 mi): no ETA
+    // t.eta==='none' (>6 mi): no ETA
     const est=_b.estDbzAtUser;
     const rain=(est!=null&&est>=15)?`${stormCat(est).label} (~${est} dBZ) expected`:'little/no rain expected at you';
     impact=`${t.emoji} ${word}, XTK ${missStr}${arr} · ${rain}.`;
@@ -3131,9 +3129,9 @@ function stormMaster(storm){
   const mv=(typeof getHybridMovement==='function')?getHybridMovement(storm):null;
   const perpMissMi=(brief&&brief.perpMissMi!=null&&isFinite(brief.perpMissMi))?brief.perpMissMi:((eta&&eta.perpMissMi!=null)?eta.perpMissMi:null);
   const tierObj=(typeof _xtrkTier==='function')?_xtrkTier(perpMissMi):null;
-  const tier=tierObj?tierObj.key:(perpMissMi!=null?(perpMissMi<=1.5?'direct':perpMissMi<=6?'nearby':'passing'):null);
+  const tier=tierObj?tierObj.key:null;
   const impactPct=(brief&&brief.impactScore!=null)?Math.round(brief.impactScore*100):(eta?eta.impact||0:0);
-  const impactTier=tier==='direct'?'high':tier==='nearby'?'medium':tier==='passing'?'low':'none';
+  const impactTier=tierObj?tierObj.impact:'none';
   const m={
     brief,eta,mv,perpMissMi,tier,impactTier,impactPct,
     classification:brief?brief.classification:(eta?eta.perpTier:null),
@@ -3150,27 +3148,29 @@ function stormMaster(storm){
 // v5.97/v5.99: storm-cell NOTIFICATION text, read straight off the master record
 // (one X-TRK model). Returns a SHORT line for the phone/browser notification
 // (which truncates) and a FULL, detailed line for the 📢 log. ETA follows the
-// v5.95 rule: Direct → ETA+clock, Nearby → possible ETA, Passing → none.
+// tier's `eta` flag (XTRK_TIERS): live → ETA+clock, fixed → possible ETA,
+// none (>6 mi) → no clock.
 function _stormNotifMsg(storm){
   const m=(typeof stormMaster==='function')?stormMaster(storm):null;
   const b=m?m.brief:null;
   const mv=m?m.mv:null;
   const miss=m?m.perpMissMi:null;
-  const key=(m&&m.tier)?m.tier:'passing';
-  const label=key==='direct'?'🎯 Direct impact':key==='nearby'?'🟠 Nearby pass':'⚪ Passing wide';
-  const shortTier=key==='direct'?'direct':key==='nearby'?'nearby':'passing';
+  const key=(m&&m.tier)?m.tier:'distant';
+  const tObj=(typeof xtrkTierByKey==='function')?xtrkTierByKey(key):null;
+  const label=tObj?`${tObj.emoji} ${tObj.word}`:'⚪ Distant';
+  const shortTier=tObj?tObj.plain.toLowerCase():'distant';
   let etaMin=null,arrMs=null;
   if(m&&m.etaMin!=null&&m.etaMin>0){etaMin=Math.max(0,m.etaMin-radarAgeMin());arrMs=Date.now()+etaMin*60000;}
   let etaFull='',etaShort='';
-  if(arrMs&&key==='direct'){etaFull=` — ETA ${formatStormEta(etaMin)} (~${fmtClockShort(new Date(arrMs))})`;etaShort=` · ETA ${formatStormEta(etaMin)}`;}
-  else if(arrMs&&key==='nearby'){etaFull=` — possible ETA ~${fmtClockShort(new Date(arrMs))} (path may shift)`;etaShort=` · ~${fmtClockShort(new Date(arrMs))}`;}
+  if(arrMs&&tObj&&tObj.eta==='live'){etaFull=` — ETA ${formatStormEta(etaMin)} (~${fmtClockShort(new Date(arrMs))})`;etaShort=` · ETA ${formatStormEta(etaMin)}`;}
+  else if(arrMs&&tObj&&tObj.eta==='fixed'){etaFull=` — possible ETA ~${fmtClockShort(new Date(arrMs))} (path may shift)`;etaShort=` · ~${fmtClockShort(new Date(arrMs))}`;}
   const distStr=fmtStormDist(storm.distance);
   const posDir=degToDir(storm.bearing);
   const strength=storm._rotation?'Rotating storm':storm.dbz>=65?'Extreme storm':storm.dbz>=60?'Severe storm':storm.dbz>=52?'Strong storm':storm.dbz>=41?'Storm':'Rain cell';
   const mvClause=(mv&&mv.speed>=2)?`moving ${degToDir(mv.direction)} (${Math.round(mv.direction)}°) at ${S.radarMetric?Math.round(mv.speed*1.60934)+' km/h':mv.speed+' mph'}`:'motion uncertain';
   const missStr=miss!=null?(S.radarMetric?`, X-TRK ${(miss*1.60934).toFixed(1)} km`:`, X-TRK ${miss.toFixed(1)} mi`):'';
   const est=(b&&b.estDbzAtUser!=null)?b.estDbzAtUser:null;
-  const rain=(est!=null&&est>=15)?` ${stormCat(est).label} (~${est} dBZ) expected at you.`:(key==='passing'?'':' Little/no rain expected at you.');
+  const rain=(est!=null&&est>=15)?` ${stormCat(est).label} (~${est} dBZ) expected at you.`:((tObj&&tObj.eta==='none')?'':' Little/no rain expected at you.');
   const full=`🌩️ ${strength} — ${storm.dbz} dBZ, ${distStr} to your ${posDir} (${Math.round(storm.bearing)}°), ${mvClause}. ${label}${missStr}${etaFull}.${rain}`;
   const short=`🌩️ ${storm.dbz} dBZ ${shortTier} · ${distStr} ${posDir}${etaShort}`;
   return {short,full,key,etaMin,arrMs,dbz:storm.dbz,dist:storm.distance};
@@ -4121,7 +4121,7 @@ function _renderStormsCore(){
   if(mv&&mv.speed>=2){storms.forEach(s=>{s._eta=calcStormETA(s)})}else{storms.forEach(s=>{if(!s._eta)s._eta=calcStormETA(s)})}
   let inConeCount=0;
   let inConeMinMiss=null;
-  let coneDirect=0,coneNearby=0,conePassing=0; // v5.66: X-TRK tier split of the cones you're inside
+  const _coneTally={}; for(const _ct of XTRK_TIERS)_coneTally[_ct.key]=0; // v6.30: X-TRK tier split of the cones you're inside (all 5 tiers, one table)
   let _coneKeys=[]; // v5.70: distinct storm keys whose cone covers you (drives the tap-focus)
   if(mv&&mv.speed>=2&&S._tracksMode!=='off'&&S.lat!=null&&S.lon!=null){
     const uLat=S.lat,uLng=S.lon;
@@ -4143,13 +4143,12 @@ function _renderStormsCore(){
         const b=calcStormETAForBriefing(s);
         const pm=(b&&b.perpMissMi!=null&&isFinite(b.perpMissMi))?b.perpMissMi:null;
         if(pm!=null&&(inConeMinMiss==null||pm<inConeMinMiss))inConeMinMiss=pm;
-        // v5.66: bucket by the SAME X-TRK tiers as the card badges —
-        // Direct ≤1.5 · Nearby 1.5–6 · Passing >6 (or no XTK → passing).
+        // v6.30: bucket by the SAME X-TRK tiers as the card badges and the
+        // Storm Points tabs (one XTRK_TIERS table) — direct/nearby/near-miss/
+        // tracking/distant. No XTK → distant.
         const _t=pm!=null?_xtrkTier(pm):null;
-        if(_t&&_t.key==='direct')coneDirect++;
-        else if(_t&&_t.key==='nearby')coneNearby++;
-        else conePassing++;
-      }catch(e){conePassing++;}
+        _coneTally[_t?_t.key:'distant']++;
+      }catch(e){_coneTally.distant++;}
     }
   }
   // v5.44: publish cone stats so the "no storms approaching" banner and the
@@ -4157,12 +4156,15 @@ function _renderStormsCore(){
   // of contradicting the header. In-cone = inside a storm's broad 15° track
   // envelope (widens with distance — ~13 mi half-width at 50 mi out), while
   // "approaching" = projected closest pass under ~6 mi. Very different bars.
-  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,direct:coneDirect,nearby:coneNearby,passing:conePassing,keys:_coneKeys,scanId:S._stormScanId};
-  const inConeColor=coneDirect>0?'#ef4444':coneNearby>0?'#f97316':conePassing>0?'#94a3b8':'#6b7280';
+  S._coneStats={count:inConeCount,minMiss:inConeMinMiss,tally:Object.assign({},_coneTally),keys:_coneKeys,scanId:S._stormScanId};
+  // Colour + breakdown follow the XTRK_TIERS order so the highest-priority
+  // non-empty tier drives the accent and the pills read in tier order.
+  let inConeColor='#6b7280';
   const _coneBreak=[];
-  if(coneDirect>0)_coneBreak.push('Direct: '+coneDirect);
-  if(coneNearby>0)_coneBreak.push('Nearby: '+coneNearby);
-  if(conePassing>0)_coneBreak.push('Passing: '+conePassing);
+  for(const _ct of XTRK_TIERS){
+    const _n=_coneTally[_ct.key];
+    if(_n>0){if(inConeColor==='#6b7280')inConeColor=_ct.color;_coneBreak.push(`${_ct.plain}: ${_n}`);}
+  }
   // v5.68: the cone line is tappable when you're inside ≥1 cone — it focuses the
   // list on just those cells (see toggleConeFocus). Cyan "reset" state while active.
   const _coneTappable=(inConeCount>0)||S._coneFocus;
@@ -4222,17 +4224,18 @@ function _renderStormsCore(){
           const remainMin=(targetMs-Date.now())/60000;
           const arrivalTime=fmtArrivalTime(remainMin);
           const initCountdown=fmtCountdown(Math.round(remainMin*60));
-          // v5.95: ETA tile by X-TRK tier. DIRECT (≤1.5 mi) → live ticking
-          // countdown (aimed at you). NEARBY (1.5–6 mi) → fixed possible arrival
-          // clock time, no countdown. PASSING (>6 mi, or miss unknown) → no ETA
-          // tile at all. So a ticking clock alone means "coming at you."
-          const _etaTier=(missMiVal==null)?'passing':(missMiVal<=1.5?'direct':missMiVal<=6?'nearby':'passing');
-          if(_etaTier==='direct'){
+          // v6.30: ETA tile by the tier's `eta` flag (XTRK_TIERS). 'live'
+          // (direct ≤1.5 mi) → live ticking countdown (aimed at you). 'fixed'
+          // (nearby 1.5–6 mi) → fixed possible arrival clock time, no countdown.
+          // 'none' (>6 mi, or miss unknown) → no ETA tile at all. So a ticking
+          // clock alone means "coming at you."
+          const _etaT=_xtrkTier(missMiVal);
+          if(_etaT&&_etaT.eta==='live'){
             mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:${imp.color}"><span class="eta-countdown" data-eta-sec="${Math.round(targetMs)}" data-storm-key="${sk}">${initCountdown}</span></div><div style="font-size:0.65em;color:${imp.color};margin-top:1px">${tStr('Arrives')} ~${arrivalTime}</div></div>`;
-          }else if(_etaTier==='nearby'){
+          }else if(_etaT&&_etaT.eta==='fixed'){
             mvLine+=`<div class="storm-detail eta-detail"><div class="storm-detail-label">⏱ ${tStr('ETA')}</div><div class="storm-detail-val" style="color:var(--text-secondary);font-size:0.9em">~${arrivalTime}</div><div style="font-size:0.6em;color:var(--text-muted);margin-top:1px">${tStr('possible · may shift')}</div></div>`;
           }
-          // passing (>6 mi): no ETA tile
+          // eta==='none' (>6 mi): no ETA tile
         }
         mvLine+=missTile;
       }
@@ -4332,11 +4335,13 @@ function _renderStormsCore(){
   // count while the cards showed the filtered count.
   S._inboundShown=inboundCapped;
   let groupHtml='';
-  // v5.76: group Storm Points by the SAME 3 X-TRK tiers as the header breakdown
-  // (Direct ≤1.5 · Nearby 1.5–6 · Passing >6). "Approaching only" now means
-  // "storms whose cone covers you" (see _applyStormFilter), so with it on the
-  // filtered set already IS the in-cone storms and all three tabs appear.
-  const _tierOf=s=>{const pm=_missMi(s);if(pm==null||!isFinite(pm))return 'passing';if(pm<=1.5)return 'direct';if(pm<=6)return 'nearby';return 'passing';};
+  // v6.30: group Storm Points by the SAME 5 X-TRK tiers the ticker uses — direct
+  // ≤1.5 · nearby ≤6 · near-miss 6–12 · tracking 12–48 · distant >48 — all read
+  // from the ONE global XTRK_TIERS table so the tabs and the ticker breakdown can
+  // never disagree. "Approaching only" now means "storms whose cone covers you"
+  // (see _applyStormFilter), so with it on the filtered set already IS the in-cone
+  // storms and all tabs appear.
+  const _tierOf=s=>{const t=_xtrkTier(_missMi(s));return t?t.key:'distant';};
   const _byXtk=(x,y)=>{const mx=_missMi(x),my=_missMi(y);const ax=(mx==null||!isFinite(mx))?999:mx,ay=(my==null||!isFinite(my))?999:my;if(ax!==ay)return ax-ay;return (x.distance||0)-(y.distance||0);};
   const _seenG=new Set();
   // v5.84: a storm MOVING AWAY isn't "arriving" — exclude it from the Direct/Nearby/
@@ -4348,28 +4353,29 @@ function _renderStormsCore(){
   // TOWARD/PAST you only; receding cells stay visible on the radar + sonar.
   const _isReceding=s=>{try{if(!s._brief)s._brief=calcStormETAForBriefing(s);return!!(s._brief&&s._brief.classification==='moving_away');}catch(e){return false}};
   const _fUniq=filtered.filter(s=>{const k=stormKey(s);if(_seenG.has(k))return false;_seenG.add(k);return true;}).filter(s=>!_isReceding(s));
-  const gDirect=_fUniq.filter(s=>_tierOf(s)==='direct').sort(_byXtk);
-  const gNearby=_fUniq.filter(s=>_tierOf(s)==='nearby').sort(_byXtk);
-  const gPassing=_fUniq.filter(s=>_tierOf(s)==='passing').sort(_byXtk);
+  // v6.30: build the tier sections straight from the global XTRK_TIERS table so
+  // the group set, order, emoji, colour and names all come from one place. Each
+  // section = the cells whose X-TRK miss falls in that tier's band.
+  const _grouped={};
+  for(const _t of XTRK_TIERS)_grouped[_t.key]=[];
+  for(const s of _fUniq){const k=_tierOf(s);(_grouped[k]||_grouped.distant).push(s);}
+  const tierSecs=XTRK_TIERS.map(_t=>({key:_t.key,items:_grouped[_t.key].sort(_byXtk),label:`${_t.emoji} ${_t.plain}`,color:_t.color}));
+  const gDirect=_grouped.direct;
   // v5.76: header pill / Rain Clock "inbound" set = the Direct tier (cells whose
   // track threads within 1.5 mi of you), so the badge matches the Direct tab
   // instead of showing 0 (the old inbound set used a different approach calc).
   inboundCapped=gDirect.slice(0,12);
   S._inboundShown=inboundCapped;
   const _GRP_CAP=25;
-  const tierSecs=[
-    {key:'direct', items:gDirect, label:'🎯 Direct', color:'#ef4444'},
-    {key:'nearby', items:gNearby, label:'🟠 Nearby', color:'#f97316'},
-    {key:'passing',items:gPassing,label:'⚪ Passing',color:'#94a3b8'}
-  ];
-  // Accordion open-state: undefined (first render) → open Direct; null (user
-  // collapsed all) → stay collapsed; a chosen tab that emptied → first non-empty.
+  // Accordion open-state: undefined (first render) → open highest-priority
+  // non-empty tier; null (user collapsed all) → stay collapsed; a chosen tab that
+  // emptied → first non-empty.
   const _firstNonEmpty=(tierSecs.find(t=>t.items.length)||{}).key||'direct';
   let _openKey=S._stormGroupOpen;
   if(_openKey===undefined)_openKey=_firstNonEmpty;
   else if(_openKey!==null&&!tierSecs.find(t=>t.key===_openKey&&t.items.length))_openKey=_firstNonEmpty;
   S._stormGroupOpen=_openKey;
-  // v6.29: ALWAYS render all three tiers, even at 0 — an empty tier (e.g. Direct)
+  // v6.29: ALWAYS render all tiers, even at 0 — an empty tier (e.g. Direct)
   // shows as a dimmed, collapsed header instead of vanishing, so the tab layout is
   // stable and the highest-priority NON-empty tier is the one auto-expanded.
   for(const sec of tierSecs){
@@ -4456,8 +4462,8 @@ function _renderStormsCore(){
       </div>`;
     }
   }
-  const stormCount=gDirect.length+gNearby.length+gPassing.length; // v5.71: = distinct cells across the 3 tiers
-  const filteredCount=stormCount; // v5.76: "showing N" = the distinct storms in the 3 tabs
+  const stormCount=tierSecs.reduce((n,sec)=>n+sec.items.length,0); // v6.30: = distinct cells across all 5 tiers
+  const filteredCount=stormCount; // v5.76: "showing N" = the distinct storms in the tier tabs
   const totalCount=storms.length;
   const filterNote=filteredCount<totalCount?` <span class="c-muted-85">(showing ${filteredCount}/${totalCount})</span>`:'';
   const smartSummary=_smartStormSummary(storms);

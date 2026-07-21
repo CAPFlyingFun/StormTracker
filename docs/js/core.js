@@ -623,6 +623,28 @@ const PERP_TIERS=[
   {key:'far',        min:48, max:60, label:'FAR',        aiPhrase:'FAR (60 mi+ edge)',    color:'#737373', emoji:'⚫'}
 ];
 function perpTier(missMi){if(missMi==null||isNaN(missMi))return null;for(const t of PERP_TIERS)if(missMi>=t.min&&missMi<t.max)return t;return null}
+// v6.30: THE single source of truth for the 5 cross-track (X-TRK) miss-distance
+// tiers the whole app groups & labels storms by. The Storm Points accordion, the
+// storm-card impact line, the notification text AND the scrolling ticker all read
+// this one array, so they can never drift apart again (they used to each carry
+// their own inline `miss<=1.5?'direct':...` copy). Keyed by perpMissMi — how far
+// a cell's projected path passes from your exact location — with `max` as the
+// upper bound (mi, inclusive; first match wins):
+//   🎯 direct ≤1.5 · 🟠 nearby ≤6 · 🟡 near-miss ≤12 · 🔵 tracking ≤48 · ⚪ distant >48
+// These names + bands match the ticker's breakdown ("near-miss 6-12 · tracking
+// 12-48") on purpose. Semantic flags drive behavior so callers never branch on
+// the key string: eta='live' → ticking countdown (aimed at you) · 'fixed' →
+// possible arrival clock, no countdown · 'none' → too far/track-dependent for a
+// clock. impact = the legacy high/medium/low bucket the Alerts tab renders.
+const XTRK_TIERS=[
+  {key:'direct',    label:'DIRECT',    plain:'Direct',    word:'Direct impact', emoji:'🎯', color:'#ef4444', max:1.5,      eta:'live',  impact:'high'},
+  {key:'nearby',    label:'NEARBY',    plain:'Nearby',    word:'Nearby pass',   emoji:'🟠', color:'#f97316', max:6,        eta:'fixed', impact:'medium'},
+  {key:'near_miss', label:'NEAR-MISS', plain:'Near-Miss', word:'Near-miss',     emoji:'🟡', color:'#eab308', max:12,       eta:'none',  impact:'low'},
+  {key:'tracking',  label:'TRACKING',  plain:'Tracking',  word:'Tracking',      emoji:'🔵', color:'#3b82f6', max:48,       eta:'none',  impact:'low'},
+  {key:'distant',   label:'DISTANT',   plain:'Distant',   word:'Distant',       emoji:'⚪', color:'#94a3b8', max:Infinity, eta:'none',  impact:'none'}
+];
+function xtrkTier(missMi){if(missMi==null||isNaN(missMi))return null;for(const t of XTRK_TIERS)if(missMi<=t.max)return t;return XTRK_TIERS[XTRK_TIERS.length-1];}
+function xtrkTierByKey(k){for(const t of XTRK_TIERS)if(t.key===k)return t;return null;}
 const STORM_CLASS={
   direct:     {key:'direct',     short:'Direct',      label:'Direct Hit',  aiPhrase:'APPROACHING DIRECTLY', color:'#ef4444', opacity:0.85, badge:'🔴 DIRECT',      coneMin:0.85, showPct:true},
   near_direct:{key:'near_direct',short:'Near Direct', label:'Near Direct', aiPhrase:'NEAR DIRECT HIT',      color:'#f97316', opacity:0.85, badge:'🟠 NEAR DIRECT', coneMin:0.65, showPct:true},
@@ -679,7 +701,7 @@ function isApproachingTier(k){return APPROACHING_TIER_KEYS.indexOf(k)>=0}
 function bumpStormScanId(){if(!S._stormScanId)S._stormScanId=0;S._stormScanId++;return S._stormScanId}
 if(typeof window!=='undefined'){window.bumpStormScanId=bumpStormScanId}
 function stormClass(key){return STORM_CLASS[key]||STORM_CLASS.unknown}
-if(typeof window!=='undefined'){window.PERP_TIERS=PERP_TIERS;window.perpTier=perpTier;window.STORM_CLASS=STORM_CLASS;window.stormClass=stormClass;window.INBOUND_TIER_KEYS=INBOUND_TIER_KEYS;window.APPROACHING_TIER_KEYS=APPROACHING_TIER_KEYS;window.isInboundTier=isInboundTier;window.isApproachingTier=isApproachingTier}
+if(typeof window!=='undefined'){window.PERP_TIERS=PERP_TIERS;window.perpTier=perpTier;window.STORM_CLASS=STORM_CLASS;window.stormClass=stormClass;window.INBOUND_TIER_KEYS=INBOUND_TIER_KEYS;window.APPROACHING_TIER_KEYS=APPROACHING_TIER_KEYS;window.isInboundTier=isInboundTier;window.isApproachingTier=isApproachingTier;window.XTRK_TIERS=XTRK_TIERS;window.xtrkTier=xtrkTier;window.xtrkTierByKey=xtrkTierByKey}
 function fmtStormDist(mi){return S.radarMetric?(mi*1.60934).toFixed(1)+' km':mi.toFixed(1)+' mi'}
 function fmtCountdown(totalSec){
   if(totalSec<=0)return'NOW';

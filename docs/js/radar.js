@@ -1968,11 +1968,19 @@ function updateThreatTicker(){
   const _allStorms=S.storms||[];
   const _filteredStorms=(typeof _applyStormFilter==='function')?_applyStormFilter([..._allStorms],_sf):_allStorms;
   const sigStormCount=_filteredStorms.length;
-  const _tierCounts={direct:0,near_direct:0,near_miss:0,miss:0,distant:0,far:0,passing:0,moving_away:0};
-  for(const s of _filteredStorms){const k=(s._brief&&s._brief.classification)||(typeof calcStormETAForBriefing==='function'?(calcStormETAForBriefing(s)||{}).classification:null);if(k&&_tierCounts[k]!=null)_tierCounts[k]++;}
-  const _approachCount=_tierCounts.direct+_tierCounts.near_direct;
-  const _nearMissCount=_tierCounts.near_miss;
-  const _trackingCount=_tierCounts.miss+_tierCounts.distant+_tierCounts.far;
+  // v6.30: breakdown counts come from the shared XTRK_TIERS bands (keyed off
+  // perpMissMi, receders excluded) so the ticker's near-miss / tracking / distant
+  // numbers match the Storm Points tabs exactly — both read the one global table.
+  const _xc={direct:0,nearby:0,near_miss:0,tracking:0,distant:0};
+  for(const s of _filteredStorms){
+    const b=s._brief||(typeof calcStormETAForBriefing==='function'?calcStormETAForBriefing(s):null);
+    if(!b||b.classification==='moving_away')continue;
+    const _t=(b.perpMissMi!=null&&typeof _xtrkTier==='function')?_xtrkTier(b.perpMissMi):null;
+    if(_t&&_xc[_t.key]!=null)_xc[_t.key]++;
+  }
+  const _nearMissCount=_xc.near_miss;
+  const _trackingCount=_xc.tracking;
+  const _distantCount=_xc.distant;
   const _filteredInbound=_filteredStorms.filter(s=>{
     const e=s._eta||calcStormETA(s);
     if(!(e&&e.approaching&&e.impact>0&&e.eta!=null))return false;
@@ -2027,10 +2035,12 @@ function updateThreatTicker(){
   const _tierBreakdown=[];
   if(_nearMissCount>0)_tierBreakdown.push(`🟡 ${_nearMissCount} near-miss (6-12 mi)`);
   if(_trackingCount>0)_tierBreakdown.push(`🔵 ${_trackingCount} tracking (12-48 mi)`);
+  if(_distantCount>0)_tierBreakdown.push(`⚪ ${_distantCount} distant (48+ mi)`);
   const _tierBreakdownStr=_tierBreakdown.length?` · ${_tierBreakdown.join(' · ')}`:'';
   if(allApproaching.length===0){
-    if(_nearMissCount>0||_trackingCount>0){
-      const msg=`📡 No storms on direct course (≤6 mi miss). Tracking ${_nearMissCount+_trackingCount} cell${(_nearMissCount+_trackingCount)>1?'s':''} further out${_tierBreakdownStr.replace(' · ',': ')}.`;
+    if(_nearMissCount>0||_trackingCount>0||_distantCount>0){
+      const _further=_nearMissCount+_trackingCount+_distantCount;
+      const msg=`📡 No storms on direct course (≤6 mi miss). Tracking ${_further} cell${_further>1?'s':''} further out${_tierBreakdownStr.replace(' · ',': ')}.`;
       showTicker(`<span style="color:#60a5fa">${msg}</span>`,'#60a5fa','rgba(96,165,250,0.2)','linear-gradient(90deg,rgba(0,5,20,0.95),rgba(5,10,30,0.95),rgba(0,5,20,0.95))',Math.max(15,Math.round(msg.length*0.2)));
       return;
     }
@@ -2074,10 +2084,9 @@ function updateThreatTicker(){
       // countdown. Beyond 6 mi there's no ETA (too far / too track-dependent to
       // put a clock on). _etaFrag folds into the sentence, empty when omitted.
       const _tier=(typeof _xtrkTier==='function')?_xtrkTier(t.eta.perpMissMi):null;
-      const _key=_tier?_tier.key:(t.eta.perpMissMi!=null&&t.eta.perpMissMi<=1.5?'direct':t.eta.perpMissMi!=null&&t.eta.perpMissMi<=6?'nearby':'passing');
-      const _hit=_key==='direct'?'approaching':_key==='nearby'?'passing near':'passing wide of';
-      const _etaFrag=_key==='direct'?` ETA ⏱️${cdSpan} (${arrStr}).`
-        :_key==='nearby'?` Possible ETA ~${arrStr} — path may still shift, keep an eye out.`:'';
+      const _hit=(_tier&&_tier.eta==='live')?'approaching':(_tier&&_tier.eta==='fixed')?'passing near':'passing wide of';
+      const _etaFrag=(_tier&&_tier.eta==='live')?` ETA ⏱️${cdSpan} (${arrStr}).`
+        :(_tier&&_tier.eta==='fixed')?` Possible ETA ~${arrStr} — path may still shift, keep an eye out.`:'';
       if(s.dbz>=61)return`<span style="color:#FF00F5">🚨 WARNING: Extremely dangerous storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Seek shelter immediately. 🚨</span>`;
       if(s.dbz>=52)return`<span style="color:#FF0200">🚨 SEVERE WEATHER ALERT: Dangerous storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Use extreme caution. 🚨</span>`;
       return`<span style="color:#FFB200">⚠️ Strong storm (${s.dbz} dBZ) ${_hit} from the ${fromDir} at ${spd} ${spdUnit}.${_etaFrag} Use caution and be prepared. ⚠️</span>`;
@@ -2101,9 +2110,8 @@ function updateThreatTicker(){
   // the top cell is a direct hit; a nearby pass shows a fixed possible time with
   // a "may shift" nudge; beyond 6 mi, no ETA fragment at all.
   const _lTier=(typeof _xtrkTier==='function')?_xtrkTier(closest.eta.perpMissMi):null;
-  const _lKey=_lTier?_lTier.key:(closest.eta.perpMissMi!=null&&closest.eta.perpMissMi<=1.5?'direct':closest.eta.perpMissMi!=null&&closest.eta.perpMissMi<=6?'nearby':'passing');
-  const _lEta=_lKey==='direct'?`ETA ⏱️${cdSpan} (~${arrStr})`
-    :_lKey==='nearby'?`possible ETA ~${arrStr} (may shift)`:'';
+  const _lEta=(_lTier&&_lTier.eta==='live')?`ETA ⏱️${cdSpan} (~${arrStr})`
+    :(_lTier&&_lTier.eta==='fixed')?`possible ETA ~${arrStr} (may shift)`:'';
   const _lEtaDot=_lEta?` ${_lEta.charAt(0).toUpperCase()+_lEta.slice(1)}.`:'';
   const lightMsgs=[
     `🌧️ ${allApproaching.length} ${label} cell${allApproaching.length>1?'s':''} heading your way from the ${fromDir} at ${spd} ${spdUnit}. Strongest ${maxDbz} dBZ.${_lEtaDot} Might want to grab an umbrella! ☂️`,

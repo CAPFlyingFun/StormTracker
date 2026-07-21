@@ -475,6 +475,7 @@ function buildWeatherContext(){
           parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]`);
         }
         parts.push(`  ALWAYS include the nearest/affecting system's max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE in the Bottom Line or Situation Overview. If a value is "not published", say so explicitly (e.g. "central pressure not published by NHC") — do NOT invent one or quietly drop it.`);
+        parts.push(`  SINGLE SOURCE OF TRUTH: this TROPICAL SYSTEMS block is the ONLY authority for present-tense tropical facts — current position, distance, bearing, motion direction & speed, wind, gust and pressure. State ONE current position and ONE current motion per system, taken from here. The Area Forecast Discussion (further down) may quote the storm's position/motion from its own issuance time — those are HISTORICAL context; never repeat them as the current position/motion, and never let the Bottom Line and the Situation Overview give two different "current" distances, bearings or motions for the same system.`);
       }
     }
   }catch(e){}
@@ -518,6 +519,10 @@ function buildWeatherContext(){
       const unfilt=c.unfilteredTotal!=null?c.unfilteredTotal:fs.totalCount;
       const hiddenInbound=bg.filter(it=>it._hiddenInbound).length;
       parts.push(`  Total cells: ${fs.totalCount} scanned · ${c.totalCount} after user filter · ${unfilt} total in scan radius (used for non-inbound buckets) · ${c.inbound.length} inbound after filter (${sigCount} significant ≥31 dBZ, ${modCount} moderate 25-30 dBZ, ${lowCount} light/drizzle <25 dBZ at >5 mi) · ${bg.length} background · ${passing.length} passing · ${away.length} moving away${hiddenInbound>0?` · NOTE: ${hiddenInbound} inbound cell(s) hidden by your filter are listed in background for awareness`:''}`);
+      // v6.34: pin the inbound tally so the AI can't invent a second, different
+      // total. The per-cell list below is only the TOP few — never re-count the
+      // visible cells and report that as the inbound total.
+      parts.push(`  AUTHORITATIVE COUNT: the inbound total is exactly ${c.inbound.length} (${sigCount} significant + ${modCount} moderate + ${lowCount} light = ${sigCount+modCount+lowCount}). Use these numbers verbatim. The per-cell lines that follow are only the top ${Math.min(inboundTop.length,c.inbound.length)} for detail — do NOT tally the listed cells and present that as the inbound count, and do NOT state any other inbound total anywhere in the briefing.`);
       if(sigCount===0&&lowCount===0&&c.inbound.length===0&&c.totalCount>0){
         parts.push(`  NOTE: No inbound cells in the filtered view. Background / passing / moving-away cells are off the impact corridor, but they are still REAL ECHOES the user can see on radar — summarize them in the mandatory "Elsewhere on Radar:" subsection using the SCENE HINTS lines below. Do NOT dismiss them as "clutter" or skip it.`);
       }else if(sigCount===0&&lowCount>0){
@@ -528,21 +533,50 @@ function buildWeatherContext(){
         const peakCat=peakDbz>=65?'EXTREME (severe-hail signature likely)':peakDbz>=60?'SEVERE (hail possible)':peakDbz>=55?'MODERATE-SEVERE (strong core, not auto-severe)':peakDbz>=45?'MODERATE-HEAVY':peakDbz>=30?'MODERATE':'LIGHT';
         parts.push(`  Peak inbound intensity: ${peakDbz} dBZ [${peakCat}].`);
       }
+      parts.push(`  PROJECTION CONFIDENCE — cell ETAs have an expiration date. Report each cell only as precisely as its line below is written: cells given an exact ETA + "projected miss X mi" are near-term and reliable; cells given "approx arrival ~TIME (±, moderate confidence)" get a WINDOW, not a to-the-minute time; cells flagged "part of a broader rain band — no fixed ETA" are far out (tropical bands merge/collapse/regenerate on the way) — describe them as a moving rain corridor arriving over a rough multi-hour window, and do NOT assign them a clock time or a sub-mile miss. Never state a to-the-minute arrival or a <1 mi projected miss for a far cell just because an internal number exists.`);
       const fmtD=(mi)=>{const r=Math.round(mi*10)/10;return S.radarMetric?(r*1.60934).toFixed(1)+' km':r.toFixed(1)+' mi';};
       const tierLbl={direct:'DIRECT',near_direct:'NEAR DIRECT',near_miss:'NEAR MISS',miss:'MISS',distant:'DISTANT',far:'FAR',passing:'PASSING',moving_away:'MOVING AWAY'};
       const tierEmo={direct:'🔴',near_direct:'🟠',near_miss:'🟡',miss:'🔵',distant:'⚪',far:'⚫',passing:'🟡',moving_away:'🟢'};
+      // v6.34: CONFIDENCE HORIZON — a projected ETA / sub-mile miss is only
+      // trustworthy for cells that are close AND arriving soon. Beyond that, the
+      // "same" cell rarely survives the trip (tropical bands merge, collapse,
+      // regenerate), so emitting "arrives 4:24 PM, miss 0.1 mi" for a 117-mi cell
+      // is false precision. Tier each cell by distance + effective ETA and format
+      // accordingly: NEAR → exact ETA+miss · MID → rough window, ± miss · FAR →
+      // no clock, no sub-mile miss, flagged as an evolving band.
+      const _age=(typeof radarAgeMin==='function')?radarAgeMin():5;
+      const _projTier=(distMi,etaEffMin)=>{
+        const et=(etaEffMin==null)?9999:etaEffMin;
+        if(distMi<=45&&et<=75)return'near';
+        if(distMi<=90&&et<=150)return'mid';
+        return'far';
+      };
       for(const it of inboundTop){
         const s=it.s,b=it.b||{};
         const e=tierEmo[it.tier]||'⚫',lbl=tierLbl[it.tier]||(it.tier||'').toUpperCase();
         const close=b.closingMph!=null?((b.closingMph>=0?'+':'')+b.closingMph+' mph'):'?';
-        const miss=b.perpMissMi!=null?b.perpMissMi.toFixed(1)+' mi':'?';
-        const eta=b.etaMin!=null?`, ETA ~${Math.round(Math.max(0,b.etaMin-((typeof radarAgeMin==='function')?radarAgeMin():5)))} min (${(typeof fmtClock==='function')?fmtClock(new Date(Date.now()+Math.max(0,b.etaMin-((typeof radarAgeMin==='function')?radarAgeMin():5))*60000)):''})`:'';
+        const etaEff=b.etaMin!=null?Math.max(0,b.etaMin-_age):null;
+        const _pt=_projTier(s.distance,etaEff);
+        let eta='',miss='';
+        if(_pt==='near'){
+          eta=etaEff!=null?`, ETA ~${Math.round(etaEff)} min (${(typeof fmtClock==='function')?fmtClock(new Date(Date.now()+etaEff*60000)):''})`:'';
+          miss=b.perpMissMi!=null?`, projected miss ${b.perpMissMi.toFixed(1)} mi`:'';
+        }else if(_pt==='mid'){
+          // Round ETA to a 15-min window; keep miss but coarse (~mi) + moderate-confidence flag.
+          const w=etaEff!=null?Math.round(etaEff/15)*15:null;
+          eta=w!=null?`, approx arrival ~${(typeof fmtClock==='function')?fmtClock(new Date(Date.now()+w*60000)):''} (±, moderate confidence)`:'';
+          miss=b.perpMissMi!=null?`, projected miss ~${Math.round(b.perpMissMi)} mi`:'';
+        }else{
+          // FAR: no clock, no sub-mile miss — describe as an evolving band, not a durable cell.
+          eta=`, part of a broader rain band — no fixed ETA (cores may merge/weaken/regenerate before reaching you)`;
+          miss='';
+        }
         const pct=b.closenessPct!=null?` (${b.closenessPct}% max intensity at user)`:'';
         const estDbz=b.estDbzAtUser!=null?`, ~${b.estDbzAtUser} dBZ expected at user`:'';
         const mov=(b.movSpdMph&&b.movDirDeg!=null)?` (motion ${degToDir(b.movDirDeg)} @ ${b.movSpdMph} mph)`:'';
         const _shm=(typeof stormMaster==='function')?(stormMaster(s).shear):null; // v6.1: convective shear/inflow read
         const shear=_shm?` [0–6km shear ${Math.round(_shm.bulkShearMs*2.237)} mph, ${_shm.tier} — ${_shm.trend}: ${_shm.note}]`:'';
-        parts.push(`  ${e} ${lbl}${pct}: ${s.dbz} dBZ cell at ${fmtD(s.distance)} ${degToDir(s.bearing)} closing ${close}${eta}, projected miss ${miss}${estDbz}${mov}${shear}.`);
+        parts.push(`  ${e} ${lbl}${pct}: ${s.dbz} dBZ cell at ${fmtD(s.distance)} ${degToDir(s.bearing)} closing ${close}${eta}${miss}${estDbz}${mov}${shear}.`);
       }
       if(inboundRest.length){
         const peak=Math.max(...inboundRest.map(it=>it.s.dbz));
@@ -769,6 +803,7 @@ function buildWeatherContext(){
     parts.push(`\n=== AREA FORECAST DISCUSSION ===`);
     parts.push(`NWS Office: ${S._afd.office}`);
     if(S._afd.issuedAt)parts.push(`Issued: ${S._afd.issuedAt}`);
+    parts.push(`Use this for forecast REASONING — synoptic setup, uncertainty, moisture, track trends. If it quotes a tropical system's position, intensity, pressure or motion, treat those as HISTORICAL (from its issuance time): the TROPICAL SYSTEMS live vitals above override them for every present-tense fact. Do NOT restate an AFD storm position/motion as the current one.`);
     parts.push(`Forecaster Discussion:\n${S._afd.discussion}`);
   }
 
@@ -1048,7 +1083,13 @@ async function _aiComplete(history,sysPrompt,opts){
   const data=await res.json();
   return{ok:true,status:res.status,text:(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'',errMsg:''};
 }
-async function sendAIChat(){
+async function sendAIChat(_opts){
+  const o=_opts||{};
+  // v6.34: a Full Briefing runs as a DEDICATED call — no prior chat history in
+  // the request (all weather data lives in the freshly-built system prompt, so
+  // the briefing needs no conversation carry-over) and a low temperature, so it
+  // reports the supplied numbers instead of drifting into extra confidence.
+  const isBriefing=!!o.briefing;
   const inp=document.getElementById('ai-chat-input');if(!inp)return;
   const msg=inp.value.trim();if(!msg)return;
   inp.value='';
@@ -1076,7 +1117,9 @@ async function sendAIChat(){
   const MAX_ATTEMPTS=3;
   const PER_ATTEMPT_MS=120000; // v6.14: 5000-token briefings take longer to generate — give each attempt 2 min so a long full briefing isn't aborted mid-stream
   const sysPrompt=getAISystemPrompt();
-  const history=_aiChatHistory.slice(-10);
+  // Briefing: send ONLY the trigger turn (no prior chat). Chat: last 10 turns.
+  const history=isBriefing?_aiChatHistory.slice(-1):_aiChatHistory.slice(-10);
+  const _reqTemp=isBriefing?0.15:0.4;
   let attempt=0;
   let lastErrMsg='';
   while(attempt<MAX_ATTEMPTS){
@@ -1085,7 +1128,7 @@ async function sendAIChat(){
     const ctrl=new AbortController();
     const to=setTimeout(()=>ctrl.abort(),PER_ATTEMPT_MS);
     try{
-      const result=await _aiComplete(history,sysPrompt,{maxTokens:5000,temperature:0.4,signal:ctrl.signal});
+      const result=await _aiComplete(history,sysPrompt,{maxTokens:5000,temperature:_reqTemp,signal:ctrl.signal});
       clearTimeout(to);
       _stopAICountdown();
 

@@ -494,10 +494,13 @@ async function runFullBriefing(){
     if(typeof addAIMsg==='function')addAIMsg('assistant',reply);
     return;
   }
-  // AI mode — defer to the existing AI chat path with a full-analysis prompt
+  // AI mode — defer to the AI chat path, but as a DEDICATED briefing request:
+  // no prior chat history (so the briefing can't be tugged by earlier
+  // conversation) and a low temperature (so it sticks to the supplied data
+  // instead of wandering into extra certainty). See sendAIChat({briefing:true}).
   const inp=document.getElementById('ai-chat-input');
   if(inp)inp.value='Give me a full weather analysis with risk assessment';
-  if(typeof sendAIChat==='function')await sendAIChat();
+  if(typeof sendAIChat==='function')await sendAIChat({briefing:true});
 }
 
 if(typeof window!=='undefined'){

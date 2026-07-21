@@ -428,6 +428,39 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   if(typeof _bootStepDone==='function')_bootStepDone('wind',`Winds aloft: ${spdMph} mph @ ${Math.round(dir)}° · ${providerInfo.label}`);
 }
 
+// v6.23: WINDS-ALOFT FIELD groundwork for the 200-mi outer awareness layer.
+// Steering flow varies across a 200-mi field, so a single sample at the user can't
+// steer a rainband 150 mi away. These pure helpers (a) lay out a coarse ~100-mi grid
+// of sample points within a radius, and (b) look up the nearest sample's steering for
+// any point. Additive + unit-tested; not yet wired to a fetch/scan (that stage needs
+// live data to validate). S._steeringField will hold [{lat,lon,dir,speed}] once fetched.
+function _steeringGridPoints(lat, lon, radiusMi, spacingMi) {
+  const out = [{ lat, lon }]; // always include the user's point
+  const sp = spacingMi || 100, R = radiusMi || 200;
+  const dLat = sp / 69.0;
+  const cosL = Math.max(0.05, Math.cos(lat * Math.PI / 180));
+  const dLon = sp / (69.0 * cosL);
+  const steps = Math.ceil(R / sp);
+  for (let iy = -steps; iy <= steps; iy++) {
+    for (let ix = -steps; ix <= steps; ix++) {
+      if (ix === 0 && iy === 0) continue;
+      const gLat = lat + iy * dLat, gLon = lon + ix * dLon;
+      if (typeof haversine === 'function' && haversine(lat, lon, gLat, gLon) <= R) out.push({ lat: gLat, lon: gLon });
+    }
+  }
+  return out;
+}
+function _steeringAt(field, lat, lon) {
+  if (!Array.isArray(field) || !field.length) return null;
+  let best = null, bd = Infinity;
+  for (const s of field) {
+    if (s == null || s.lat == null || s.lon == null) continue;
+    const d = (typeof haversine === 'function') ? haversine(lat, lon, s.lat, s.lon) : Math.hypot(lat - s.lat, lon - s.lon);
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best ? { dir: best.dir, speed: best.speed, sampleMi: bd } : null;
+}
+
 async function fetchWindsAloft(overrideLat,overrideLon){
   const lat=overrideLat!=null?overrideLat:S.lat;
   const lon=overrideLon!=null?overrideLon:S.lon;

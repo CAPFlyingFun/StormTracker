@@ -1,6 +1,12 @@
 // StormTracker — Wind Gauges, Sonar Config, Gyro Compass
 let _windMinKmh=Infinity,_windMaxKmh=0;
-const _SONAR_ZOOM_LEVELS=[15,20,30,40,50,60,70,80];
+// v6.27: sonar zoom-out now extends to match the user's Scan Range (Settings → 📡).
+// Base detail levels always available; the wider levels appear only up to scanRadius.
+const _SONAR_ZOOM_BASE=[15,20,30,40,50,60,70,80];
+function _sonZoomLevels(){
+  const max=(S&&S.scanRadius)||80;
+  return _SONAR_ZOOM_BASE.concat([100,120,140,160,180,200].filter(v=>v<=max));
+}
 // Derived from the master DBZ_SCALE (core.js) so the sonar dot-size controls stay
 // in lockstep with the radar palette. Covers rain-bearing bins (≥20 dBZ).
 const _SONAR_DBZ_BINS=DBZ_SCALE.filter(e=>e.min>=20);
@@ -81,9 +87,10 @@ function _resetAllSonar(){
   setTimeout(()=>_toggleSonarSettings(),50);
 }
 let _sonarZoomMi=parseInt(localStorage.getItem('st_sonarZoom'))||80;
-if(!_SONAR_ZOOM_LEVELS.includes(_sonarZoomMi))_sonarZoomMi=80;
-function sonarZoomIn(){const i=_SONAR_ZOOM_LEVELS.indexOf(_sonarZoomMi);if(i>0){_sonarZoomMi=_SONAR_ZOOM_LEVELS[i-1];localStorage.setItem('st_sonarZoom',_sonarZoomMi);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_clusterSonarPoints();drawMiniSonar();_syncSonarZoomBtns()}}
-function sonarZoomOut(){const i=_SONAR_ZOOM_LEVELS.indexOf(_sonarZoomMi);if(i<_SONAR_ZOOM_LEVELS.length-1){_sonarZoomMi=_SONAR_ZOOM_LEVELS[i+1];localStorage.setItem('st_sonarZoom',_sonarZoomMi);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_clusterSonarPoints();drawMiniSonar();_syncSonarZoomBtns()}}
+if(_sonarZoomMi<15)_sonarZoomMi=80;
+function _sonNearestLevel(v){const L=_sonZoomLevels();let best=L[0];for(const x of L)if(Math.abs(x-v)<Math.abs(best-v))best=x;return best}
+function sonarZoomIn(){const L=_sonZoomLevels();let i=L.indexOf(_sonarZoomMi);if(i<0)i=L.indexOf(_sonNearestLevel(_sonarZoomMi));if(i>0){_sonarZoomMi=L[i-1];localStorage.setItem('st_sonarZoom',_sonarZoomMi);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_clusterSonarPoints();drawMiniSonar();_syncSonarZoomBtns()}}
+function sonarZoomOut(){const L=_sonZoomLevels();let i=L.indexOf(_sonarZoomMi);if(i<0)i=L.indexOf(_sonNearestLevel(_sonarZoomMi));if(i<L.length-1){_sonarZoomMi=L[i+1];localStorage.setItem('st_sonarZoom',_sonarZoomMi);S._sonarTotalSwept=0;S._sonarSweepAngle=0;_clusterSonarPoints();drawMiniSonar();_syncSonarZoomBtns()}}
 // Mobile sonar render budget: phones choke when the Weather-tab "Radar Sonar"
 // draws many thousands of clustered dots (an HD deep scan can produce 15k+),
 // stalling the sweep animation. On phones (screen < 1024px, via _isDesktop())
@@ -122,7 +129,7 @@ function _clusterSonarPoints(){
   S._sonarClusteredPts=out;
   if(typeof refreshRainClock==='function')try{refreshRainClock(true)}catch(e){}
 }
-function _syncSonarZoomBtns(){const zi=document.getElementById('sonar-zoom-in');const zo=document.getElementById('sonar-zoom-out');if(zi)zi.style.opacity=_sonarZoomMi<=_SONAR_ZOOM_LEVELS[0]?'0.3':'0.8';if(zo)zo.style.opacity=_sonarZoomMi>=_SONAR_ZOOM_LEVELS[_SONAR_ZOOM_LEVELS.length-1]?'0.3':'0.8'}
+function _syncSonarZoomBtns(){const L=_sonZoomLevels();const zi=document.getElementById('sonar-zoom-in');const zo=document.getElementById('sonar-zoom-out');if(zi)zi.style.opacity=_sonarZoomMi<=L[0]?'0.3':'0.8';if(zo)zo.style.opacity=_sonarZoomMi>=L[L.length-1]?'0.3':'0.8'}
 let _gyroHeading=null,_gyroEnabled=false,_gyroRaw=null,_gyroSmooth=null;
 function initGyroCompass(){
   if(_gyroEnabled)return;

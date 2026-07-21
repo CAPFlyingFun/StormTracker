@@ -264,6 +264,42 @@ export default {
     if (path === '/taf') return proxyAWC('taf', url);
     if (path === '/lightning' && request.method === 'GET') return proxyLightning(url, request);
 
+    // ---- Device Link relay: ephemeral, zero-knowledge settings hand-off ----
+    // One device PUTs an already-encrypted blob under an opaque id, gets a short
+    // human code (generated + hashed CLIENT-side); the other device GETs it by
+    // that id (one-time read) within a short TTL. The Worker only ever sees the
+    // HASH of the code and opaque AES-GCM ciphertext — never the code itself, the
+    // PIN/password, or the plaintext — so it cannot decrypt the payload. Reuses
+    // the existing `meta` table with a "link:" key prefix and an exp timestamp.
+    if (path === '/link-put' && request.method === 'POST') {
+      if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+      let b; try { b = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const id = typeof b.id === 'string' ? b.id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) : '';
+      const blob = typeof b.blob === 'string' ? b.blob : '';
+      if (!id || !blob) return json({ error: 'id and blob required' }, 400);
+      if (blob.length > 200000) return json({ error: 'blob too large' }, 413);
+      let ttl = parseInt(b.ttl, 10); if (!(ttl > 0)) ttl = 120; ttl = Math.min(Math.max(ttl, 30), 600);
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+      await env.DB.prepare(
+        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).bind('link:' + id, JSON.stringify({ blob, exp: Date.now() + ttl * 1000 })).run();
+      return json({ ok: true, ttl });
+    }
+    if (path === '/link-get' && request.method === 'POST') {
+      if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+      let b; try { b = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const id = typeof b.id === 'string' ? b.id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) : '';
+      if (!id) return json({ error: 'id required' }, 400);
+      const k = 'link:' + id;
+      const row = await env.DB.prepare('SELECT value FROM meta WHERE key = ?').bind(k).first();
+      if (!row) return json({ error: 'not found' }, 404);
+      // One-time read: delete on any hit, whether or not it's still valid.
+      await env.DB.prepare('DELETE FROM meta WHERE key = ?').bind(k).run();
+      let st; try { st = JSON.parse(row.value); } catch { st = null; }
+      if (!st || !st.blob || (st.exp && Date.now() > st.exp)) return json({ error: 'expired' }, 404);
+      return json({ ok: true, blob: st.blob });
+    }
+
     // ---- Push subscription API ----
     if (path === '/subscribe' && request.method === 'POST') {
       if (!env.DB) return json({ error: 'D1 not configured' }, 500);
@@ -747,7 +783,7 @@ Rules:
     }
 
     return new Response(
-      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
+      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
       { headers: { 'Content-Type': 'text/plain', ...CORS } }
     );
   },

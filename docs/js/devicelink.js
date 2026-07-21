@@ -114,12 +114,26 @@
 })();
 
 // ── Device-Link UI (browser only) ───────────────────────────────────────────
-// A small self-injected overlay with Send / Receive. Kept out of index.html so
-// the whole feature lives in one file. All crypto goes through the DL_* API above.
+// PRIMARY: a short "quick code" via the app's own relay (your Cloudflare worker).
+// Type a 6-char code on the other device — done. The code is generated AND HASHED
+// on this device, so the relay only stores hash(code) + ciphertext and can't read
+// your data; the payload decrypts only with the code (+ optional password). Codes
+// expire in minutes and are one-time read. FALLBACK: an offline QR / paste code
+// that needs no server. All crypto goes through the DL_* API above.
 (function(){
   if(typeof document==='undefined')return;
   function _el(id){return document.getElementById(id);}
   function _appBase(){return location.origin+location.pathname;}
+  function _relayBase(){try{return (typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';}catch(e){return 'https://stormtracker-proxy.joshua-622.workers.dev';}}
+  function _genCode(){const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',r=crypto.getRandomValues(new Uint8Array(6));let s='';for(let i=0;i<6;i++)s+=a[r[i]%a.length];return s;}
+  function _normCode(x){return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);}
+  async function _addr(code){
+    const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('stlink:'+code));
+    const b=new Uint8Array(h);let bin='';for(let i=0;i<b.length;i++)bin+=String.fromCharCode(b[i]);
+    return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'').slice(0,24);
+  }
+  const _IN='width:100%;box-sizing:border-box;padding:8px;background:var(--bg-base,#0a0f16);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5)';
+  const _BTN='width:100%;padding:10px;background:var(--accent-cyan,#00e5ff);color:#00202a;border:none;border-radius:8px;font-weight:700;cursor:pointer';
 
   function _ensureModal(){
     if(_el('devlink-modal'))return;
@@ -127,7 +141,7 @@
     wrap.id='devlink-modal';
     wrap.style.cssText='position:fixed;inset:0;z-index:12000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);padding:16px';
     wrap.innerHTML=`
-      <div style="background:var(--bg-elevated,#0e141c);border:1px solid var(--border-subtle,#243040);border-radius:14px;max-width:420px;width:100%;max-height:90vh;overflow:auto;padding:18px 16px;box-shadow:0 12px 40px rgba(0,0,0,0.5)">
+      <div style="background:var(--bg-elevated,#0e141c);border:1px solid var(--border-subtle,#243040);border-radius:14px;max-width:420px;width:100%;max-height:92vh;overflow:auto;padding:18px 16px;box-shadow:0 12px 40px rgba(0,0,0,0.5)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <div style="font-weight:700;font-size:1.05em;color:var(--text-primary,#e6edf5)">🔗 Link a Device</div>
           <button onclick="dlClose()" style="background:none;border:none;color:var(--text-muted,#8aa);font-size:1.4em;cursor:pointer;line-height:1">×</button>
@@ -138,33 +152,61 @@
         </div>
 
         <div id="devlink-send">
-          <div style="font-size:0.78em;color:var(--text-secondary,#9fb0c0);line-height:1.5;margin-bottom:10px">Set a PIN, then scan the QR with your other device's camera — or copy the code. The data is encrypted with your PIN; only a device that knows the PIN can read it.</div>
-          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN (4–8 digits)</label>
-          <input id="devlink-send-pin" inputmode="numeric" maxlength="8" placeholder="e.g. 4821" style="width:100%;box-sizing:border-box;padding:8px;background:var(--bg-base,#0a0f16);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);font-family:var(--font-mono,monospace);font-size:1.1em;letter-spacing:3px;margin-bottom:10px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:0.8em;color:var(--text-secondary,#9fb0c0);margin-bottom:12px;cursor:pointer">
-            <input type="checkbox" id="devlink-send-keys" style="width:16px;height:16px">
-            Include my API keys <span style="opacity:0.7">(OpenAI / Claude)</span>
+          <div style="font-size:0.78em;color:var(--text-secondary,#9fb0c0);line-height:1.5;margin-bottom:10px">Create a short code, then type it into <b>Receive</b> on your other device. The code opens once and expires soon.</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.8em;color:var(--text-secondary,#9fb0c0);margin-bottom:10px;cursor:pointer">
+            <input type="checkbox" id="devlink-send-keys" style="width:16px;height:16px"> Include my API keys <span style="opacity:0.7">(OpenAI / Claude)</span>
           </label>
-          <button onclick="dlGenerate()" style="width:100%;padding:10px;background:var(--accent-cyan,#00e5ff);color:#00202a;border:none;border-radius:8px;font-weight:700;cursor:pointer">Generate link</button>
-          <div id="devlink-send-out" style="display:none;margin-top:14px;text-align:center">
-            <canvas id="devlink-qr" width="288" height="288" style="width:min(288px,72vw);height:auto;background:#fff;border-radius:10px;padding:8px;box-sizing:border-box"></canvas>
-            <div id="devlink-qr-note" style="font-size:0.72em;color:var(--text-muted,#8aa);margin:8px 0"></div>
-            <div style="display:flex;gap:6px;margin-top:6px">
-              <button onclick="dlCopy('link')" style="flex:1;padding:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);cursor:pointer;font-size:0.82em">Copy link</button>
-              <button onclick="dlCopy('code')" style="flex:1;padding:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);cursor:pointer;font-size:0.82em">Copy code</button>
-            </div>
-            <div style="font-size:0.68em;color:var(--text-muted,#8aa);margin-top:8px;line-height:1.4">The code/link works only with the PIN you set. It doesn't expire on its own — don't post it publicly.</div>
+          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">Password <span style="opacity:0.7">(optional — extra security)</span></label>
+          <input id="devlink-send-pw" type="password" placeholder="leave blank for code-only" style="${_IN};font-size:0.9em;margin-bottom:10px">
+          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">Code expires in</label>
+          <select id="devlink-send-ttl" class="small-btn" style="width:100%;margin-bottom:12px">
+            <option value="120">2 minutes</option>
+            <option value="300">5 minutes</option>
+            <option value="600">10 minutes</option>
+          </select>
+          <button onclick="dlCreateCode()" style="${_BTN}">Create share code</button>
+          <div id="devlink-code-out" style="display:none;margin-top:14px;text-align:center">
+            <div id="devlink-code-big" style="font-family:var(--font-mono,monospace);font-size:2.1em;font-weight:800;letter-spacing:6px;color:var(--accent-cyan,#00e5ff)"></div>
+            <div id="devlink-code-timer" style="font-size:0.75em;color:var(--text-muted,#8aa);margin-top:4px"></div>
+            <div id="devlink-code-note" style="font-size:0.7em;color:var(--text-secondary,#9fb0c0);margin-top:8px;line-height:1.4"></div>
           </div>
+          <div id="devlink-code-msg" style="font-size:0.8em;margin-top:10px;text-align:center;min-height:1em"></div>
+          <details style="margin-top:14px">
+            <summary style="font-size:0.78em;color:var(--text-muted,#8aa);cursor:pointer">No internet on one device? Use an offline QR / link</summary>
+            <div style="margin-top:10px">
+              <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN (4–8 digits)</label>
+              <input id="devlink-send-pin" inputmode="numeric" maxlength="8" placeholder="e.g. 4821" style="${_IN};font-family:var(--font-mono,monospace);font-size:1.1em;letter-spacing:3px;margin-bottom:10px">
+              <button onclick="dlGenerate()" style="${_BTN}">Show QR / link</button>
+              <div id="devlink-send-out" style="display:none;margin-top:12px;text-align:center">
+                <canvas id="devlink-qr" width="288" height="288" style="width:min(288px,72vw);height:auto;background:#fff;border-radius:10px;padding:8px;box-sizing:border-box"></canvas>
+                <div id="devlink-qr-note" style="font-size:0.72em;color:var(--text-muted,#8aa);margin:8px 0"></div>
+                <div style="display:flex;gap:6px">
+                  <button onclick="dlCopy('link')" style="flex:1;padding:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);cursor:pointer;font-size:0.82em">Copy link</button>
+                  <button onclick="dlCopy('code')" style="flex:1;padding:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);cursor:pointer;font-size:0.82em">Copy code</button>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <div id="devlink-recv" style="display:none">
-          <div style="font-size:0.78em;color:var(--text-secondary,#9fb0c0);line-height:1.5;margin-bottom:10px">Paste the code (or link) from your other device and enter the same PIN. This will merge those settings into this device.</div>
-          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">Link code</label>
-          <textarea id="devlink-recv-code" rows="3" placeholder="Paste the code or link here" style="width:100%;box-sizing:border-box;padding:8px;background:var(--bg-base,#0a0f16);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);font-family:var(--font-mono,monospace);font-size:0.78em;resize:vertical;margin-bottom:10px"></textarea>
-          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN</label>
-          <input id="devlink-recv-pin" inputmode="numeric" maxlength="8" placeholder="PIN" style="width:100%;box-sizing:border-box;padding:8px;background:var(--bg-base,#0a0f16);border:1px solid var(--border-subtle,#243040);border-radius:8px;color:var(--text-primary,#e6edf5);font-family:var(--font-mono,monospace);font-size:1.1em;letter-spacing:3px;margin-bottom:12px">
-          <button onclick="dlImport()" style="width:100%;padding:10px;background:var(--accent-cyan,#00e5ff);color:#00202a;border:none;border-radius:8px;font-weight:700;cursor:pointer">Import settings</button>
+          <div style="font-size:0.78em;color:var(--text-secondary,#9fb0c0);line-height:1.5;margin-bottom:10px">Enter the 6-character code shown on your other device (and the password, if one was set).</div>
+          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">Share code</label>
+          <input id="devlink-recv-code2" maxlength="8" placeholder="ABC-DEF" style="${_IN};font-family:var(--font-mono,monospace);font-size:1.4em;letter-spacing:5px;text-align:center;text-transform:uppercase;margin-bottom:10px">
+          <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">Password <span style="opacity:0.7">(if one was set)</span></label>
+          <input id="devlink-recv-pw" type="password" placeholder="leave blank if none" style="${_IN};font-size:0.9em;margin-bottom:12px">
+          <button onclick="dlFetchCode()" style="${_BTN}">Get settings</button>
           <div id="devlink-recv-msg" style="font-size:0.8em;margin-top:10px;text-align:center;min-height:1em"></div>
+          <details style="margin-top:14px">
+            <summary style="font-size:0.78em;color:var(--text-muted,#8aa);cursor:pointer">Have a QR link or long code instead?</summary>
+            <div style="margin-top:10px">
+              <textarea id="devlink-recv-code" rows="3" placeholder="Paste the link or long code here" style="${_IN};font-family:var(--font-mono,monospace);font-size:0.78em;resize:vertical;margin-bottom:10px"></textarea>
+              <label style="font-size:0.8em;color:var(--text-secondary,#9fb0c0);display:block;margin-bottom:4px">PIN</label>
+              <input id="devlink-recv-pin" inputmode="numeric" maxlength="8" placeholder="PIN" style="${_IN};font-family:var(--font-mono,monospace);font-size:1.1em;letter-spacing:3px;margin-bottom:12px">
+              <button onclick="dlImport()" style="${_BTN}">Import from link/code</button>
+              <div id="devlink-recv-msg2" style="font-size:0.8em;margin-top:10px;text-align:center;min-height:1em"></div>
+            </div>
+          </details>
         </div>
       </div>`;
     document.body.appendChild(wrap);
@@ -173,10 +215,10 @@
     document.head.appendChild(st);
   }
 
-  let _lastCode='',_lastLink='';
+  let _lastCode='',_lastLink='',_cdTimer=null;
 
   window.dlOpen=function(tab){_ensureModal();_el('devlink-modal').style.display='flex';window.dlTab(tab||'send');};
-  window.dlClose=function(){const m=_el('devlink-modal');if(m)m.style.display='none';};
+  window.dlClose=function(){const m=_el('devlink-modal');if(m)m.style.display='none';if(_cdTimer){clearInterval(_cdTimer);_cdTimer=null;}};
   window.dlTab=function(t){
     _ensureModal();
     const send=t!=='recv';
@@ -186,6 +228,61 @@
     _el('devlink-tab-recv').classList.toggle('active',!send);
   };
 
+  function _startCountdown(sec){
+    if(_cdTimer)clearInterval(_cdTimer);
+    let s=sec;const el=_el('devlink-code-timer');
+    const tick=()=>{if(!el)return;if(s<=0){el.textContent='⏳ expired — create a new code';el.style.color='#f87171';clearInterval(_cdTimer);_cdTimer=null;return;}el.style.color='';const m=Math.floor(s/60),ss=String(s%60).padStart(2,'0');el.textContent='expires in '+m+':'+ss;s--;};
+    tick();_cdTimer=setInterval(tick,1000);
+  }
+
+  // ---- Quick code (relay) ----
+  window.dlCreateCode=async function(){
+    _ensureModal();
+    const msg=_el('devlink-code-msg');
+    const includeKeys=_el('devlink-send-keys').checked;
+    const pw=(_el('devlink-send-pw').value||'').trim();
+    const ttl=parseInt(_el('devlink-send-ttl').value,10)||120;
+    msg.style.color='var(--text-muted,#8aa)';msg.textContent='Creating code…';
+    try{
+      const data=window.DL_collect(includeKeys);
+      const code=_genCode();
+      const blob=await window.DL_encrypt(data,code+'|'+pw,{t:1});
+      const id=await _addr(code);
+      const res=await fetch(_relayBase()+'/link-put',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,blob,ttl})});
+      const j=await res.json().catch(()=>({}));
+      if(!res.ok||!j.ok)throw new Error(j.error||('server '+res.status));
+      msg.textContent='';
+      _el('devlink-code-out').style.display='';
+      _el('devlink-code-big').textContent=code.slice(0,3)+'-'+code.slice(3);
+      _el('devlink-code-note').textContent=(includeKeys?'Includes your API keys. ':'')+(pw?'Password required on the other device.':'Code-only — anyone with this code can open it until it expires.');
+      _startCountdown(j.ttl||ttl);
+    }catch(e){msg.style.color='#f87171';msg.textContent='Could not create code: '+e.message;}
+  };
+
+  window.dlFetchCode=async function(){
+    _ensureModal();
+    const msg=_el('devlink-recv-msg');
+    const code=_normCode(_el('devlink-recv-code2').value);
+    const pw=(_el('devlink-recv-pw').value||'').trim();
+    if(code.length<6){msg.style.color='#f87171';msg.textContent='Enter the 6-character code.';return;}
+    msg.style.color='var(--text-muted,#8aa)';msg.textContent='Fetching…';
+    try{
+      const id=await _addr(code);
+      const res=await fetch(_relayBase()+'/link-get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+      if(res.status===404){msg.style.color='#f87171';msg.textContent='Code not found or expired — codes open once and last a few minutes.';return;}
+      const j=await res.json().catch(()=>({}));
+      if(!res.ok||!j.ok||!j.blob)throw new Error(j.error||('server '+res.status));
+      const obj=await window.DL_decrypt(j.blob,code+'|'+pw);
+      const n=window.DL_apply(obj);
+      msg.style.color='#4ade80';msg.textContent=`Imported ${n} settings ✓ Reloading…`;
+      setTimeout(()=>location.reload(),900);
+    }catch(e){
+      msg.style.color='#f87171';
+      msg.textContent=(e.message==='Wrong PIN or damaged code')?'Wrong password for this code.':('Import failed: '+e.message);
+    }
+  };
+
+  // ---- Offline QR / paste ----
   function _drawQR(canvas,text){
     if(typeof qrcode==='undefined')return false;
     try{
@@ -193,14 +290,11 @@
       const n=qr.getModuleCount(),quiet=4,total=n+quiet*2;
       const px=Math.max(2,Math.floor(288/total)),size=total*px;
       canvas.width=size;canvas.height=size;
-      const ctx=canvas.getContext('2d');
-      ctx.fillStyle='#fff';ctx.fillRect(0,0,size,size);
-      ctx.fillStyle='#000';
+      const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,size,size);ctx.fillStyle='#000';
       for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(qr.isDark(r,c))ctx.fillRect((c+quiet)*px,(r+quiet)*px,px,px);
       return true;
     }catch(e){return false;}
   }
-
   window.dlGenerate=async function(){
     _ensureModal();
     const pin=(_el('devlink-send-pin').value||'').trim();
@@ -210,32 +304,25 @@
       const data=window.DL_collect(includeKeys);
       _lastCode=await window.DL_encrypt(data,pin,{t:1});
       _lastLink=_appBase()+'#link='+_lastCode;
-      const out=_el('devlink-send-out');out.style.display='';
-      const note=_el('devlink-qr-note');
+      _el('devlink-send-out').style.display='';
       const ok=_drawQR(_el('devlink-qr'),_lastLink);
-      const nKeys=Object.keys(data).length;
       _el('devlink-qr').style.display=ok?'':'none';
-      note.textContent=ok
-        ? `Scan with your other device's camera · ${nKeys} settings${includeKeys?' (incl. API keys)':''}`
-        : `Too much data for a QR — use “Copy link” instead · ${nKeys} settings`;
-    }catch(e){alert('Could not generate link: '+e.message);}
+      const nKeys=Object.keys(data).length;
+      _el('devlink-qr-note').textContent=ok?`Scan with your other device's camera · ${nKeys} settings${includeKeys?' (incl. keys)':''}`:`Too much data for a QR — use Copy link · ${nKeys} settings`;
+    }catch(e){alert('Could not generate: '+e.message);}
   };
-
   window.dlCopy=async function(which){
-    const txt=which==='link'?_lastLink:_lastCode;
-    if(!txt)return;
-    try{await navigator.clipboard.writeText(txt);}
-    catch(e){const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){}ta.remove();}
+    const txt=which==='link'?_lastLink:_lastCode;if(!txt)return;
+    try{await navigator.clipboard.writeText(txt);}catch(e){const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){}ta.remove();}
     const note=_el('devlink-qr-note');if(note){const p=note.textContent;note.textContent='Copied ✓';setTimeout(()=>{note.textContent=p;},1200);}
   };
-
   window.dlImport=async function(){
     _ensureModal();
-    const msg=_el('devlink-recv-msg');
+    const msg=_el('devlink-recv-msg2');
     let code=(_el('devlink-recv-code').value||'').trim();
     const pin=(_el('devlink-recv-pin').value||'').trim();
     const h=code.indexOf('#link=');if(h>=0)code=code.slice(h+6);
-    if(!code){msg.style.color='#f87171';msg.textContent='Paste a code first.';return;}
+    if(!code){msg.style.color='#f87171';msg.textContent='Paste a link or code first.';return;}
     if(pin.length<4){msg.style.color='#f87171';msg.textContent='Enter the PIN.';return;}
     msg.style.color='var(--text-muted,#8aa)';msg.textContent='Decrypting…';
     try{
@@ -245,11 +332,11 @@
       try{location.hash='';}catch(e){}
       setTimeout(()=>location.reload(),900);
     }catch(e){
-      msg.style.color='#f87171';msg.textContent=e.message==='Wrong PIN or damaged code'?'Wrong PIN, or the code was damaged.':('Import failed: '+e.message);
+      msg.style.color='#f87171';msg.textContent=(e.message==='Wrong PIN or damaged code')?'Wrong PIN, or the code was damaged.':('Import failed: '+e.message);
     }
   };
 
-  // Incoming #link= (scanned from another device's QR): open Receive prefilled.
+  // Incoming #link= (scanned QR) → open Receive, expand the paste section prefilled.
   function _checkIncoming(){
     try{
       const h=location.hash||'';
@@ -257,10 +344,9 @@
       const code=h.slice(6);if(!code)return;
       _ensureModal();
       _el('devlink-recv-code').value=code;
+      const det=_el('devlink-recv-code').closest('details');if(det)det.open=true;
       window.dlOpen('recv');
-      const msg=_el('devlink-recv-msg');
-      msg.style.color='var(--text-secondary,#9fb0c0)';
-      msg.textContent='Enter the PIN set on your other device to import.';
+      const msg=_el('devlink-recv-msg2');msg.style.color='var(--text-secondary,#9fb0c0)';msg.textContent='Enter the PIN set on your other device to import.';
     }catch(e){}
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_checkIncoming);

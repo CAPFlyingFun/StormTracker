@@ -3337,6 +3337,21 @@ function _smoothTrack(latlngs, segsPerSpan) {
   out.push(pts[n - 1]); // ensure the final real fix is included
   return out;
 }
+// v6.21: a past trail can come from a source (GDACS) that places the storm slightly
+// differently than the authoritative marker (NHC), so its newest end doesn't touch
+// the center. Shift the WHOLE trail so its endpoint nearest the marker lands exactly
+// on it — keeps the trail's shape, just re-anchors it. Skips a wildly-different track
+// (>3° offset ≈ >200 mi) so a genuinely wrong trail isn't dragged onto the marker.
+function _anchorTrail(latlngs, mk) {
+  if (!mk || mk[0] == null || mk[1] == null || !latlngs || latlngs.length < 2) return latlngs;
+  const a = latlngs[0], b = latlngs[latlngs.length - 1];
+  const da = (a[0] - mk[0]) ** 2 + (a[1] - mk[1]) ** 2, db = (b[0] - mk[0]) ** 2 + (b[1] - mk[1]) ** 2;
+  const near = da <= db ? a : b;
+  const dLat = mk[0] - near[0], dLon = mk[1] - near[1];
+  if (Math.abs(dLat) > 3 || Math.abs(dLon) > 3) return latlngs;
+  if (Math.abs(dLat) < 1e-6 && Math.abs(dLon) < 1e-6) return latlngs; // already aligned
+  return latlngs.map(c => [c[0] + dLat, c[1] + dLon]);
+}
 function plotNHCTracks(map) {
   // v5.87: generation counter — the async ST Model draw checks this so a slow
   // model run can never paint onto a map that has since been re-plotted.
@@ -3389,7 +3404,8 @@ function plotNHCTracks(map) {
     if (!hist.coords || hist.coords.length < 2) continue;
     const storm = (_nhcData.systems || []).find(s => s.id === hist.stormId || s.name.toLowerCase() === hist.stormName.toLowerCase());
     const cat = storm ? (storm.category || _saffirSimpson(storm.maxWind)) : { color: '#9333EA' };
-    const line = L.polyline(_smoothTrack(hist.coords.map(c => [c[1], c[0]])), {
+    const _histLL = _anchorTrail(hist.coords.map(c => [c[1], c[0]]), storm ? [storm.lat, storm.lon] : null);
+    const line = L.polyline(_smoothTrack(_histLL), {
       color: cat.color || '#9333EA', weight: 2, opacity: 0.5, interactive: false
     });
     line.addTo(map);
@@ -3444,7 +3460,8 @@ function plotNHCTracks(map) {
       if (_curIdx < 0) _curIdx = _pts.length - 1;
       const _pastLL = _pts.slice(0, _curIdx + 1).filter(p => p.lat != null && p.lon != null).map(p => [p.lat, p.lon]);
       if (_pastLL.length >= 2) {
-        const _pl = L.polyline(_smoothTrack(_pastLL), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
+        const _pastAnchored = _fpStorm ? _anchorTrail(_pastLL, [_fpStorm.lat, _fpStorm.lon]) : _pastLL;
+        const _pl = L.polyline(_smoothTrack(_pastAnchored), { color: _fpCat.color || '#94a3b8', weight: 2, opacity: 0.5, interactive: false });
         _pl.addTo(map);
         S._nhcTrackLayers.push(_pl);
       }

@@ -1262,6 +1262,13 @@ function getStormConeRain(s){
       if(pts)res=_coneRainStats(pts)||res;
     }
   }catch(e){}
+  // v6.31: the cone samples the corridor AHEAD of the storm (from its apex
+  // forward), so it excludes the cell's own core — which is why a 55 dBZ cell
+  // could report "in path · 45 dBZ max" (the strongest thing already sitting in
+  // the path ahead). But the storm itself is the leading edge of its own path, so
+  // the path max should never read weaker than the cell. Fold the cell's peak in.
+  const _sd=Math.round(s.dbz||0);
+  if(res.count>0&&_sd>res.maxDbz)res.maxDbz=_sd;
   s._coneRain=res;s._coneRainScanId=S._stormScanId;
   return res;
 }

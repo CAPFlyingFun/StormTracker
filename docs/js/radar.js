@@ -2506,7 +2506,10 @@ try{const ps=localStorage.getItem('st_arrowStyle');if(ps==='pointer')S._pathArro
 S._showPoints=true;
 S._pointsMode='inbound';
 try{const pv=localStorage.getItem('st_pointsMode');if(pv){S._pointsMode=pv;S._showPoints=(pv!=='off')}}catch(e){}
-S._relMotionMode='off';
+// v6.33: motion-vector arrows default to the top-12 (inbound) set, matching the
+// track cones — so a fresh load shows the 12 arrows without a manual toggle. An
+// explicit user choice (incl. 'off') still persists via localStorage below.
+S._relMotionMode='inbound';
 try{const rv=localStorage.getItem('st_relMotionMode');if(rv)S._relMotionMode=rv}catch(e){}
 S._relMotionLayers=[];
 S._tracksMode='off';

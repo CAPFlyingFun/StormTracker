@@ -42,6 +42,7 @@ function initRadar(){
         <div class="map-ctrl-btn" id="btn-mping" title="mPING reports" onclick="toggleMping()" style="opacity:${S._mpingVisible?1:0.4}">${_ri('mping')}</div>
         <div class="map-ctrl-btn" id="btn-alert-polys" title="NWS alert areas" onclick="toggleAlertPolygons()" style="opacity:0.4">${_ri('alert-polys')}</div>
         <div class="map-ctrl-btn" id="btn-iso-3d" title="3D Storm Terrain" onclick="show3DView()">${_ri('terrain-3d')}</div>
+        <div class="map-ctrl-btn" id="btn-nhc-tracks" title="Hurricane tracks on/off" onclick="toggleNHCTracks(!S._showNHCTracks)" style="opacity:${S._showNHCTracks?1:0.4};font-size:16px;display:flex;align-items:center;justify-content:center">🌀</div>
         <div class="map-ctrl-btn" id="radar-clear-cone" title="Clear track" style="display:none" onclick="clearStormCone()">${_ri('clear')}</div>
         <div class="map-ctrl-btn" id="clutter-toggle" title="Clutter hidden (tap to show)" style="display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);border-color:#555" onclick="toggleClutter()">${_ri('clutter')}</div>
       </div>

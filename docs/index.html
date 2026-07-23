@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v6.43</title>
+<title>StormTracker v6.44</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=741">
+<link rel="stylesheet" href="css/style.css?v=742">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.43</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.44</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -603,7 +603,7 @@
         <div style="color:rgba(255,200,50,0.7);font-size:11px;line-height:1.4;margin-top:3px">Visit the Radar tab to scan for storms, then return here to see them in 3D.</div>
       </div>
       <div id="v3d-hud" style="position:absolute;inset:0;pointer-events:none;z-index:10">
-        <div id="v3d-bottom-controls" style="position:absolute;bottom:8px;left:12px;z-index:12;pointer-events:all;display:flex;flex-direction:column;gap:4px">
+        <div id="v3d-bottom-controls" style="position:absolute;bottom:calc(8px + env(safe-area-inset-bottom,0px));left:12px;z-index:12;pointer-events:all;display:flex;flex-direction:column;gap:4px">
           <div id="v3d-tier-row" style="display:flex;flex-direction:row;gap:2px;padding:0 4px;background:rgba(5,10,20,0.82);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.15);border-radius:8px;max-height:0;opacity:0;overflow:hidden;transition:max-height .25s ease,opacity .2s ease,padding .25s ease">
             <button id="v3d-tier-0" onclick="toggleTier3D(0)" style="width:22px;height:22px;border-radius:4px;border:1.5px solid #00F8FF;background:#00F8FF;color:#000;font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:inherit;transition:all .15s" title="Blue 20-30 dBZ">✓</button>
             <button id="v3d-tier-1" onclick="toggleTier3D(1)" style="width:22px;height:22px;border-radius:4px;border:1.5px solid #00FF39;background:#00FF39;color:#000;font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:inherit;transition:all .15s" title="Green 31-40 dBZ">✓</button>
@@ -720,25 +720,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=741" defer></script>
-<script src="js/core.js?v=741" defer></script>
-<script src="js/gauges.js?v=741" defer></script>
-<script src="js/icons.js?v=741" defer></script>
-<script src="js/geo.js?v=741" defer></script>
-<script src="js/settings.js?v=741" defer></script>
-<script src="js/thresholds.js?v=741" defer></script>
-<script src="js/weather.js?v=741" defer></script>
-<script src="js/radar.js?v=741" defer></script>
-<script src="js/tropical-model.js?v=741" defer></script>
-<script src="js/storms.js?v=741" defer></script>
-<script src="js/station.js?v=741" defer></script>
-<script src="js/alerts.js?v=741" defer></script>
-<script src="js/briefingEngine.js?v=741" defer></script>
-<script src="js/ai.js?v=741" defer></script>
-<script src="js/push.js?v=741" defer></script>
-<script src="js/qrcode.js?v=741" defer></script>
-<script src="js/devicelink.js?v=741" defer></script>
-<script src="js/init.js?v=741" defer></script>
+<script src="js/radar-shared.js?v=742" defer></script>
+<script src="js/core.js?v=742" defer></script>
+<script src="js/gauges.js?v=742" defer></script>
+<script src="js/icons.js?v=742" defer></script>
+<script src="js/geo.js?v=742" defer></script>
+<script src="js/settings.js?v=742" defer></script>
+<script src="js/thresholds.js?v=742" defer></script>
+<script src="js/weather.js?v=742" defer></script>
+<script src="js/radar.js?v=742" defer></script>
+<script src="js/tropical-model.js?v=742" defer></script>
+<script src="js/storms.js?v=742" defer></script>
+<script src="js/station.js?v=742" defer></script>
+<script src="js/alerts.js?v=742" defer></script>
+<script src="js/briefingEngine.js?v=742" defer></script>
+<script src="js/ai.js?v=742" defer></script>
+<script src="js/push.js?v=742" defer></script>
+<script src="js/qrcode.js?v=742" defer></script>
+<script src="js/devicelink.js?v=742" defer></script>
+<script src="js/init.js?v=742" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -748,7 +748,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=741')
+    navigator.serviceWorker.register('sw.js?v=742')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

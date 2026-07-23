@@ -434,10 +434,22 @@ function init3DScene() {
 function resize3DPage() {
   var pg = document.getElementById('page-3d');
   if (!pg) return;
-  var hdr = document.querySelector('.app-header');
-  var hdrH = hdr ? hdr.offsetHeight : 0;
-  var navH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')) || 60;
-  pg.style.height = (window.innerHeight - hdrH - navH) + 'px';
+  // v6.44: size the 3D page to the ACTUAL gap between its top and the bottom
+  // nav bar, measured live. The old math (innerHeight − header − 60) assumed a
+  // 60px nav and ignored the iPhone home-indicator safe-area the nav reserves,
+  // so on notched phones the page ran ~34px too tall and the bottom control bar
+  // tucked behind the nav (looked like the buttons vanished). getBoundingClientRect
+  // handles ticker, safe-area and header size in one shot.
+  var nav = document.querySelector('.bottom-nav');
+  var pgTop = pg.getBoundingClientRect().top;
+  var navTop = nav ? nav.getBoundingClientRect().top : (function () {
+    var hdr = document.querySelector('.app-header');
+    var hdrH = hdr ? hdr.offsetHeight : 0;
+    var navH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')) || 60;
+    return window.innerHeight - navH;
+  })();
+  var h = Math.max(200, Math.round(navTop - pgTop));
+  pg.style.height = h + 'px';
 }
 
 function onResize3D() {

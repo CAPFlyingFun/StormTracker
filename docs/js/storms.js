@@ -2382,7 +2382,8 @@ async function fetchNHCData() {
       if (!match && gd.lat != null) match = storms.find(s => s.lat != null && haversine(s.lat, s.lon, gd.lat, gd.lon) < 150);
       if (match) {
         match._gdacs = { alertlevel: gd.alertlevel, eventid: gd.eventid, reportUrl: gd.reportUrl, countries: gd.countries };
-        if (!match.maxWind && gd.maxWind) match.maxWind = gd.maxWind;
+        // v6.47: when GDACS supplies the wind, its record age travels with it.
+        if (!match.maxWind && gd.maxWind) { match.maxWind = gd.maxWind; if (gd.updated) match._asOf = gd.updated; }
         if (!match.moveDir && gd.moveDir) { match.moveDir = gd.moveDir; match.moveSpeed = gd.moveSpeed; match._moveSrc = 'gdacs'; }
         _attachGdacsGeo(gd, match.id, match.name);
       } else if (gd.lat != null) {
@@ -2390,7 +2391,7 @@ async function fetchNHCData() {
         const tt = gd.typeText || '';
         const type = /hurricane|typhoon|cyclone.*(hurricane|typhoon)/i.test(tt) ? 'Hurricane' : /storm/i.test(tt) ? 'Tropical Storm' : 'Tropical Depression';
         const ns = {
-          id: 'GDACS_' + gd.eventid, name: gd.name, type, basin: '',
+          id: 'GDACS_' + gd.eventid, name: gd.name, type, basin: '', _asOf: gd.updated || null,
           lat: gd.lat, lon: gd.lon, maxWind: gd.maxWind, gusts: null,
           minPressure: null, category: null, moveDir: gd.moveDir, moveSpeed: gd.moveSpeed,
           dist: null, link: gd.reportUrl, surgeData: null, _source: 'gdacs',
@@ -2719,6 +2720,15 @@ async function _fetchJTWCStorms() {
 // humanitarian alert level (Green/Orange/Red) to every matched storm, and
 // (3) catch any current storm the NHC/JTWC feeds missed. NOTE: the per-event
 // "details" endpoint (geteventdata) does NOT return JSON — never fetch it.
+// v6.47: parse whatever date shape a GDACS property carries — ISO strings
+// ("2026-07-25T00:00:00") or .NET "/Date(1769...)/"-style tick wrappers.
+function _parseGdacsAnyDate(v) {
+  if (v == null) return null;
+  const m = String(v).match(/\/Date\((\d+)\)\//);
+  if (m) return +m[1];
+  const t = Date.parse(String(v));
+  return isNaN(t) ? null : t;
+}
 async function _fetchGDACSStorms() {
   const out = [];
   try {
@@ -2801,8 +2811,16 @@ async function _fetchGDACSStorms() {
         else if (past.length) fcstTrack.unshift([past[past.length - 1].lon, past[past.length - 1].lat]);
       }
       if (!histTrack.length && !fcstTrack.length && track.length >= 2) fcstTrack = track;
+      // v6.47: when THIS record was last updated by GDACS. Their severity value
+      // refreshes only per advisory (~6-hourly) and can freeze entirely after
+      // NHC's final advisory while the event stays "current" — so remember its
+      // age and let the UI say so instead of presenting the numbers as live.
+      // Prefer the record's own modification date; fall back to the newest PAST
+      // track fix (the last advisory time in practice).
+      const updated = _parseGdacsAnyDate(p.datemodified) ?? _parseGdacsAnyDate(p.todate)
+        ?? (past.length ? past[past.length - 1].t : null);
       out.push({
-        eventid: ev.eventid, name,
+        eventid: ev.eventid, name, updated,
         lat: ev.lat, lon: ev.lon, maxWind,
         typeText: sev.severitytext || '',
         alertlevel: p.alertlevel || 'Green',
@@ -3009,6 +3027,18 @@ function _reconcileTropicalType(s) {
   } else if (w >= 39 && !/storm/i.test(t)) {
     s.type = 'Tropical Storm';
   }
+}
+// v6.47: data-age line for feed-lagged storms. GDACS refreshes ~6-hourly and can
+// freeze after NHC's final advisory, so wind/pressure can be hours old while the
+// popup looks live — say WHEN the numbers are from once they're >3 h old, and
+// add a caution past 12 h (post-landfall storms weaken fast).
+function _stormAsOfHtml(s) {
+  if (!s || !s._asOf) return '';
+  const age = Date.now() - s._asOf;
+  if (age < 3 * 3600000) return '';
+  const rel = (typeof _relativeTime === 'function') ? _relativeTime(s._asOf) : new Date(s._asOf).toLocaleString();
+  const warn = age > 12 * 3600000 ? ' — storm may have changed since' : '';
+  return `<div style="font-size:0.66em;color:var(--text-muted,#7a8699);margin-top:3px">📡 Wind/pressure as of ${rel}${warn}</div>`;
 }
 function _tropicalStatusLabel(storm) {
   const w = storm._tropAlerts || { watches: [], warnings: [] };
@@ -3283,6 +3313,7 @@ function _renderTropicalSection() {
         ${s.minPressure != null ? `<div class="text-center-box"><div class="tile-label-upper" style="letter-spacing:normal">Pressure</div><div style="font-size:0.9em;font-weight:700;color:var(--text-primary)">${s.minPressure} mb</div></div>` : ''}
         ${s.moveDir ? `<div class="text-center-box"><div class="tile-label-upper" style="letter-spacing:normal">Movement</div><div style="font-size:0.9em;font-weight:700;color:var(--text-primary)">${s.moveDir}${s.moveSpeed ? ' ' + s.moveSpeed + ' mph' : ''}</div></div>` : ''}
       </div>
+      ${_stormAsOfHtml(s)}
       ${s.lat != null ? `<div style="font-size:0.65em;color:var(--text-muted);margin-top:4px">📍 ${Math.abs(s.lat).toFixed(1)}°${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(1)}°${s.lon >= 0 ? 'E' : 'W'} · ${(_STORM_REGIONS.find(r => r.id === s._region) || {}).label || s.basin}${s._source === 'jtwc' ? ' (JTWC)' : s._source === 'gdacs' ? ' (GDACS)' : ''}${hasForecast ? ' · <span class="c-cyan">Tap for forecast track</span>' : ''}</div>` : ''}
     </div>`;
   });
@@ -3700,6 +3731,7 @@ function plotNHCTracks(map) {
       ${s.maxWind ? `<div style="font-size:0.8em;margin-top:4px">💨 Max Wind: <b>${s.maxWind} mph</b>${s.gusts ? ' (G' + s.gusts + ')' : ''}</div>` : ''}
       ${s.minPressure ? `<div class="text-sm">🔵 Pressure: <b>${s.minPressure} mb</b></div>` : ''}
       ${s.moveDir ? `<div class="text-sm">➡️ Moving: <b>${s.moveDir} ${s.moveSpeed || ''} mph</b></div>` : ''}
+      ${_stormAsOfHtml(s)}
       ${s._gdacs ? `<div title="${_GDACS_TITLE}" style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">🌍 Humanitarian impact: ${_GDACS_IMPACT_WORDS[s._gdacs.alertlevel] || s._gdacs.alertlevel} (GDACS ${s._gdacs.alertlevel})</div><div style="font-size:0.58em;color:#94a3b8;margin-top:1px">population-scale estimate — not your personal risk</div>` : ''}
       ${s.dist != null ? `<div style="font-size:0.75em;color:#aaa;margin-top:4px">${Math.round(s.dist)} mi from you</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">

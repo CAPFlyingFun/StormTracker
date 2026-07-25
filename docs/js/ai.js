@@ -552,7 +552,11 @@ function buildWeatherContext(){
                 :` USER QUADRANT (computed): ${q.quadrant} — you are ${q.userDir||'?'} of the center${q.note?', '+q.note:''} (confidence ${q.confidence}).`;
             }
           }
-          parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]${quadTxt}`);
+          // v6.47: feed-lagged storms (GDACS freezes after NHC's final advisory)
+          // must not be narrated as live — tell the AI how old the numbers are.
+          const _ageH=(s._asOf&&(Date.now()-s._asOf)>3*3600000)?Math.round((Date.now()-s._asOf)/3600000):0;
+          const _ageTxt=_ageH?` DATA AGE: intensity/motion figures were last updated ~${_ageH} h ago — present them as "as of ${_ageH} h ago", not as current, and note the storm (especially if inland) has likely changed since.`:'';
+          parts.push(`  🌀 ${(s.type||'').trim()} ${(s.name||'').trim()} (${cat}) — ${dTxt} from you. ${wind}, ${gust}, ${pres}. ${mov}. [${src}]${quadTxt}${_ageTxt}`);
         }
         parts.push(`  ALWAYS include the nearest/affecting system's max sustained wind, PEAK GUSTS, and MIN CENTRAL PRESSURE in the Bottom Line or Situation Overview. If a value is "not published", say so explicitly (e.g. "central pressure not published by NHC") — do NOT invent one or quietly drop it.`);
         parts.push(`  TORNADO QUADRANT: use the "USER QUADRANT (computed)" value above VERBATIM — do NOT infer right-front/left-front geometry yourself (it is easy to get wrong from prose). Tropical tornado risk is highest in the RIGHT-FRONT quadrant relative to motion; if the computed quadrant is anything else, or reads "uncertain", say so plainly rather than defaulting to "right-front". State the user's direction from the center exactly as given.`);

@@ -2965,15 +2965,18 @@ function _getTropicalAlertsForStorm(storm) {
   }
   return { watches, warnings };
 }
+// v6.46: ascending "<" ladder — each band is checked as "below its upper bound"
+// until Cat 5, which is the only ">=" (157+ mph). Official NHC mph boundaries:
+// TD <39 · TS 39-73 · C1 74-95 · C2 96-110 · C3 111-129 · C4 130-156 · C5 ≥157.
 function _saffirSimpson(windMph) {
   if (!windMph) return { cat: 'Unknown', label: 'Unknown', color: '#888', num: -1 };
-  if (windMph >= 157) return { cat: 'Cat 5', label: 'Category 5', color: '#ff1744', num: 5 };
-  if (windMph >= 130) return { cat: 'Cat 4', label: 'Category 4', color: '#ff5722', num: 4 };
-  if (windMph >= 111) return { cat: 'Cat 3', label: 'Category 3', color: '#ff9800', num: 3 };
-  if (windMph >= 96) return { cat: 'Cat 2', label: 'Category 2', color: '#ffc107', num: 2 };
-  if (windMph >= 74) return { cat: 'Cat 1', label: 'Category 1', color: '#ffeb3b', num: 1 };
-  if (windMph >= 39) return { cat: 'TS', label: 'Tropical Storm', color: '#4fc3f7', num: 0 };
-  return { cat: 'TD', label: 'Tropical Depression', color: '#90caf9', num: -1 };
+  if (windMph < 39) return { cat: 'TD', label: 'Tropical Depression', color: '#90caf9', num: -1 };
+  if (windMph < 74) return { cat: 'TS', label: 'Tropical Storm', color: '#4fc3f7', num: 0 };
+  if (windMph < 96) return { cat: 'Cat 1', label: 'Category 1', color: '#ffeb3b', num: 1 };
+  if (windMph < 111) return { cat: 'Cat 2', label: 'Category 2', color: '#ffc107', num: 2 };
+  if (windMph < 130) return { cat: 'Cat 3', label: 'Category 3', color: '#ff9800', num: 3 };
+  if (windMph < 157) return { cat: 'Cat 4', label: 'Category 4', color: '#ff5722', num: 4 };
+  return { cat: 'Cat 5', label: 'Category 5', color: '#ff1744', num: 5 }; // >= 157
 }
 // v6.45: reconcile a storm's TYPE label with its own reported winds. Every feed's
 // text lags its numbers: GDACS's severitytext and NHC/JTWC advisory titles can
@@ -3294,10 +3297,13 @@ function setNHCProxRadius(val) {
   try { localStorage.setItem('st_nhc_prox_radius', String(S._nhcProxRadius)); } catch(e) {}
   if (S.activePage === 'alerts' || S.activePage === 'weather') { if (S.activePage === 'alerts') renderAlerts(); _updateTropicalUI(); }
 }
-function _selectNHCStorm(idOrName) {
+function _selectNHCStorm(idOrName, nameHint) {
   S._nhcSelectedStorm = idOrName;
   switchPage('radar');
-  const findStorm = () => (_nhcData.systems || []).find(s => s.id === idOrName || s.name === idOrName);
+  // v6.46: same stale-key resilience as the track table — the embedded id can
+  // be a feed-hop old one, so resolve via _resolveTrackRefs (id → name → GDACS
+  // event id) instead of an exact-match find.
+  const findStorm = () => _resolveTrackRefs(idOrName, nameHint).storm;
   const tryPlot = () => {
     if (S.map) {
       plotNHCTracks(S.map);
@@ -3332,12 +3338,39 @@ function closeStormTrackTable() {
   const el = document.getElementById('storm-track-panel');
   if (el) el.remove();
 }
-function showStormTrackTable(idOrName) {
-  const key = String(idOrName || '').toLowerCase();
-  const fp = (_nhcData.fcstPoints || []).find(f => (f.stormId || '').toLowerCase() === key || (f.stormName || '').toLowerCase() === key);
-  const storm = (_nhcData.systems || []).find(s => (s.id || '').toLowerCase() === key || (s.name || '').toLowerCase() === key);
-  const name = (storm && storm.name) || (fp && fp.stormName) || idOrName;
+// v6.46: resolve a track-table request to its live storm + forecast points.
+// Popup links embed their storm key STATICALLY at plot time, but the tropical
+// data rebuilds every ~15 min and a storm's id can CHANGE between cycles as it
+// hops feeds (e.g. GDACS-carried "GDACS_1001290" becomes an NHC id the moment
+// NHC picks it up) — so a tap on an older popup missed both lookups and toasted
+// "No track data for GDACS_1001290". Resolution now falls back progressively:
+// exact id/name → the nameHint the link also carries (names survive feed hops;
+// Bertha is Bertha in every feed) → the GDACS event id remembered on the merged
+// storm (s._gdacs.eventid) → then fcstPoints re-looked-up under the RESOLVED
+// storm's current id/name. Pure data-in/data-out so it can be unit-replayed.
+function _resolveTrackRefs(idOrName, nameHint) {
+  const keys = [idOrName, nameHint].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
+  const sysList = (_nhcData.systems || []);
+  const fpList = (_nhcData.fcstPoints || []);
+  const byKey = (id, nm) => keys.some(k => String(id || '').toLowerCase() === k || String(nm || '').toLowerCase() === k);
+  let storm = sysList.find(s => byKey(s.id, s.name));
+  if (!storm) {
+    // stale GDACS_<eventid> key → match the event id remembered on the merged storm
+    const gid = keys.map(k => (k.match(/^gdacs_(\d+)$/) || [])[1]).find(Boolean);
+    if (gid) storm = sysList.find(s => s._gdacs && String(s._gdacs.eventid) === gid);
+  }
+  let fp = fpList.find(f => byKey(f.stormId, f.stormName));
+  if (!fp && storm) {
+    const sid = String(storm.id || '').toLowerCase();
+    const snm = String(storm.name || '').toLowerCase();
+    fp = fpList.find(f => String(f.stormId || '').toLowerCase() === sid || (snm && String(f.stormName || '').toLowerCase() === snm));
+  }
+  const name = (storm && storm.name) || (fp && fp.stormName) || nameHint || idOrName;
   const type = (storm && storm.type) || 'Storm';
+  return { fp, storm, name, type };
+}
+function showStormTrackTable(idOrName, nameHint) {
+  const { fp, storm, name, type } = _resolveTrackRefs(idOrName, nameHint);
   if (!fp || !fp.pts || !fp.pts.length) { if (typeof toast === 'function') toast('No track data for ' + name); return; }
   const nowT = Date.now();
   // v6.19: order by the reliable path index (_ord), newest/forecast on top — NOT by
@@ -3635,8 +3668,9 @@ function plotNHCTracks(map) {
           }
           if (!_timeHtml && pt.label) _timeHtml = '<br>' + escHtml(pt.label);
           const _tblKey = _escStormName(fp.stormId || fp.stormName);
+          const _tblName = _escStormName(fp.stormName || '');
           const hit = L.circleMarker([pt.lat, pt.lon], { radius: 12, stroke: false, fillColor: '#000', fillOpacity: 0.02 });
-          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${_timeHtml}${_intHtml}<div style="margin-top:5px"><a href="#" onclick="event.preventDefault();showStormTrackTable('${_tblKey}')" style="color:var(--accent-cyan)">📋 Full track table</a></div></div>`);
+          hit.bindPopup(`<div style="font-family:system-ui;font-size:0.8em;text-align:center;min-width:120px"><b>${future ? 'Forecast' : 'Past'} position</b>${_timeHtml}${_intHtml}<div style="margin-top:5px"><a href="#" onclick="event.preventDefault();showStormTrackTable('${_tblKey}','${_tblName}')" style="color:var(--accent-cyan)">📋 Full track table</a></div></div>`);
           hit.addTo(map);
           S._nhcTrackLayers.push(hit);
         }
@@ -3669,8 +3703,8 @@ function plotNHCTracks(map) {
       ${s._gdacs ? `<div title="${_GDACS_TITLE}" style="font-size:0.72em;color:${_GDACS_LEVEL_COLORS[s._gdacs.alertlevel] || '#22c55e'};font-weight:700;margin-top:2px">🌍 Humanitarian impact: ${_GDACS_IMPACT_WORDS[s._gdacs.alertlevel] || s._gdacs.alertlevel} (GDACS ${s._gdacs.alertlevel})</div><div style="font-size:0.58em;color:#94a3b8;margin-top:1px">population-scale estimate — not your personal risk</div>` : ''}
       ${s.dist != null ? `<div style="font-size:0.75em;color:#aaa;margin-top:4px">${Math.round(s.dist)} mi from you</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-        <a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">Show track →</a>
-        <a href="#" onclick="event.preventDefault();showStormTrackTable('${_escStormName(s.id||s.name)}')" style="font-size:0.75em;color:var(--accent-cyan)">📋 Track table</a>
+        <a href="#" onclick="event.preventDefault();_selectNHCStorm('${_escStormName(s.id||s.name)}','${_escStormName(s.name||'')}')" style="font-size:0.75em;color:var(--accent-cyan)">Show track →</a>
+        <a href="#" onclick="event.preventDefault();showStormTrackTable('${_escStormName(s.id||s.name)}','${_escStormName(s.name||'')}')" style="font-size:0.75em;color:var(--accent-cyan)">📋 Track table</a>
       </div>
     </div>`);
     marker.addTo(map);

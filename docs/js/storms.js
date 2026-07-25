@@ -2400,6 +2400,12 @@ async function fetchNHCData() {
         _attachGdacsGeo(gd, ns.id, ns.name);
       }
     }
+    // v6.45: classification honesty pass, AFTER every feed has merged its winds —
+    // no storm leaves here labelled "Tropical Depression" while its own maxWind
+    // says tropical-storm force (see _reconcileTropicalType). Runs on all feeds'
+    // storms alike, so the banner, map popup, cards and AI can't contradict the
+    // wind figure they display right next to the name.
+    for (const s of storms) _reconcileTropicalType(s);
     _nhcData.systems = storms;
     _nhcData.surgeRaw = surgeData;
     _recomputeNHCUserFields();
@@ -2968,6 +2974,38 @@ function _saffirSimpson(windMph) {
   if (windMph >= 74) return { cat: 'Cat 1', label: 'Category 1', color: '#ffeb3b', num: 1 };
   if (windMph >= 39) return { cat: 'TS', label: 'Tropical Storm', color: '#4fc3f7', num: 0 };
   return { cat: 'TD', label: 'Tropical Depression', color: '#90caf9', num: -1 };
+}
+// v6.45: reconcile a storm's TYPE label with its own reported winds. Every feed's
+// text lags its numbers: GDACS's severitytext and NHC/JTWC advisory titles can
+// still read "Tropical Depression" after the same feed's wind field crossed the
+// 39 mph naming threshold — the app then renders "Tropical Depression Bertha —
+// Tropical Storm · Max Wind 58 mph", a self-contradiction (a depression is BY
+// DEFINITION <39 mph). UPGRADE-ONLY, and only within the plain tropical ladder:
+//  • Post-Tropical / Subtropical / Remnants / Potential / Invest are never touched
+//    (their winds don't define them), and
+//  • a type is never DOWNgraded on a low wind reading (official naming wins on
+//    the way down; feed winds can lag low or go missing between advisories).
+// At hurricane force the label is basin-aware: west Pacific says Typhoon, the
+// Indian-Ocean/southern basins keep the generic Tropical Cyclone, the Atlantic /
+// central+east Pacific (NHC's area) say Hurricane; unknown-basin storms fall back
+// to their position, then to the globally-correct generic "Tropical Cyclone".
+function _reconcileTropicalType(s) {
+  const w = s && s.maxWind;
+  if (!w) return;
+  const t = String(s.type || '').trim();
+  if (!/^(tropical (depression|storm|cyclone)|td|ts)$/i.test(t)) return;
+  if (w >= 74) {
+    const b = String(s.basin || '').toLowerCase();
+    const id = String(s.id || '');
+    if (b === 'at' || b === 'ep' || /^(AL|EP|CP)\d/i.test(id)) s.type = 'Hurricane';
+    else if (b === 'wp' || /\d{2}W$/i.test(id)) s.type = 'Typhoon';
+    else if (/\d{2}[SPABI]$/i.test(id)) s.type = 'Tropical Cyclone';
+    else if (s.lat > 0 && s.lon != null && s.lon < -20) s.type = 'Hurricane';
+    else if (s.lat > 0 && s.lon != null && s.lon >= 100 && s.lon <= 180) s.type = 'Typhoon';
+    else s.type = 'Tropical Cyclone';
+  } else if (w >= 39 && !/storm/i.test(t)) {
+    s.type = 'Tropical Storm';
+  }
 }
 function _tropicalStatusLabel(storm) {
   const w = storm._tropAlerts || { watches: [], warnings: [] };

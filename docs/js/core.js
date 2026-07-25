@@ -239,11 +239,36 @@ function _notifRelTime(ts){
   const h=Math.round(m/60);if(h<24)return h+'h ago';
   return Math.round(h/24)+'d ago';
 }
+// v6.49: the 📢 panel now has two tabs — Alerts (the notification log) and
+// Storms (an email-style Live / Archived / Trash triage backed by the storm
+// lifecycle store in storms.js). Frozen storms land in Archived with a label
+// instead of vanishing; Trash self-empties after 1 h with an Archive rescue.
+let _notifTab='alerts';
+let _stormLCTab='live';
+function setNotifTab(t){_notifTab=t;_renderNotifPanel();}
+function setStormLCTab(t){_stormLCTab=t;_renderNotifPanel();}
+function _refreshNotifPanelIfOpen(){const o=document.getElementById('notif-overlay');if(o&&o.style.display==='block')_renderNotifPanel();}
+function _stormLCCounts(){
+  if(typeof _loadStormLC!=='function')return{live:0,arch:0,del:0,total:0};
+  const lc=_loadStormLC();let live=0,arch=0,del=0;
+  for(const id in lc){const st=lc[id].state;if(st==='live')live++;else if(st==='archived')arch++;else if(st==='deleted')del++;}
+  return{live,arch,del,total:live+arch+del};
+}
 function _renderNotifPanel(){
   const body=document.getElementById('notif-list');if(!body)return;
+  // Empty expired trash whenever the panel is drawn.
+  if(typeof _loadStormLC==='function'){const lc=_loadStormLC();if(_stormLCPurge(lc))_saveStormLC(lc);}
+  const alertN=_loadNotifLog().length;
+  const c=_stormLCCounts();
+  const tab=(t,label,active)=>`<button class="notif-tab${active?' active':''}" onclick="setNotifTab('${t}')">${label}</button>`;
+  let html=`<div class="notif-tabs">${tab('alerts','📢 Alerts'+(alertN?' ('+alertN+')':''),_notifTab==='alerts')}${tab('storms','🌀 Storms'+(c.total?' ('+c.total+')':''),_notifTab==='storms')}</div>`;
+  html+=(_notifTab==='storms')?_renderNotifStorms(c):_renderNotifAlerts();
+  body.innerHTML=html;
+}
+function _renderNotifAlerts(){
   const log=_loadNotifLog();
-  if(!log.length){body.innerHTML='<div style="text-align:center;color:var(--text-muted);padding:44px 20px;font-size:0.85em;line-height:1.6">📭 No notifications yet.<br>Storm, rain, lightning and hurricane alerts will appear here.</div>';return;}
-  body.innerHTML=log.map(n=>`<div class="notif-item">
+  if(!log.length)return '<div style="text-align:center;color:var(--text-muted);padding:40px 20px;font-size:0.85em;line-height:1.6">📭 No notifications yet.<br>Storm, rain, lightning and hurricane alerts will appear here.</div>';
+  return log.map(n=>`<div class="notif-item">
       <div class="notif-item-msg">${escHtml(n.msg)}</div>
       <div class="notif-item-foot">
         <span class="notif-item-time">${_notifRelTime(n.ts)} · ${fmtClockShort(new Date(n.ts))}</span>
@@ -253,6 +278,53 @@ function _renderNotifPanel(){
         </span>
       </div>
     </div>`).join('');
+}
+function _renderNotifStorms(c){
+  const sub=(t,label,n,active)=>`<button class="notif-subtab${active?' active':''}" onclick="setStormLCTab('${t}')">${label}<span class="notif-subcount">${n}</span></button>`;
+  let html=`<div class="notif-subtabs">${sub('live','Live',c.live,_stormLCTab==='live')}${sub('archived','Archived',c.arch,_stormLCTab==='archived')}${sub('deleted','Trash',c.del,_stormLCTab==='deleted')}</div>`;
+  const lc=(typeof _loadStormLC==='function')?_loadStormLC():{};
+  const items=Object.keys(lc).map(id=>lc[id]).filter(e=>e.state===_stormLCTab)
+    .sort((a,b)=>(b.deletedAt||b.archivedAt||b.updatedAt||0)-(a.deletedAt||a.archivedAt||a.updatedAt||0));
+  if(!items.length){
+    const empty={
+      live:'🌀 No live storms right now.',
+      archived:'🗄️ Nothing archived.<br>Storms whose feed repeats unchanged for 12 h land here automatically.',
+      deleted:'🗑 Trash is empty.<br>Deleted storms clear themselves after 1 hour.'
+    }[_stormLCTab];
+    return html+`<div style="text-align:center;color:var(--text-muted);padding:38px 20px;font-size:0.85em;line-height:1.6">${empty}</div>`;
+  }
+  return html+items.map(_stormLCItemHtml).join('');
+}
+function _stormLCItemHtml(e){
+  const s=e.snap||{};
+  const name=escHtml((((s.type?s.type+' ':'')+(s.name||'Storm'))).trim());
+  const bits=[];
+  if(s.maxWind!=null)bits.push(s.maxWind+' mph');
+  if(s.minPressure!=null)bits.push(s.minPressure+' mb');
+  const detail=bits.length?' <span style="color:var(--text-muted);font-size:0.85em">'+escHtml(bits.join(' · '))+'</span>':'';
+  let pill,foot,actions;
+  if(e.state==='live'){
+    pill='<span class="lc-pill lc-live">● Live</span>';
+    foot='Updated '+_notifRelTime(e.updatedAt||Date.now());
+    actions='';
+  }else if(e.state==='archived'){
+    pill='<span class="lc-pill lc-arch">🗄 Archived</span>';
+    foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+(e.reason==='stale'?' · stale feed':'');
+    actions=`<button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
+  }else{
+    pill='<span class="lc-pill lc-del">🗑 Trash</span>';
+    const ttl=(typeof _STORM_DELETE_TTL==='number')?_STORM_DELETE_TTL:3600000;
+    const mins=Math.max(0,Math.ceil((ttl-(Date.now()-(e.deletedAt||0)))/60000));
+    foot='Auto-deletes in ~'+mins+'m';
+    actions=`<button onclick="stormLCArchive('${e.id}')">🗄 Archive instead</button>`;
+  }
+  return `<div class="notif-item">
+      <div class="notif-item-msg"><span style="font-weight:700">${name}</span>${detail} ${pill}</div>
+      <div class="notif-item-foot">
+        <span class="notif-item-time">${foot}</span>
+        <span class="notif-item-actions">${actions}</span>
+      </div>
+    </div>`;
 }
 function deleteNotif(id){_saveNotifLog(_loadNotifLog().filter(n=>n.id!==id));_renderNotifPanel();_updateNotifBadge();}
 function clearAllNotifs(){_saveNotifLog([]);_renderNotifPanel();_updateNotifBadge();}

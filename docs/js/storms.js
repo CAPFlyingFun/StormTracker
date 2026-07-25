@@ -2407,7 +2407,8 @@ async function fetchNHCData() {
     // storms alike, so the banner, map popup, cards and AI can't contradict the
     // wind figure they display right next to the name.
     for (const s of storms) _reconcileTropicalType(s);
-    _nhcData.systems = storms;
+    // v6.48: drop storms whose feed has repeated identical data for >=12 h.
+    _nhcData.systems = _stormFreezeGate(storms);
     _nhcData.surgeRaw = surgeData;
     _recomputeNHCUserFields();
     console.log('[NHC+JTWC+GDACS] Tropical systems:', storms.length, 'tracks:', (_nhcData.forecast||[]).length, 'cones:', (_nhcData.cones||[]).length, 'history:', (_nhcData.history||[]).length, 'JTWC:', jtwcStorms.length, 'GDACS:', gdacsStorms.length);
@@ -3039,6 +3040,59 @@ function _stormAsOfHtml(s) {
   const rel = (typeof _relativeTime === 'function') ? _relativeTime(s._asOf) : new Date(s._asOf).toLocaleString();
   const warn = age > 12 * 3600000 ? ' — storm may have changed since' : '';
   return `<div style="font-size:0.66em;color:var(--text-muted,#7a8699);margin-top:3px">📡 Wind/pressure as of ${rel}${warn}</div>`;
+}
+// v6.48: FREEZE FAIL-SAFE. Tropical feeds (GDACS ~6-hourly, NHC/JTWC RSS) can
+// keep returning the SAME record long after a storm's final advisory, so a dead
+// system lingers on the cards/ticker/AI looking live (the "data seems old"
+// complaint). This gate fingerprints each storm's meaningful fields and
+// remembers, in localStorage, WHEN that exact data was first seen. If nothing
+// has changed for >= _STORM_FREEZE_MS (12 h) — or a GDACS `_asOf` stamp is
+// itself >= 12 h old — the storm is ARCHIVED (dropped from the active list). It
+// is NEVER hard-deleted: the instant any field changes the fingerprint resets
+// and the storm returns, so a merely-stalled-but-live storm can't be lost. A
+// live system issues a new advisory (new position/wind/pressure) at least every
+// ~6 h, so 12 h of byte-identical data is a definitive dead-feed signal. The
+// separate NHC GIS cone/track layers are authoritative and left untouched.
+const _STORM_FREEZE_MS = 12 * 3600000;
+function _stormFingerprint(s) {
+  // Round position to 0.1 deg so float noise isn't mistaken for movement;
+  // include the intensity/motion fields a real advisory would revise.
+  const r1 = v => (typeof v === 'number' && isFinite(v)) ? Math.round(v * 10) / 10 : 'x';
+  return [
+    s.type || '', r1(s.lat), r1(s.lon),
+    s.maxWind ?? 'x', s.minPressure ?? 'x',
+    s.moveDir || 'x', s.moveSpeed ?? 'x'
+  ].join('|');
+}
+function _stormFreezeGate(storms) {
+  const now = Date.now();
+  let store = {};
+  try { store = JSON.parse(localStorage.getItem('st_stormFreeze') || '{}') || {}; } catch (e) { store = {}; }
+  const next = {}; // only ids seen THIS run → stale entries auto-pruned
+  const active = [];
+  let archived = 0;
+  for (const s of storms) {
+    const id = String(s.id || s.name || '');
+    if (!id) { active.push(s); continue; }
+    const fp = _stormFingerprint(s);
+    const prev = store[id];
+    // First time this EXACT data is seen → stamp 'since' now; unchanged → carry it.
+    const since = (prev && prev.fp === fp) ? prev.since : now;
+    next[id] = { fp, since };
+    const frozenMs = now - since;
+    const asOfMs = (typeof s._asOf === 'number') ? now - s._asOf : -1;
+    if (frozenMs >= _STORM_FREEZE_MS || asOfMs >= _STORM_FREEZE_MS) {
+      s._frozen = true;
+      s._frozenSince = since;
+      archived++;
+    } else {
+      active.push(s);
+    }
+  }
+  try { localStorage.setItem('st_stormFreeze', JSON.stringify(next)); } catch (e) {}
+  _nhcData.archivedSystems = storms.filter(s => s._frozen);
+  if (archived) console.log('[NHC] Freeze fail-safe archived ' + archived + ' stale storm(s) — data unchanged >=12 h');
+  return active;
 }
 function _tropicalStatusLabel(storm) {
   const w = storm._tropAlerts || { watches: [], warnings: [] };

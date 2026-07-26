@@ -3080,7 +3080,17 @@ function _stormLCPurge(m) {
   const now = Date.now(); let changed = false;
   for (const id in m) {
     const e = m[id];
-    if (e && e.state === 'deleted' && e.deletedAt && now - e.deletedAt >= _STORM_DELETE_TTL) { delete m[id]; changed = true; }
+    if (e && e.state === 'deleted' && e.deletedAt && now - e.deletedAt >= _STORM_DELETE_TTL) {
+      // v6.53: don't fully forget a storm the feed may still carry — erasing the
+      // record would let the freeze gate re-file it under Archived on the next
+      // poll (a zombie). Collapse to an invisible 'purged' tombstone instead:
+      // shown nowhere, counted nowhere, but it keeps the pin so the storm stays
+      // suppressed until the feed reports CHANGED data (pin releases → storm
+      // returns to Live, fresh) or the feed drops the storm entirely (the gate
+      // then cleans the tombstone).
+      m[id] = { id: e.id, state: 'purged', pinned: true, fpAtPin: e.fpAtPin || e.fp || '', fp: e.fp || '', snap: e.snap };
+      changed = true;
+    }
   }
   return changed;
 }
@@ -3137,9 +3147,12 @@ function _stormFreezeGate(storms) {
   }
   // Prune non-pinned 'live' entries not seen this run — the storm dissipated / NHC
   // dropped it before it ever froze. Archived + Deleted + any pinned entry persist
-  // (keep the label/history even after the feed drops the storm).
+  // (keep the label/history even after the feed drops the storm). 'purged'
+  // tombstones exist ONLY to block feed re-adds, so once the feed no longer
+  // carries that storm the tombstone has no job left — clean it up.
   for (const id in lc) {
     if (lc[id].state === 'live' && !lc[id].pinned && !seen.has(id)) delete lc[id];
+    else if (lc[id].state === 'purged' && !seen.has(id)) delete lc[id];
   }
   try { localStorage.setItem('st_stormFreeze', JSON.stringify(next)); } catch (e) {}
   _saveStormLC(lc);

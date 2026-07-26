@@ -3125,7 +3125,13 @@ function _stormFreezeGate(storms) {
     // changes (fingerprint differs from when it was pinned = a new advisory), at
     // which point the hold releases and the fresh data flows back to Live.
     if (e && e.pinned) {
-      if (e.fpAtPin && fp !== e.fpAtPin) {
+      // v6.54 self-heal: an entry pinned WITHOUT a baseline fingerprint (written
+      // by v6.49, before fp was stored) could never satisfy `fp !== fpAtPin`, so
+      // it stayed suppressed FOREVER — even for a regenerated storm carrying
+      // brand-new data. Adopt the current fingerprint as the baseline so the next
+      // real advisory releases the pin.
+      if (!e.fpAtPin) e.fpAtPin = fp;
+      if (fp !== e.fpAtPin) {
         e.pinned = false; // real change → let the feed drive it again (falls through)
       } else {
         e.snap = _stormSnapshot(s); e.fp = fp; e.updatedAt = now;
@@ -3151,9 +3157,21 @@ function _stormFreezeGate(storms) {
   // tombstones exist ONLY to block feed re-adds, so once the feed no longer
   // carries that storm the tombstone has no job left — clean it up.
   for (const id in lc) {
-    if (lc[id].state === 'live' && !lc[id].pinned && !seen.has(id)) delete lc[id];
-    else if (lc[id].state === 'purged' && !seen.has(id)) delete lc[id];
+    if (lc[id].state === 'live' && !lc[id].pinned && !seen.has(id)) {
+      // v6.54: NHC issued its final advisory and dropped the system from the feed
+      // (dissipated / went post-tropical). Archive it with its LAST KNOWN fix
+      // instead of silently forgetting it — that's the 📍 Map value, and if the
+      // same system regenerates days later it keeps its ATCF ID (e.g. Paulette
+      // AL172020 returned 6 days after its final advisory), so the unpinned entry
+      // flows straight back to Live on the next poll.
+      lc[id].state = 'archived'; lc[id].reason = 'ended'; lc[id].archivedAt = now;
+    } else if (lc[id].state === 'purged' && !seen.has(id)) delete lc[id];
   }
+  // Cap archive growth over a long season: keep the 40 most recent archived
+  // entries (pinned ones are user decisions — never auto-evicted).
+  const arch = Object.keys(lc).filter(k => lc[k].state === 'archived' && !lc[k].pinned)
+    .sort((a, b) => (lc[b].archivedAt || 0) - (lc[a].archivedAt || 0));
+  for (const k of arch.slice(40)) delete lc[k];
   try { localStorage.setItem('st_stormFreeze', JSON.stringify(next)); } catch (e) {}
   _saveStormLC(lc);
   _nhcData.archivedSystems = storms.filter(s => s._frozen);

@@ -331,7 +331,8 @@ function _stormLCItemHtml(e){
   let pill,foot,actions;
   if(e.state==='archived'){
     pill='<span class="lc-pill lc-arch">🗄 Archived</span>';
-    foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+(e.reason==='stale'?' · stale feed':'');
+    const why=e.reason==='stale'?' · stale feed':e.reason==='ended'?' · dissipated (final advisory)':'';
+    foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+why;
     actions=mapBtn+`<button onclick="stormLCRestore('${e.id}')">↩ Live</button><button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
   }else{
     pill='<span class="lc-pill lc-del">🗑 Trash</span>';

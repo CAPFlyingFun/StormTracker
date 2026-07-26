@@ -306,11 +306,11 @@ function _stormLCItemHtml(e){
   if(e.state==='live'){
     pill='<span class="lc-pill lc-live">● Live</span>';
     foot='Updated '+_notifRelTime(e.updatedAt||Date.now());
-    actions='';
+    actions=`<button onclick="stormLCArchive('${e.id}')">🗄 Archive</button>`;
   }else if(e.state==='archived'){
     pill='<span class="lc-pill lc-arch">🗄 Archived</span>';
     foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+(e.reason==='stale'?' · stale feed':'');
-    actions=`<button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
+    actions=`<button onclick="stormLCRestore('${e.id}')">↩ Live</button><button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
   }else{
     pill='<span class="lc-pill lc-del">🗑 Trash</span>';
     const ttl=(typeof _STORM_DELETE_TTL==='number')?_STORM_DELETE_TTL:3600000;

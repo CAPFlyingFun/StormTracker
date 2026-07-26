@@ -3109,29 +3109,37 @@ function _stormFreezeGate(storms) {
     const frozenMs = now - since;
     const asOfMs = (typeof s._asOf === 'number') ? now - s._asOf : -1;
     const frozen = frozenMs >= _STORM_FREEZE_MS || asOfMs >= _STORM_FREEZE_MS;
-    // A user-Deleted storm stays in Trash (don't resurrect it into Live/Archived).
-    const userDeleted = lc[id] && lc[id].state === 'deleted';
+    const e = lc[id];
+    // Respect an explicit USER hold (manual Archive/Delete) — the storm stays in
+    // that bucket AND off the live cards/ticker — until its data MATERIALLY
+    // changes (fingerprint differs from when it was pinned = a new advisory), at
+    // which point the hold releases and the fresh data flows back to Live.
+    if (e && e.pinned) {
+      if (e.fpAtPin && fp !== e.fpAtPin) {
+        e.pinned = false; // real change → let the feed drive it again (falls through)
+      } else {
+        e.snap = _stormSnapshot(s); e.fp = fp; e.updatedAt = now;
+        if (frozen) { s._frozen = true; s._frozenSince = since; }
+        continue; // archived/deleted → NOT added to active
+      }
+    }
     if (frozen) {
       s._frozen = true;
       s._frozenSince = since;
       archived++;
-      if (!userDeleted) {
-        const wasArchived = lc[id] && lc[id].state === 'archived';
-        lc[id] = { id, state: 'archived', reason: 'stale', snap: _stormSnapshot(s), since, archivedAt: wasArchived ? lc[id].archivedAt : now, updatedAt: now };
-      }
+      const wasArchived = e && e.state === 'archived';
+      lc[id] = { id, state: 'archived', reason: 'stale', snap: _stormSnapshot(s), fp, since, archivedAt: wasArchived ? e.archivedAt : now, updatedAt: now };
       // Frozen storms are NOT pushed to `active` → they leave the live cards/ticker.
     } else {
       active.push(s);
-      if (!userDeleted) {
-        lc[id] = { id, state: 'live', reason: '', snap: _stormSnapshot(s), since, updatedAt: now };
-      }
+      lc[id] = { id, state: 'live', reason: '', snap: _stormSnapshot(s), fp, since, updatedAt: now };
     }
   }
-  // Prune 'live' lifecycle entries not seen this run — the storm dissipated / NHC
-  // dropped it before it ever froze. Archived + Deleted entries persist (that's
-  // the point: keep the label/history even after the feed drops the storm).
+  // Prune non-pinned 'live' entries not seen this run — the storm dissipated / NHC
+  // dropped it before it ever froze. Archived + Deleted + any pinned entry persist
+  // (keep the label/history even after the feed drops the storm).
   for (const id in lc) {
-    if (lc[id].state === 'live' && !seen.has(id)) delete lc[id];
+    if (lc[id].state === 'live' && !lc[id].pinned && !seen.has(id)) delete lc[id];
   }
   try { localStorage.setItem('st_stormFreeze', JSON.stringify(next)); } catch (e) {}
   _saveStormLC(lc);
@@ -3142,21 +3150,35 @@ function _stormFreezeGate(storms) {
   return active;
 }
 // Lifecycle actions invoked from the 📢 panel (defined here so the store lives in
-// one place; the panel UI in core.js calls these by name).
+// one place; the panel UI in core.js calls these by name). A manual Archive/Delete
+// PINS the storm — it holds that state (and stays off the live cards) until the
+// feed reports materially changed data, so a user dismissal actually sticks.
 function stormLCDelete(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
   lc[id].state = 'deleted'; lc[id].deletedAt = Date.now();
+  lc[id].pinned = true; lc[id].fpAtPin = lc[id].fp || '';
   _saveStormLC(lc);
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
+  if (typeof renderStorms === 'function') renderStorms();
 }
 function stormLCArchive(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
-  lc[id].state = 'archived'; lc[id].reason = 'manual'; delete lc[id].deletedAt;
+  const wasStale = lc[id].reason === 'stale' && lc[id].state === 'archived';
+  lc[id].state = 'archived'; lc[id].reason = wasStale ? 'stale' : 'manual'; delete lc[id].deletedAt;
+  lc[id].pinned = true; lc[id].fpAtPin = lc[id].fp || '';
   if (!lc[id].archivedAt) lc[id].archivedAt = Date.now();
   _saveStormLC(lc);
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
+  if (typeof renderStorms === 'function') renderStorms();
 }
-if (typeof window !== 'undefined') { window.stormLCDelete = stormLCDelete; window.stormLCArchive = stormLCArchive; }
+function stormLCRestore(id) {
+  const lc = _loadStormLC(); if (!lc[id]) return;
+  lc[id].pinned = false; lc[id].state = 'live'; lc[id].reason = ''; delete lc[id].deletedAt;
+  _saveStormLC(lc);
+  if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
+  if (typeof renderStorms === 'function') renderStorms();
+}
+if (typeof window !== 'undefined') { window.stormLCDelete = stormLCDelete; window.stormLCArchive = stormLCArchive; window.stormLCRestore = stormLCRestore; }
 function _tropicalStatusLabel(storm) {
   const w = storm._tropAlerts || { watches: [], warnings: [] };
   const inCone = storm._inCone;

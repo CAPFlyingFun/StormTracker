@@ -244,7 +244,7 @@ function _notifRelTime(ts){
 // lifecycle store in storms.js). Frozen storms land in Archived with a label
 // instead of vanishing; Trash self-empties after 1 h with an Archive rescue.
 let _notifTab='alerts';
-let _stormLCTab='live';
+let _stormLCTab='archived';
 function setNotifTab(t){_notifTab=t;_renderNotifPanel();}
 function setStormLCTab(t){_stormLCTab=t;_renderNotifPanel();}
 function _refreshNotifPanelIfOpen(){const o=document.getElementById('notif-overlay');if(o&&o.style.display==='block')_renderNotifPanel();}
@@ -269,8 +269,11 @@ function _renderNotifPanel(){
   if(typeof _loadStormLC==='function'){const lc=_loadStormLC();if(_stormLCPurge(lc))_saveStormLC(lc);}
   const alertN=_loadNotifLog().length;
   const c=_stormLCCounts();
+  // v6.52: the bell's hurricane tab is the ARCHIVE (Archived + Trash) — live
+  // systems are the Weather tab's job, so the count here excludes them.
+  const hurrN=c.arch+c.del;
   const tab=(t,label,active)=>`<button class="notif-tab${active?' active':''}" onclick="setNotifTab('${t}')">${label}</button>`;
-  let html=`<div class="notif-tabs">${tab('alerts','📢 Alerts'+(alertN?' ('+alertN+')':''),_notifTab==='alerts')}${tab('storms','🌀 Storms'+(c.total?' ('+c.total+')':''),_notifTab==='storms')}</div>`;
+  let html=`<div class="notif-tabs">${tab('alerts','📢 Alerts'+(alertN?' ('+alertN+')':''),_notifTab==='alerts')}${tab('storms','🌀 Hurricanes'+(hurrN?' ('+hurrN+')':''),_notifTab==='storms')}</div>`;
   html+=(_notifTab==='storms')?_renderNotifStorms(c):_renderNotifAlerts();
   body.innerHTML=html;
 }
@@ -289,20 +292,33 @@ function _renderNotifAlerts(){
     </div>`).join('');
 }
 function _renderNotifStorms(c){
+  // v6.52: no Live list here — live hurricanes/typhoons already have a full home
+  // on the Weather tab (Tropical Cyclones cards). The bell keeps only what that
+  // section can't show: Archived (stale/dismissed) and Trash. A link row hands
+  // off to the Weather tab section for the live view.
+  if(_stormLCTab!=='archived'&&_stormLCTab!=='deleted')_stormLCTab='archived';
+  const liveTxt=c.live?`<span class="lc-pill lc-live">● ${c.live} Live</span> active system${c.live===1?'':'s'}`:'<span style="color:var(--text-muted)">No active systems</span>';
+  let html=`<div class="lc-live-link" onclick="stormLCGoLive()"><span>${liveTxt}</span><span class="lc-live-go">Weather tab ↗</span></div>`;
   const sub=(t,label,n,active)=>`<button class="notif-subtab${active?' active':''}" onclick="setStormLCTab('${t}')">${label}<span class="notif-subcount">${n}</span></button>`;
-  let html=`<div class="notif-subtabs">${sub('live','Live',c.live,_stormLCTab==='live')}${sub('archived','Archived',c.arch,_stormLCTab==='archived')}${sub('deleted','Trash',c.del,_stormLCTab==='deleted')}</div>`;
+  html+=`<div class="notif-subtabs">${sub('archived','🗄 Archived',c.arch,_stormLCTab==='archived')}${sub('deleted','🗑 Trash',c.del,_stormLCTab==='deleted')}</div>`;
   const lc=(typeof _loadStormLC==='function')?_loadStormLC():{};
   const items=Object.keys(lc).map(id=>lc[id]).filter(e=>e.state===_stormLCTab)
     .sort((a,b)=>(b.deletedAt||b.archivedAt||b.updatedAt||0)-(a.deletedAt||a.archivedAt||a.updatedAt||0));
   if(!items.length){
     const empty={
-      live:'🌀 No live storms right now.',
-      archived:'🗄️ Nothing archived.<br>Storms whose feed repeats unchanged for 12 h land here automatically.',
-      deleted:'🗑 Trash is empty.<br>Deleted storms clear themselves after 1 hour.'
+      archived:'🗄️ Nothing archived.<br>Hurricanes whose feed repeats unchanged for 12 h land here automatically — or archive one from its card on the Weather tab.',
+      deleted:'🗑 Trash is empty.<br>Deleted hurricanes clear themselves after 1 hour.'
     }[_stormLCTab];
-    return html+`<div style="text-align:center;color:var(--text-muted);padding:38px 20px;font-size:0.85em;line-height:1.6">${empty}</div>`;
+    return html+`<div style="text-align:center;color:var(--text-muted);padding:34px 20px;font-size:0.85em;line-height:1.6">${empty}</div>`;
   }
   return html+items.map(_stormLCItemHtml).join('');
+}
+// Hand off to the live view: close the bell, switch to Weather, scroll to the
+// Tropical Cyclones section.
+function stormLCGoLive(){
+  toggleNotifPanel(false);
+  if(typeof switchPage==='function')switchPage('weather');
+  setTimeout(()=>{const el=document.getElementById('wx-tropical-section');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})},350);
 }
 function _stormLCItemHtml(e){
   const s=e.snap||{};
@@ -313,11 +329,7 @@ function _stormLCItemHtml(e){
   const detail=bits.length?' <span style="color:var(--text-muted);font-size:0.85em">'+escHtml(bits.join(' · '))+'</span>':'';
   const mapBtn=(s.lat!=null&&s.lon!=null)?`<button class="lc-map-btn" onclick="stormLCShowOnMap('${e.id}')">📍 Map</button>`:'';
   let pill,foot,actions;
-  if(e.state==='live'){
-    pill='<span class="lc-pill lc-live">● Live</span>';
-    foot='Updated '+_notifRelTime(e.updatedAt||Date.now());
-    actions=mapBtn+`<button onclick="stormLCArchive('${e.id}')">🗄 Archive</button>`;
-  }else if(e.state==='archived'){
+  if(e.state==='archived'){
     pill='<span class="lc-pill lc-arch">🗄 Archived</span>';
     foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+(e.reason==='stale'?' · stale feed':'');
     actions=mapBtn+`<button onclick="stormLCRestore('${e.id}')">↩ Live</button><button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;

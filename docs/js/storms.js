@@ -3153,13 +3153,21 @@ function _stormFreezeGate(storms) {
 // one place; the panel UI in core.js calls these by name). A manual Archive/Delete
 // PINS the storm — it holds that state (and stays off the live cards) until the
 // feed reports materially changed data, so a user dismissal actually sticks.
+// v6.52: archive/delete take effect IMMEDIATELY — drop the storm from the
+// in-memory live list and re-render the Weather tab's Tropical Cyclones
+// section, instead of waiting for the next 15-min tropical poll.
+function _stormLCDropLive(id) {
+  if (_nhcData.systems) _nhcData.systems = _nhcData.systems.filter(s => String(s.id || s.name) !== id);
+  if (typeof _updateTropicalUI === 'function') _updateTropicalUI();
+}
 function stormLCDelete(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
   lc[id].state = 'deleted'; lc[id].deletedAt = Date.now();
   lc[id].pinned = true; lc[id].fpAtPin = lc[id].fp || '';
   _saveStormLC(lc);
+  _stormLCDropLive(id);
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
-  if (typeof renderStorms === 'function') renderStorms();
+  if (typeof _updateNotifBadge === 'function') _updateNotifBadge();
 }
 function stormLCArchive(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
@@ -3168,15 +3176,23 @@ function stormLCArchive(id) {
   lc[id].pinned = true; lc[id].fpAtPin = lc[id].fp || '';
   if (!lc[id].archivedAt) lc[id].archivedAt = Date.now();
   _saveStormLC(lc);
+  _stormLCDropLive(id);
+  if (typeof toast === 'function') toast('🗄 ' + ((lc[id].snap && lc[id].snap.name) || 'Storm') + ' archived — returns automatically on new data');
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
-  if (typeof renderStorms === 'function') renderStorms();
+  if (typeof _updateNotifBadge === 'function') _updateNotifBadge();
 }
 function stormLCRestore(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
   lc[id].pinned = false; lc[id].state = 'live'; lc[id].reason = ''; delete lc[id].deletedAt;
   _saveStormLC(lc);
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
-  if (typeof renderStorms === 'function') renderStorms();
+  // Force a fresh tropical fetch (bypass the 15-min cache) so the restored
+  // storm reappears now, not at the next poll.
+  _nhcData._lastFetch = 0;
+  Promise.resolve(fetchNHCData()).then(() => {
+    if (typeof _updateTropicalUI === 'function') _updateTropicalUI();
+    if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
+  }).catch(() => {});
 }
 if (typeof window !== 'undefined') { window.stormLCDelete = stormLCDelete; window.stormLCArchive = stormLCArchive; window.stormLCRestore = stormLCRestore; }
 function _tropicalStatusLabel(storm) {
@@ -3445,6 +3461,7 @@ function _renderTropicalSection() {
         <div style="text-align:right;font-size:0.75em">
           <div class="c-muted">${distStr}</div>
           <div class="c-muted-85">${bearing}</div>
+          <button onclick="event.stopPropagation();stormLCArchive('${safeId}')" title="Archive this system — hidden until its data changes" style="margin-top:4px;background:rgba(148,163,184,0.08);border:1px solid var(--border-subtle);border-radius:6px;color:var(--text-muted);font-size:0.8em;padding:2px 8px;cursor:pointer">🗄</button>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px">

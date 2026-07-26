@@ -3197,6 +3197,7 @@ function stormLCDelete(id) {
   lc[id].pinned = true; lc[id].fpAtPin = lc[id].fp || '';
   _saveStormLC(lc);
   _stormLCDropLive(id);
+  if (typeof syncPushAlerts === 'function') syncPushAlerts(); // silence background push too
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
   if (typeof _updateNotifBadge === 'function') _updateNotifBadge();
 }
@@ -3208,6 +3209,7 @@ function stormLCArchive(id) {
   if (!lc[id].archivedAt) lc[id].archivedAt = Date.now();
   _saveStormLC(lc);
   _stormLCDropLive(id);
+  if (typeof syncPushAlerts === 'function') syncPushAlerts(); // silence background push too
   if (typeof toast === 'function') toast('🗄 ' + ((lc[id].snap && lc[id].snap.name) || 'Storm') + ' archived — returns automatically on new data');
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
   if (typeof _updateNotifBadge === 'function') _updateNotifBadge();
@@ -3216,6 +3218,7 @@ function stormLCRestore(id) {
   const lc = _loadStormLC(); if (!lc[id]) return;
   lc[id].pinned = false; lc[id].state = 'live'; lc[id].reason = ''; delete lc[id].deletedAt;
   _saveStormLC(lc);
+  if (typeof syncPushAlerts === 'function') syncPushAlerts(); // un-mute background push
   if (typeof _refreshNotifPanelIfOpen === 'function') _refreshNotifPanelIfOpen();
   // Force a fresh tropical fetch (bypass the 15-min cache) so the restored
   // storm reappears now, not at the next poll.

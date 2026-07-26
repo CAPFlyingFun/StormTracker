@@ -122,6 +122,17 @@ function _nwsCfg(th) {
 }
 function _tropOn(th) { const t = th && th.tropical; return t === false ? false : ((t && typeof t === 'object') ? t.on !== false : true); }
 function _tropEveryH(th) { const t = th && th.tropical; return (t && typeof t === 'object' && parseInt(t.everyH, 10) > 0) ? parseInt(t.everyH, 10) : 6; }
+// v6.55: storms the user archived/deleted/purged in the 📢 panel. Sent with the
+// push config so the background scanner stops pushing a system the user has
+// explicitly dismissed — previously the archive was in-app only, so a deleted
+// storm kept firing phone notifications (the scanner runs server-side and never
+// saw the decision). Re-sent on every config sync, so it stays current.
+function _mutedStormIds() {
+  try {
+    const lc = JSON.parse(localStorage.getItem('st_stormLifecycle') || '{}') || {};
+    return Object.keys(lc).filter(id => { const st = lc[id] && lc[id].state; return st === 'archived' || st === 'deleted' || st === 'purged'; }).slice(0, 60);
+  } catch (e) { return []; }
+}
 // Awareness toggle (strong storms nearby but NOT heading at you). Mirrors
 // areaCfgOf() in scanner/scan.js: absent/legacy => ON, `false` => off, `{on}` obj.
 function _areaCfg(th) {
@@ -390,7 +401,7 @@ async function enablePushAlerts(silent, opts) {
         wx: _pushWxCfg(), units: _pushUnits(),
         nws: (() => { const c = _nwsCfg(th); return c.on ? { on: true, warnMin: c.warnMin, watchMin: c.watchMin, advMin: c.advMin } : false; })(),
         bands: _pushBands(),
-        tropical: { on: _tropOn(th), radius: _pushTropRadius(), everyH: _tropEveryH(th) },
+        tropical: { on: _tropOn(th), radius: _pushTropRadius(), everyH: _tropEveryH(th), muted: _mutedStormIds() },
         area: { on: _areaCfg(th).on },
         ai: _aiCfg(th).on ? { on: true, tone: _aiTone(), provider: _pushAiProvider(), key: _getPushAiKey() || undefined } : false,
         changes: _changesCfg(th).on ? { on: true } : false,

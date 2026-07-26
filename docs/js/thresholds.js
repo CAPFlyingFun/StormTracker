@@ -71,6 +71,20 @@ function checkWeatherThresholds(){
   checkRainAlert();
   checkRainOverheadAlert();
 }
+// v6.55: how alerts are delivered on THIS device.
+//   'both'  — 📢 in-app log + device/phone notification (default, unchanged)
+//   'inapp' — 📢 log only; nothing pops on the device
+//   'push'  — device notification only (still logged so history stays complete)
+// Note this governs alerts raised BY THE APP while it's running. Background
+// pushes from the server scanner are controlled separately in Push settings —
+// turn those off there if you want silence when the app is closed.
+function _notifChannel(){try{const v=localStorage.getItem('st_notifChannel');return(v==='inapp'||v==='push')?v:'both'}catch(e){return'both'}}
+function setNotifChannel(v){
+  try{localStorage.setItem('st_notifChannel',(v==='inapp'||v==='push')?v:'both')}catch(e){}
+  if(typeof renderWxAlertSettings==='function'){const el=document.getElementById('wx-alert-settings');if(el)el.innerHTML=renderWxAlertSettings();}
+  if(typeof toast==='function')toast(v==='inapp'?'📢 Alerts: in-app only':v==='push'?'🔔 Alerts: device only':'✅ Alerts: in-app + device');
+}
+if(typeof window!=='undefined'){window.setNotifChannel=setNotifChannel;window._notifChannel=_notifChannel;}
 function _sendBrowserNotification(title,body,logBody){
   // v5.96: record EVERY alert in the 📢 Notifications log first — before the
   // permission/visibility guards below — so the history captures alerts whether
@@ -78,7 +92,12 @@ function _sendBrowserNotification(title,body,logBody){
   // etc.). Every real weather/storm/hurricane/lightning alert routes through here.
   // v5.97: `body` is the SHORT text the phone/browser shows (which truncates);
   // the optional `logBody` is the FULL detailed version stored in the 📢 panel.
+  // v6.55: delivery channel — 'both' (default) · 'inapp' (📢 log only, no
+  // device notification) · 'push' (device only, still logged for history).
+  // Always log: the 📢 history is useful in every mode, including push-only.
+  const _ch=(typeof _notifChannel==='function')?_notifChannel():'both';
   if(typeof logNotification==='function')logNotification(logBody||body);
+  if(_ch==='inapp')return; // in-app only — skip the device notification
   if(!('Notification' in window))return;
   if(Notification.permission!=='granted')return;
   if(document.visibilityState==='visible')return;
@@ -98,6 +117,14 @@ function requestNotifPermission(){
 function renderWxAlertSettings(){
   const th=_loadWxThresholds();
   let html='';
+  // v6.55: delivery channel for in-app-raised alerts.
+  const _c=_notifChannel();
+  const _cb=(v,label)=>`<button onclick="setNotifChannel('${v}')" style="flex:1;font-size:0.62em;font-weight:600;padding:4px 2px;border-radius:6px;cursor:pointer;border:1px solid ${_c===v?'var(--accent-cyan)':'var(--border-subtle)'};background:${_c===v?'rgba(0,229,255,0.14)':'var(--bg-surface)'};color:${_c===v?'var(--accent-cyan)':'var(--text-muted)'}">${label}</button>`;
+  html+=`<div style="margin-bottom:8px">
+    <div style="font-size:0.66em;color:var(--text-muted);margin-bottom:4px">Deliver alerts to</div>
+    <div style="display:flex;gap:4px">${_cb('both','📢+🔔 Both')}${_cb('inapp','📢 In-app only')}${_cb('push','🔔 Device only')}</div>
+    <div style="font-size:0.58em;color:var(--text-muted);margin-top:3px;line-height:1.4">Applies to alerts raised while the app is open. Everything is still saved to the 📢 log. Background pushes (app closed) are set in Push settings.</div>
+  </div>`;
   _WX_ALERT_DEFS.forEach(def=>{
     const cfg=th[def.key]||{on:def.defOn,val:def.defVal};
     const step=def.step||1;

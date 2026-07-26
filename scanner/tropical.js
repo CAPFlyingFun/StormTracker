@@ -12,6 +12,29 @@ import { haversine, bearingDeg, degToDir } from './detect.js';
 const ARC = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
 const Q = 'where=1%3D1&outFields=*&f=geojson&resultRecordCount=500';
 
+// v6.55: STALE-FEED GUARD (server-side parity with the in-app freeze gate in
+// docs/js/storms.js). NHC's Active_Hurricanes layer and GDACS's iscurrent flag
+// can both keep serving a system for hours-to-days after the final advisory —
+// so the scanner happily kept pushing "🌀 Hurricane X — 300 mi to the SW" for a
+// storm that no longer exists. Any system whose own advisory timestamp is
+// STALE_MS old is dropped here, before it can reach a push. A live system gets
+// a new advisory at least every ~6 h, so 12 h without one is a dead feed.
+const STALE_MS = 12 * 3600000;
+// Find a plausible advisory epoch among a feature's numeric props, whatever the
+// layer calls its date field (DTG / SYNOPTIME / LASTUPDATE / esri date…). Same
+// heuristic the client uses in _fetchNHCGIS.
+function _validTime(props) {
+  const lo = Date.now() - 90 * 86400000, hi = Date.now() + 3 * 86400000;
+  for (const k in props) {
+    const v = props[k];
+    if (typeof v === 'number' && v > 1e11 && v > lo && v < hi) return v;
+  }
+  return null;
+}
+function _isStale(ts) {
+  return ts != null && (Date.now() - ts) >= STALE_MS;
+}
+
 function saffir(windMph) {
   if (!windMph) return 'Tropical system';
   if (windMph >= 157) return 'Cat 5';
@@ -67,6 +90,10 @@ function _parseGdacsMin(data) {
     const name = rawName ? rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase() : ('TC-' + id);
     const sev = p.severitydata || {};
     const maxWind = sev.severity ? Math.round(sev.severity * 0.621371) : null; // km/h → mph
+    // GDACS keeps iscurrent=true well past a storm's death; use its own
+    // to/todate stamp to drop systems that stopped updating (see STALE_MS).
+    const gts = Date.parse(p.todate || p.todate || p.datemodified || '');
+    if (_isStale(isNaN(gts) ? null : gts)) continue;
     out.push({ eventid: id, name, lat: ev.lat, lon: ev.lon, cone: ev.cone, maxWind });
   }
   return out;
@@ -114,6 +141,10 @@ async function fetchTropical() {
       const maxWind = windKt ? Math.round(windKt * 1.15078) : null;
       const type = p.STORMTYPE || (maxWind >= 74 ? 'Hurricane' : maxWind >= 39 ? 'Tropical Storm' : 'Tropical Depression');
       const cone = cones.find(c => (id && c.id === id) || (c.name && c.name === name.toLowerCase()));
+      // Drop a system whose last advisory is >=12 h old — NHC has stopped
+      // updating it (final advisory / dissipated) and it must not push.
+      const ts = _validTime(p);
+      if (_isStale(ts)) { console.log(`[tropical] skip stale NHC system ${name} (${id}) — last advisory ${Math.round((Date.now() - ts) / 3600000)} h ago`); continue; }
       systems.push({ id, name, type, maxWind, lat: coords[1], lon: coords[0], cone: cone ? cone.ring : null });
     }
   }
@@ -142,10 +173,15 @@ async function fetchTropical() {
 // For one location, return the tropical systems within radius or inside the cone.
 // Each item: { ck, urgency, msg } — ck encodes the state so a track->cone
 // escalation re-notifies even within the dedupe window.
-function evalTropical(systems, lat, lon, radius) {
+// `muted` (optional) is the subscriber's list of storm ids they archived or
+// deleted in-app — an explicit "stop telling me about this one", honoured here
+// so a user dismissal silences background push too, not just the in-app view.
+function evalTropical(systems, lat, lon, radius, muted) {
+  const mutedSet = (Array.isArray(muted) && muted.length) ? new Set(muted.map(String)) : null;
   const out = [];
   for (const s of systems) {
     if (s.lat == null || s.lon == null) continue;
+    if (mutedSet && (mutedSet.has(String(s.id)) || mutedSet.has(String(s.name)))) continue;
     const dist = haversine(lat, lon, s.lat, s.lon);
     const inCone = s.cone && s.cone.length >= 3 ? pointInRing(lon, lat, s.cone) : false;
     const near = dist <= radius;

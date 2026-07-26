@@ -132,7 +132,7 @@ function nwsCfgOf(th) {
 function tropCfgOf(th) {
   const t = th && th.tropical;
   if (t === false) return { on: false };
-  if (t && typeof t === 'object') return { on: t.on !== false, radius: num(t.radius, 0) || 200, everyH: num(t.everyH, TROP_DEF_H) };
+  if (t && typeof t === 'object') return { on: t.on !== false, radius: num(t.radius, 0) || 200, everyH: num(t.everyH, TROP_DEF_H), muted: Array.isArray(t.muted) ? t.muted : [] };
   return { on: true, radius: 200, everyH: TROP_DEF_H };
 }
 // Awareness alert config: strong storms NEARBY but not heading at the user
@@ -864,7 +864,7 @@ async function run() {
       const tropCfg = tropCfgOf(sub.thresholds);
       if (tropCfg.on && tropical.length) {
         const baseTropMs = tropCfg.everyH * 3600000;
-        for (const t of evalTropical(tropical, sub.lat, sub.lon, tropCfg.radius)) {
+        for (const t of evalTropical(tropical, sub.lat, sub.lon, tropCfg.radius, tropCfg.muted)) {
           // Step up frequency for the most serious systems (you're in the cone):
           // halve the base cadence, floored at 3h.
           const cd = t.urgency === 'high' ? Math.min(baseTropMs, 3 * 3600000) : baseTropMs;

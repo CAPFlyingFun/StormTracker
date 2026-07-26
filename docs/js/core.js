@@ -248,6 +248,15 @@ let _stormLCTab='live';
 function setNotifTab(t){_notifTab=t;_renderNotifPanel();}
 function setStormLCTab(t){_stormLCTab=t;_renderNotifPanel();}
 function _refreshNotifPanelIfOpen(){const o=document.getElementById('notif-overlay');if(o&&o.style.display==='block')_renderNotifPanel();}
+// v6.51: jump the radar map to a lifecycle storm's last known point. Works for
+// Live (current fix) and Archived/Trash (last snapshot before the feed froze).
+function stormLCShowOnMap(id){
+  const lc=(typeof _loadStormLC==='function')?_loadStormLC():{};
+  const e=lc[id]; const s=e&&e.snap;
+  if(!s||s.lat==null||s.lon==null){if(typeof toast==='function')toast('📍 No location on record for this storm');return;}
+  if(typeof toggleNotifPanel==='function')toggleNotifPanel(false);
+  if(typeof flyToStorm==='function')flyToStorm(s.lat,s.lon);
+}
 function _stormLCCounts(){
   if(typeof _loadStormLC!=='function')return{live:0,arch:0,del:0,total:0};
   const lc=_loadStormLC();let live=0,arch=0,del=0;
@@ -302,21 +311,22 @@ function _stormLCItemHtml(e){
   if(s.maxWind!=null)bits.push(s.maxWind+' mph');
   if(s.minPressure!=null)bits.push(s.minPressure+' mb');
   const detail=bits.length?' <span style="color:var(--text-muted);font-size:0.85em">'+escHtml(bits.join(' · '))+'</span>':'';
+  const mapBtn=(s.lat!=null&&s.lon!=null)?`<button class="lc-map-btn" onclick="stormLCShowOnMap('${e.id}')">📍 Map</button>`:'';
   let pill,foot,actions;
   if(e.state==='live'){
     pill='<span class="lc-pill lc-live">● Live</span>';
     foot='Updated '+_notifRelTime(e.updatedAt||Date.now());
-    actions=`<button onclick="stormLCArchive('${e.id}')">🗄 Archive</button>`;
+    actions=mapBtn+`<button onclick="stormLCArchive('${e.id}')">🗄 Archive</button>`;
   }else if(e.state==='archived'){
     pill='<span class="lc-pill lc-arch">🗄 Archived</span>';
     foot='Archived '+_notifRelTime(e.archivedAt||e.updatedAt||Date.now())+(e.reason==='stale'?' · stale feed':'');
-    actions=`<button onclick="stormLCRestore('${e.id}')">↩ Live</button><button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
+    actions=mapBtn+`<button onclick="stormLCRestore('${e.id}')">↩ Live</button><button onclick="stormLCDelete('${e.id}')">🗑 Delete</button>`;
   }else{
     pill='<span class="lc-pill lc-del">🗑 Trash</span>';
     const ttl=(typeof _STORM_DELETE_TTL==='number')?_STORM_DELETE_TTL:3600000;
     const mins=Math.max(0,Math.ceil((ttl-(Date.now()-(e.deletedAt||0)))/60000));
     foot='Auto-deletes in ~'+mins+'m';
-    actions=`<button onclick="stormLCArchive('${e.id}')">🗄 Archive instead</button>`;
+    actions=mapBtn+`<button onclick="stormLCArchive('${e.id}')">🗄 Archive instead</button>`;
   }
   return `<div class="notif-item">
       <div class="notif-item-msg"><span style="font-weight:700">${name}</span>${detail} ${pill}</div>

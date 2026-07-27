@@ -409,7 +409,7 @@ function _heroBandFromZone(zone){
   // 5-24 dBZ echo drifting within 1.5 mi lit the hero "Light rain · LIVE RADAR"
   // while the Rain Clock (25 dBZ floor) correctly said "not raining, nearest rain
   // 3 mi away." Now both agree: sub-25 echo is not "rain over you."
-  const _floor=(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:25;
+  const _floor=(typeof getRainFloorDbz==='function')?getRainFloorDbz():25;   // v6.56: USER rain floor — was fixed 25, so lowering the setting revived the dial but never this hero line
   if(dbz<_floor)return null;
   return Object.assign({},dbzColor(dbz),{maxDbz:dbz});
 }
@@ -3016,7 +3016,13 @@ function renderRainForecastBars(){
     // (and the NWS forecast) still showed it. This chart is a multi-day FORECAST,
     // separate from the Rain Clock's 0-3 h radar nowcast, so it shows all forecast
     // precip; the Rain Clock keeps its own 25 dBZ nowcast floor.
-    const mm=h.precipitation[idx]||0;
+    let mm=h.precipitation[idx]||0;
+    // v6.56: filter below the USER rain floor (st_rainFloorDbz, default 25) so
+    // this chart, the Rain Clock rings and the hero line all honor the SAME
+    // setting. v5.83 had removed the old FIXED 25 floor entirely, which left
+    // this the one rain surface the setting couldn't reach. Lower the setting
+    // to 5 to see all forecast precip again.
+    if(mm>0&&typeof _precipMmToDbz==='function'&&typeof getRainFloorDbz==='function'&&_precipMmToDbz(mm)<getRainFloorDbz())mm=0;
     slots.push({t:new Date(h.time[idx]).getTime(),mm});
   }
   // v4.69: this 36-hour chart is now FULLY INDEPENDENT of the Rain Clock. It

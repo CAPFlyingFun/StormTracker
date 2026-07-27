@@ -1204,13 +1204,11 @@ function flyToStorm(lat,lng){
     }
   },300);
 }
+// v6.56: the 3-branch clutter predicate moved to radar-shared.js
+// (isClutterCells) so the scanner applies the IDENTICAL screen — it had none,
+// which is how a clutter scan became a false "rain now" push.
 function isClutterOnly(){
-  if(!S.storms||!S.storms.length)return false;
-  const sig=S.storms.filter(s=>s.dbz>=31);
-  if(sig.length>0)return false;
-  const low=S.storms.filter(s=>s.dbz<22);
-  if(low.length===S.storms.length&&S.storms.length<=12)return true;
-  return S.storms.length<=8;
+  return (typeof isClutterCells==='function')&&isClutterCells(S.storms);
 }
 function getVisibleStormList(){
   if(!S.storms||!S.storms.length)return[];
@@ -2174,7 +2172,8 @@ function autoActivateZones(){
 // filled the hex to the north. Now it is a direct proximity test on the raw scan
 // points: max dBZ among echoes within OVERHEAD_MI. Rain in the 1.5–6mi band is
 // "nearby" (surfaced as the Rain Clock's "Nearest Precipitation" line), not overhead.
-const OVERHEAD_MI=1.5;   // ≤ this from your spot counts as "over you"
+// v6.56: OVERHEAD_MI (1.5) now DECLARED in radar-shared.js so the scanner
+// samples the identical "over you" radius (its dbzAtPoint used 2 mi).
 function dbzAtLocation(lat,lon){
   const pts=S._rawScanPts;
   if(!pts||!pts.length||lat==null||lon==null)return null;

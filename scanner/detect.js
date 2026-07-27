@@ -28,7 +28,12 @@ export const rvToDbz = shared.rvToDbz;
 
 // Scanner-only helpers (not part of the shared radar module).
 export const isUSLocation = (lat, lon) => lat >= 24 && lat <= 50 && lon >= -125 && lon <= -66;
-export const STORM_MIN_DBZ = 15;
+// v6.56: shared — was a stale hardcoded 15 while the client raised the
+// app-wide floor to 25 in v5.54. One value, one file (radar-shared.js).
+export const STORM_MIN_DBZ = shared.STORM_MIN_DBZ;
+export const OVERHEAD_MI = shared.OVERHEAD_MI;
+export const MOTION_MIN_MPH = shared.MOTION_MIN_MPH;
+export const isClutterCells = shared.isClutterCells;
 
 // ---------------------------------------------------------------------------
 // Tile fetch + decode (Node replacement for scanTileForPoints)
@@ -262,7 +267,7 @@ export function calcETA(storm, mv) {
 // noisy, so a small neighborhood matches the app's hex-bin-over-user reading.
 // Returns 0 when nothing is overhead (or on any fetch/decode failure).
 // ---------------------------------------------------------------------------
-export async function dbzAtPoint(lat, lon, sampleRadiusMi = 2) {
+export async function dbzAtPoint(lat, lon, sampleRadiusMi = shared.OVERHEAD_MI) {   // v6.56: 1.5 mi (client parity) — 2 mi let an echo two miles away read as "on your spot"
   const origin = { lat, lon };
   const useNexrad = isUSLocation(lat, lon);
   const zoom = useNexrad ? 11 : 8;

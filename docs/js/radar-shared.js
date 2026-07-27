@@ -172,6 +172,35 @@ function rvToDbz(r,g,b,a){
   return Math.min(75,raw);
 }
 
+// ---------------------------------------------------------------------------
+// v6.56 shared thresholds — single source of truth for numbers BOTH the client
+// and the scanner must agree on. These previously lived (and drifted) in
+// per-side copies: the scanner's scan floor was still 15 after the client
+// moved to 25 in v5.54, and the scanner sampled "overhead" at 2 mi while the
+// client used 1.5 — together one cause of the false "rain now" push.
+// ---------------------------------------------------------------------------
+// App-wide rain/scan floor (dBZ). Rain DISPLAYS use the user setting
+// getRainFloorDbz() (core.js), which defaults to this.
+const STORM_MIN_DBZ=25;
+// "Over you" radius (mi): a live echo within this of the user's spot counts as
+// overhead — the same 1.5 the X-TRK direct tier and overhead poll use.
+const OVERHEAD_MI=1.5;
+// Below this storm speed (mph) motion is UNCERTAIN — never project ETAs or
+// pass-durations from it. Same bar as the client's "motion uncertain" wording
+// (storms.js mv.speed>=2). A 1-2 mph vector once stretched a clutter blob into
+// "rain now, ends in an hour".
+const MOTION_MIN_MPH=2;
+// Clutter screen, 3 branches — the client's isClutterOnly (radar.js) hoisted
+// here verbatim so the scanner can reject the same clutter scans the app hides.
+function isClutterCells(cells){
+  if(!cells||!cells.length)return false;
+  const sig=cells.filter(s=>s.dbz>=31);
+  if(sig.length>0)return false;
+  const low=cells.filter(s=>s.dbz<22);
+  if(low.length===cells.length&&cells.length<=12)return true;
+  return cells.length<=8;
+}
+
 // Guarded CommonJS export — no-op in the browser (module is undefined), so the
 // file stays a valid global-scope script. Node (scanner/detect.js via
 // createRequire) picks up every shared symbol here.
@@ -181,6 +210,7 @@ if (typeof module !== 'undefined' && module.exports) {
     lonToTileX, latToTileY,
     DBZ_SCALE, pixelToDbz,
     NEXRAD_PAL, nexradToDbz,
-    RV_UB, rvToDbz
+    RV_UB, rvToDbz,
+    STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells
   };
 }

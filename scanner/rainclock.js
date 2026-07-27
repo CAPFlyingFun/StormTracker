@@ -18,10 +18,18 @@
 // the scanner doesn't fetch hourly precip and a push should never invent
 // forecast rain when radar shows nothing.
 
-// 3-hour default horizon, radar-noise floor (== STORM_MIN_DBZ), and the dynamic
-// span buckets — verbatim from the app so a cell lands at the same dial minute.
+// v6.56: shared constants come from the ONE source of truth the client also
+// loads (radar-shared.js) — no more per-side drifted copies.
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const { STORM_MIN_DBZ, MOTION_MIN_MPH } = _require('../docs/js/radar-shared.js');
+
+// 3-hour default horizon + dynamic span buckets — verbatim from the app so a
+// cell lands at the same dial minute. The rain FLOOR is no longer a local
+// constant: buildRainClock takes the user's rainFloor (from the subscription)
+// and falls back to the shared STORM_MIN_DBZ (25). The old hardcoded 15 sat in
+// noise/clutter territory and could claim "rain now" on a dry morning.
 const RC_TOTAL_MIN = 180;
-const RC_MIN_DBZ = 15;
 const RC_SPAN_BUCKETS = [60, 120, 180, 240, 360, 480, 720];
 
 // Intensity-scaled cell radius (mi): clamp((dbz-20)/15, 0.2, 3). Mirrors the
@@ -97,14 +105,21 @@ function relPhrase(m) {
 // Returns: { ready, windows:[{startMin,endMin,peakDbz,lightning}], rainingNow,
 //            nowDbz, peakDbz, anySevere, span, motionUnknown }
 // ---------------------------------------------------------------------------
-export function buildRainClock({ cells = [], mv = null, overheadDbz = null, nowMs = Date.now(), radarAgeMin = 0 } = {}) {
+export function buildRainClock({ cells = [], mv = null, overheadDbz = null, nowMs = Date.now(), radarAgeMin = 0, rainFloor = null } = {}) {
   const out = {
     ready: false, windows: [], rainingNow: false, nowDbz: 0,
     peakDbz: 0, anySevere: false, span: RC_TOTAL_MIN, motionUnknown: true,
   };
 
+  // v6.56: the floor for the "rain now" claim AND window continuity is the
+  // user's rain-floor setting (5-40), defaulting to the shared app floor (25).
+  const FLOOR = (typeof rainFloor === 'number' && rainFloor >= 5 && rainFloor <= 40) ? rainFloor : STORM_MIN_DBZ;
+
   let vx = 0, vy = 0, haveMv = false;
-  if (mv && mv.speed > 1 && mv.direction != null) {
+  // v6.56: below MOTION_MIN_MPH (2, shared) motion is UNCERTAIN — the old >1
+  // gate accepted 1-2 mph vectors whose diameter/speed pass-time stretched a
+  // weak echo into an hour-long "rain now, ends HH:MM" window.
+  if (mv && mv.speed >= MOTION_MIN_MPH && mv.direction != null) {
     const th = mv.direction * Math.PI / 180;
     vx = mv.speed * Math.sin(th);
     vy = mv.speed * Math.cos(th);
@@ -129,7 +144,7 @@ export function buildRainClock({ cells = [], mv = null, overheadDbz = null, nowM
     if (centerMin < 0) centerMin = 0;
     if (centerMin > span) centerMin = span;
     const baseR = rcCellRadiusMi(c.dbz);
-    const spd = vMag > 0.1 ? vMag : ((c.closingSpeed && c.closingSpeed > 0) ? c.closingSpeed : 0);
+    const spd = vMag > 0.1 ? vMag : ((c.closingSpeed && c.closingSpeed >= MOTION_MIN_MPH) ? c.closingSpeed : 0);   // v6.56: sub-2 mph closing = uncertain -> 6-min fallback
     const passMin = spd > 0.1 ? Math.max(2, (2 * baseR) / spd * 60) : 6;
     let tIn, tOut;
     if (centerMin <= 0) { tIn = 0; tOut = Math.min(span, Math.max(1, Math.ceil(passMin))); }
@@ -140,7 +155,7 @@ export function buildRainClock({ cells = [], mv = null, overheadDbz = null, nowM
   }
 
   // Rain right over the user now anchors a cell + window at minute 0.
-  const nowDbz = (overheadDbz != null && overheadDbz >= RC_MIN_DBZ) ? Math.round(overheadDbz) : 0;
+  const nowDbz = (overheadDbz != null && overheadDbz >= FLOOR) ? Math.round(overheadDbz) : 0;
   out.rainingNow = nowDbz > 0;
   out.nowDbz = nowDbz;
   if (nowDbz > 0) {
@@ -156,7 +171,7 @@ export function buildRainClock({ cells = [], mv = null, overheadDbz = null, nowM
   let cur = null;
   for (let t = 0; t <= span; t++) {
     const v = minutes[t];
-    if (v >= RC_MIN_DBZ) { if (!cur) cur = { startMin: t, endMin: t, peakDbz: v }; else { cur.endMin = t; if (v > cur.peakDbz) cur.peakDbz = v; } }
+    if (v >= FLOOR) { if (!cur) cur = { startMin: t, endMin: t, peakDbz: v }; else { cur.endMin = t; if (v > cur.peakDbz) cur.peakDbz = v; } }
     else if (cur) { windows.push(cur); cur = null; }
   }
   if (cur) windows.push(cur);

@@ -761,7 +761,8 @@ const APPROACHING_TIER_KEYS=['direct','near_direct'];
 // with the cards instead of using a stricter, separate cutoff. (Earlier
 // v4.63/v4.64 set this to 20 and pushed the cards up to match the Rain Clock,
 // which hid inbound cards — reverted here.)
-const STORM_MIN_DBZ=25;   // v5.54: raised 15->25 — shared rain floor (radar scan + Rain Clock). Rain below 25 dBZ is filtered from the Rain Clock, forecast ring and 36h graph. Storm/alert 'Min strength' (getConeMinDbz, 40) is separate and unchanged.
+// v6.56: STORM_MIN_DBZ is now DECLARED in radar-shared.js (loads first) so the
+// scanner reads the identical value — its copy had drifted to 15. Still 25.
 if(typeof window!=='undefined'){window.STORM_MIN_DBZ=STORM_MIN_DBZ}
 // v5.85: user-configurable RAIN FLOOR — the single "what counts as rain" number
 // for the rain DISPLAYS (Rain Clock radar + forecast rings, nearest-precipitation

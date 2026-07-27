@@ -401,6 +401,7 @@ async function enablePushAlerts(silent, opts) {
         wx: _pushWxCfg(), units: _pushUnits(),
         nws: (() => { const c = _nwsCfg(th); return c.on ? { on: true, warnMin: c.warnMin, watchMin: c.watchMin, advMin: c.advMin } : false; })(),
         bands: _pushBands(),
+        rainFloor: (typeof getRainFloorDbz === 'function') ? getRainFloorDbz() : undefined,   // v6.56: rain-floor display setting -> scanner Rain Clock
         tropical: { on: _tropOn(th), radius: _pushTropRadius(), everyH: _tropEveryH(th), muted: _mutedStormIds() },
         area: { on: _areaCfg(th).on },
         ai: _aiCfg(th).on ? { on: true, tone: _aiTone(), provider: _pushAiProvider(), key: _getPushAiKey() || undefined } : false,

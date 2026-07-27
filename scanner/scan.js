@@ -29,6 +29,7 @@ import {
 import { fetchConditions, evalWx, fetchNws, nwsIcon, nwsWindow } from './alerts.js';
 import { fetchTropical, evalTropical } from './tropical.js';
 import { buildRainClock, formatRainClockPush, rainClockSignature, rainClockKeys } from './rainclock.js';
+import { isClutterCells } from './detect.js';   // v6.56: same clutter screen the app applies
 
 const WORKER_URL = (process.env.WORKER_URL || '').replace(/\/$/, '');
 const SCANNER_SECRET = process.env.SCANNER_SECRET || '';
@@ -344,6 +345,9 @@ function thresholdsFor(sub) {
     impact: num(t.impact, DEF.impact),
     dist: num(t.dist, DEF.dist),
     radius: Math.min(80, num(t.radius, DEF.radius)),
+    // v6.56: the user's rain-floor DISPLAY setting (st_rainFloorDbz) now rides
+    // the subscription; the Rain Clock push honors it instead of a hardcoded 15.
+    rainFloor: Math.max(5, Math.min(40, num(t.rainFloor, 25))),
   };
 }
 
@@ -622,6 +626,10 @@ async function run() {
     try {
       const scan = await scanLocation(o.lat, o.lon, radius);
       cells = scan.cells || [];
+      // v6.56: clutter screen (shared 3-branch predicate — parity with the
+      // app's isClutterOnly). A scan of nothing but weak scattered echoes is
+      // ground clutter/AP, not rain; it must not feed alerts or the rain clock.
+      if (isClutterCells(cells)) { console.log(`  clutter-only scan (${cells.length} weak echoes) — suppressed`); cells = []; }
       mv = scan.mv || null;
       console.log(`[${key}] ${scan.source}: ${cells.length} cells (raw ${scan.rawCount || 0}), steering ${mv ? mv.speed + 'mph@' + mv.direction : 'n/a'}`);
     } catch (e) { groupDegraded = true; console.warn(`  radar ${key} failed: ${e.message}`); }
@@ -809,6 +817,7 @@ async function run() {
         const rcData = buildRainClock({
           cells: rcHits.map(c => ({ dbz: c.dbz, etaMin: c.etaMin, distance: c.distance, bearing: c.bearing, closingSpeed: c.closingSpeed })),
           mv, overheadDbz: rovDbz, nowMs: now,
+          rainFloor: th.rainFloor,   // v6.56: user's rain floor, from the subscription
         });
         if (rcData.ready) {
           const phrase = formatRainClockPush(rcData, { tz, h24, nowMs: now });

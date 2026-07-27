@@ -83,7 +83,7 @@ function _getPushEndpoint() { try { return localStorage.getItem('st_pushEndpoint
 function _setPushEndpoint(ep) { try { if (ep) localStorage.setItem('st_pushEndpoint', String(ep)); } catch (e) {} }
 function _getPushThresholds() {
   try { const s = JSON.parse(localStorage.getItem('st_pushThresholds') || 'null'); if (s) return s; } catch (e) {}
-  return { dbz: 40, impact: 50, radius: 60, nws: true };
+  return { impact: 50, radius: 60, nws: true };   // v6.57 (QW8): dbz removed — getConeMinDbz() is the ONE home of that value
 }
 function _savePushThresholds(t) { try { localStorage.setItem('st_pushThresholds', JSON.stringify(t)); } catch (e) {} }
 
@@ -397,7 +397,7 @@ async function enablePushAlerts(silent, opts) {
       subscription: sub.toJSON(),
       lat: loc.lat, lon: loc.lon, name: loc.name,
       thresholds: {
-        dbz: (typeof getConeMinDbz === 'function') ? getConeMinDbz() : th.dbz, impact: th.impact, dist: th.radius, radius: th.radius,
+        dbz: (typeof getConeMinDbz === 'function') ? getConeMinDbz() : 40, impact: th.impact, radius: th.radius,   // v6.57 (QW8): dist collapsed into radius; th.dbz fallback removed
         wx: _pushWxCfg(), units: _pushUnits(),
         nws: (() => { const c = _nwsCfg(th); return c.on ? { on: true, warnMin: c.warnMin, watchMin: c.watchMin, advMin: c.advMin } : false; })(),
         bands: _pushBands(),
@@ -652,7 +652,7 @@ function renderPushAlertSettings() {
     </div>`;
   // Shared min-strength dBZ — one number drives background push, the storm-track
   // cone floor and the in-app storm-cell intensity gate (getConeMinDbz()).
-  const _smd = (typeof getConeMinDbz === 'function') ? getConeMinDbz() : (th.dbz || 40);
+  const _smd = (typeof getConeMinDbz === 'function') ? getConeMinDbz() : 40;   // v6.57 (QW8)
   const controls = `
     <div class="setting-row-6"><span class="text-xxs-muted">Min strength (dBZ)</span>
       <select class="small-btn" onchange="setPushThreshold('dbz',this.value)">

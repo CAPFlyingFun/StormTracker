@@ -486,9 +486,8 @@ function blendSources(sources){
 }
 async function fetchNWSCurrent(){
   try{
-    const ptRes=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{...NWS_HDR,signal:AbortSignal.timeout(6000)});
-    if(!ptRes.ok)return null;
-    const pt=await ptRes.json();
+    const pt={properties:await getNwsPointProps(6000).catch(()=>null)};   // v6.57 (QW1): memoized /points
+    if(!pt.properties)return null;
     const stUrl=pt.properties?.observationStations;
     if(!stUrl)return null;
     const stRes=await fetch(stUrl,{...NWS_HDR,signal:AbortSignal.timeout(6000)});
@@ -513,9 +512,8 @@ async function fetchNWSCurrent(){
   }catch(e){return null}
 }
 async function _nwsForecastOnce(ptTimeout,fcTimeout){
-  const ptRes=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{...NWS_HDR,signal:AbortSignal.timeout(ptTimeout)});
-  if(!ptRes.ok)return null;
-  const pt=await ptRes.json();
+  const pt={properties:await getNwsPointProps(ptTimeout).catch(()=>null)};   // v6.57 (QW1): memoized /points
+  if(!pt.properties)return null;
   const fcUrl=pt.properties?.forecast;
   if(!fcUrl)return null;
   const fcRes=await fetch(fcUrl,{...NWS_HDR,signal:AbortSignal.timeout(fcTimeout)});
@@ -567,9 +565,8 @@ function _parseNwsValidTime(vt){
   return{startMs,hours};
 }
 async function _nwsQpfOnce(ptTimeout,fcTimeout){
-  const ptRes=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{...NWS_HDR,signal:AbortSignal.timeout(ptTimeout)});
-  if(!ptRes.ok)return null;
-  const pt=await ptRes.json();
+  const pt={properties:await getNwsPointProps(ptTimeout).catch(()=>null)};   // v6.57 (QW1): memoized /points
+  if(!pt.properties)return null;
   const gridUrl=pt.properties?.forecastGridData;
   if(!gridUrl)return null;
   const gRes=await fetch(gridUrl,{...NWS_HDR,signal:AbortSignal.timeout(fcTimeout)});
@@ -1389,6 +1386,7 @@ function startWindSim(){
   _windLerpTo=_pickWindTarget();
   _windLerpT0=Date.now();
   _windRefreshTimer=setInterval(async()=>{
+    if(document.hidden)return;   // v6.57 (QW5): no AWC refetch while backgrounded
     try{
       const awc=await fetchAWCNearest();
       if(awc&&awc.windKmh!=null){
@@ -1406,11 +1404,13 @@ function startWindSim(){
   },120000);
   _WIND_LERP_DUR=_getSimInterval();
   S._windPickTimer=setInterval(()=>{
+    if(document.hidden)return;   // v6.57 (QW5)
     _windLerpFrom={spd:_windCurSim.spd,dir:_windCurSim.dir};
     _windLerpTo=_pickWindTarget();
     _windLerpT0=Date.now();
   },_WIND_LERP_DUR);
   _windSimTimer=setInterval(()=>{
+    if(document.hidden)return;   // v6.57 (QW5): freeze the 100-ms sim while backgrounded
     const now=Date.now();
     const elapsed=now-_windLerpT0;
     const p=Math.min(1,elapsed/_WIND_LERP_DUR);

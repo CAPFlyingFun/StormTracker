@@ -688,12 +688,8 @@ async function fetchAFD(){
   const cache=S._afdCache;
   if(cache&&(Date.now()-cache.ts<60*60000)){S._afd=cache.data;return;}
   try{
-    const ptRes=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{
-      headers:{'User-Agent':'StormTracker/2.30 (weather analysis)','Accept':'application/geo+json'},
-      signal:AbortSignal.timeout(6000)
-    });
-    if(!ptRes.ok){S._afd=null;return;}
-    const ptData=await ptRes.json();
+    const ptData={properties:await getNwsPointProps(6000).catch(()=>null)};   // v6.57 (QW1): memoized /points
+    if(!ptData.properties){S._afd=null;return;}
     const office=ptData.properties?.cwa;
     if(!office){S._afd=null;return;}
     const prodRes=await fetch(`https://api.weather.gov/products/types/AFD/locations/${office}`,{

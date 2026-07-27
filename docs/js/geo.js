@@ -455,7 +455,6 @@ function showLocationConfirm(forceDialog){
   if(document.querySelector('.confirm-overlay'))return;
   if(!forceDialog&&(S.lat&&S.lon||_locConfirmShown)){_doGPSLocate();return}
   _locConfirmShown=true;
-  localStorage.setItem('st_locAsked','1');
   const overlay=document.createElement('div');
   overlay.className='confirm-overlay';
   overlay.innerHTML=`<div class="confirm-box">
@@ -615,7 +614,7 @@ function showHdScanDialog(){
     S.station=null;S.stationId=null;S._stationSource=null;S.stormMovement=null;S._windCache=null;S._aloftData=null;
     S._locReqId=(S._locReqId||0)+1; // HD target is a real location change: invalidate any in-flight winds-aloft gate
     S.radarSource=isUSLocation(lat,lon)?'nexrad':'rainviewer';
-    S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();S._topStorms=[];S._topStormAnalysis={inbound:[],overhead:[],nearby:[],allWithEta:[]};S._rawScanPts=[];S._sonarClusteredPts=[];S._sonarTotalSwept=0;S._sonarSweepAngle=0;S._approachData=null;S._arrowCells=[];clearStormZones();
+    S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();S._topStorms=[];S._topStormAnalysis={inbound:[],overhead:[],nearby:[],allWithEta:[]};S._rawScanPts=[];S._sonarClusteredPts=[];S._sonarTotalSwept=0;S._sonarSweepAngle=0;S._approachData=null;S._arrowCells=[];S._airportDataCache=null;clearStormZones();   // v6.57 (QW9): stale-city airport list cleared on location change
     try{localStorage.setItem('st_loc',JSON.stringify({lat,lon,name}))}catch(e){}
     if(S._userMarker)S._userMarker.setLatLng([lat,lon]);
     if(S._rangeCircle)S._rangeCircle.setLatLng([lat,lon]);
@@ -666,7 +665,7 @@ function setLoc(lat,lon,name,opts){
     S.stormMarkers.forEach(m=>{try{S.map.removeLayer(m)}catch(e){}});S.stormMarkers=[];
     clearStormCone();
   }
-  S.storms=[];S._topStorms=[];S._topStormAnalysis={inbound:[],overhead:[],nearby:[],allWithEta:[]};S._rawScanPts=[];S._sonarClusteredPts=[];S._sonarTotalSwept=0;S._sonarSweepAngle=0;S._approachData=null;S._arrowCells=[];clearStormZones();
+  S.storms=[];S._topStorms=[];S._topStormAnalysis={inbound:[],overhead:[],nearby:[],allWithEta:[]};S._rawScanPts=[];S._sonarClusteredPts=[];S._sonarTotalSwept=0;S._sonarSweepAngle=0;S._approachData=null;S._arrowCells=[];S._airportDataCache=null;clearStormZones();   // v6.57 (QW9): stale-city airport list cleared on location change
   const _tickerBar=document.getElementById('threat-ticker');if(_tickerBar)_tickerBar.style.display='none';
   const _locChanged=S._prevLat!=null&&(Math.abs(S._prevLat-lat)>0.01||Math.abs(S._prevLon-lon)>0.01);
   S._prevLat=lat;S._prevLon=lon;
@@ -693,7 +692,7 @@ function setLoc(lat,lon,name,opts){
   S._locReqId=(S._locReqId||0)+1;
   const _reqId=S._locReqId;
   document.getElementById('status-text').textContent=(fromTravel?'🧭 Travel Mode · ':'Live · ')+S.locName;
-  fetchAlerts();
+  fetchAlerts(true);
   const _refreshDone=(async()=>{
     await fetchWeather();
     if(_reqId!==S._locReqId)return;
@@ -909,7 +908,7 @@ function scheduleAutoRefresh(){
     S._nextRefreshAt=Date.now()+ms;
     startScanRefreshTimer();
     fetchWeather();
-    fetchAlerts();fetchHazards();
+    fetchAlerts(true);fetchHazards();
     fetchTerrainGrid();
     scanRadarForStorms();
   },ms);

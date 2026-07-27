@@ -784,6 +784,29 @@ if(typeof window!=='undefined'){window.getRainFloorDbz=getRainFloorDbz}
 // value regardless of whether the in-app notification toggle itself is on,
 // since the cone floor is a display gate.
 const CONE_MIN_DBZ_DEFAULT=40;
+// v6.57 (QW1): ONE memoized NWS /points lookup. Boot previously fired 4-6
+// IDENTICAL fetches of api.weather.gov/points/<lat>,<lon> from five call
+// sites (current conditions, forecast, QPF, AFD office, station lookup).
+// 1-h TTL per rounded location + in-flight dedupe so concurrent callers
+// share a single request. Returns the .properties object or throws.
+let _nwsPtCache={key:'',ts:0,props:null,inflight:null};
+async function getNwsPointProps(timeoutMs){
+  const key=S.lat.toFixed(4)+','+S.lon.toFixed(4);
+  const now=Date.now();
+  if(_nwsPtCache.key===key&&_nwsPtCache.props&&(now-_nwsPtCache.ts)<3600000)return _nwsPtCache.props;
+  if(_nwsPtCache.key===key&&_nwsPtCache.inflight)return _nwsPtCache.inflight;
+  const hdr=(typeof NWS_HDR!=='undefined')?NWS_HDR:{headers:{'User-Agent':'StormTracker/1.50'}};
+  const p=(async()=>{
+    const r=await fetch('https://api.weather.gov/points/'+key,{...hdr,signal:AbortSignal.timeout(timeoutMs||6000)});
+    if(!r.ok)throw new Error('points '+r.status);
+    const j=await r.json();
+    _nwsPtCache={key,ts:Date.now(),props:j.properties||{},inflight:null};
+    return _nwsPtCache.props;
+  })();
+  _nwsPtCache={key,ts:0,props:null,inflight:p};
+  try{return await p}catch(e){if(_nwsPtCache.inflight===p)_nwsPtCache={key:'',ts:0,props:null,inflight:null};throw e}
+}
+if(typeof window!=='undefined'){window.getNwsPointProps=getNwsPointProps}
 function getConeMinDbz(){
   try{
     const s=localStorage.getItem('st_stormThresholds');
@@ -1057,7 +1080,7 @@ function switchPage(page){
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
     S.activePage=page;
     if(page==='radar'&&S.lat&&S.map){
-      setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes(true)},200);
+      setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes()},200);   // v6.57 (QW4): unforced on tab switch — the scan path refreshes anyway; force burns paid quota
     }
     if(page==='3d'){_ensure3DLoaded();}else{if(typeof deactivate3DView==='function')deactivate3DView();}
     if(_curLang!=='en'){setTimeout(()=>quickTranslate(),200);setTimeout(()=>quickTranslate(),800)}
@@ -1067,7 +1090,7 @@ function switchPage(page){
   document.querySelectorAll('.section-page').forEach(p=>{p.classList.toggle('visible',p.id==='page-'+page)});
   S.activePage=page;
   if(page==='radar'&&S.lat){
-    if(S.map){setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes(true)},150);if(S._nextRefreshAt)startScanRefreshTimer()}
+    if(S.map){setTimeout(()=>{S.map.invalidateSize();if(S._showZones&&S._rawScanPts.length)buildStormZones(S.map,S._rawScanPts);if(S._showPathArrows)buildPathArrows(S.map);if(typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof refreshLightningStrikes==="function")refreshLightningStrikes()},150);if(S._nextRefreshAt)startScanRefreshTimer()}   // v6.57 (QW4): lightning unforced on tab switch
     else{initRadar()}
   }
   if(page==='weather'){startSonarSweep();if(typeof refreshRainClock==='function')refreshRainClock(true)}else{stopSonarSweep()}

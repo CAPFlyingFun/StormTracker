@@ -74,12 +74,7 @@ const WX_DEFS = [
 
 // Great-circle distance in miles (units irrelevant — only used to pick the
 // nearest METAR station).
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 3958.8, toR = Math.PI / 180;
-  const dLat = (lat2 - lat1) * toR, dLon = (lon2 - lon1) * toR;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toR) * Math.cos(lat2 * toR) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
+import { haversine } from './detect.js';   // v6.57 (QW6): was a local duplicate of the shared implementation (radar-shared.js)
 
 // Nearest NWS station latest observation (US only; null elsewhere or on error).
 // Mirrors fetchNWSCurrent() in docs/js/weather.js. NWS returns SI units already

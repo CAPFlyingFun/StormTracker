@@ -343,7 +343,10 @@ function thresholdsFor(sub) {
   return {
     dbz: num(t.dbz, DEF.dbz),
     impact: num(t.impact, DEF.impact),
-    dist: num(t.dist, DEF.dist),
+    // v6.57 (QW8): dist collapsed into radius. Current clients send them equal
+    // (push.js); legacy D1 rows with a distinct smaller dist keep the stricter
+    // of the two so nobody's alerts silently widen.
+    dist: Math.min(num(t.dist, num(t.radius, DEF.radius)), Math.min(80, num(t.radius, DEF.radius))),
     radius: Math.min(80, num(t.radius, DEF.radius)),
     // v6.56: the user's rain-floor DISPLAY setting (st_rainFloorDbz) now rides
     // the subscription; the Rain Clock push honors it instead of a hardcoded 15.

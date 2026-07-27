@@ -144,11 +144,12 @@ function initRadar(){
       setTimeout(()=>toggleMping(),1500);
     }
     try{
-      const rv=await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json());
-      S.radarFrames=(rv.radar?.past||[]).concat(rv.radar?.nowcast||[]);
-      if(S.radarFrames.length){
-        const last=S.radarFrames[S.radarFrames.length-1];
-        S._rvTilePath=last.path;
+      // v6.57 (QW2): read through the 60-s catalog cache (seeded by the boot
+      // speed test) instead of a fresh uncached download on every map open.
+      const rvf=await _fetchRvScanFrames(false);
+      if(rvf&&rvf.frames&&rvf.frames.length){
+        S.radarFrames=rvf.frames;
+        if(rvf.tilePath)S._rvTilePath=rvf.tilePath;
       }
     }catch(e){}
     showRadarLayer(map);
@@ -533,9 +534,8 @@ async function toggleAirportMarkers(map){
     let nwsOk=false;
     try{
       if(!isNWSCoverage(S.lat,S.lon)){console.log('[non-US] Skipped: NWS airport lookup — using AWC/global');throw new Error('non-US')}
-      const r=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{...NWS_HDR,signal:AbortSignal.timeout(5000)});
-      if(r.ok){
-        const pt=await r.json();
+      const pt={properties:await getNwsPointProps(5000).catch(()=>null)};   // v6.57 (QW1): memoized /points
+      if(pt.properties){
         const stUrl=pt.properties?.observationStations;
         if(stUrl){
           const sr=await fetch(stUrl,{...NWS_HDR,signal:AbortSignal.timeout(5000)});

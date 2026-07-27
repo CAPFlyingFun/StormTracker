@@ -105,8 +105,14 @@ function fmtAlertTime(d){
   const day=days[d.getDay()];const mon=months[d.getMonth()];const date=d.getDate();
   return`${day} ${mon} ${date}, ${fmtClockShort(d)}`;
 }
-async function fetchAlerts(){
+let _alertsTtl={ts:0,key:''};
+async function fetchAlerts(force){
   const reqId=S._locReqId;
+  // v6.57 (QW3): 5-min/locKey TTL (same pattern as fetchHazards) — tab switches
+  // re-render from S.alerts instead of re-hitting api.weather.gov every time.
+  const _now=Date.now(),_akey=(S.lat||0).toFixed(2)+','+(S.lon||0).toFixed(2);
+  if(!force&&Array.isArray(S.alerts)&&_alertsTtl.key===_akey&&(_now-_alertsTtl.ts)<300000){renderAlerts();return}
+  _alertsTtl={ts:_now,key:_akey};
   const el=document.getElementById('page-alerts');showSkel(el,3);
   if(!isNWSCoverage(S.lat,S.lon)){console.log('[non-US] Skipped: NWS alerts, SPC data, NWS warnings');S.alerts=[];if(reqId===S._locReqId)renderAlerts();return}
   try{

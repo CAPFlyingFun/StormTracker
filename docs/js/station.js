@@ -40,9 +40,8 @@ async function fetchStation(){
   try{
     if(!isNWSCoverage(S.lat,S.lon)){console.log('[non-US] Skipped: NWS station lookup — falling back to AWC/global');throw new Error('NWS_INTL')}
     console.log('Tier 1: NWS — trying api.weather.gov/points for',S.lat.toFixed(4),S.lon.toFixed(4));
-    const ptRes=await fetch(`https://api.weather.gov/points/${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{...NWS_HDR,signal:AbortSignal.timeout(6000)});
-    if(!ptRes.ok)throw new Error('NWS_INTL');
-    const ptData=await ptRes.json();
+    const ptData={properties:await getNwsPointProps(6000).catch(()=>null)};   // v6.57 (QW1): memoized /points
+    if(!ptData.properties)throw new Error('NWS_INTL');
     const stationsUrl=ptData.properties?.observationStations;
     if(!stationsUrl)throw new Error('No observation stations URL');
     const stRes=await fetch(stationsUrl,{...NWS_HDR,signal:AbortSignal.timeout(6000)});

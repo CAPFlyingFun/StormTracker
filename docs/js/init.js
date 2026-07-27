@@ -182,7 +182,16 @@ async function _runConnectionSpeedTest(){
     const r=await fetch('https://api.rainviewer.com/public/weather-maps.json',{signal:ctrl.signal,cache:'no-store'});
     clearTimeout(to);
     if(!r.ok)throw new Error('HTTP '+r.status);
-    await r.text();
+    const _rvTxt=await r.text();
+    // v6.57 (QW2): this download used to be timing-only and thrown away — while
+    // radar paths re-fetched the SAME catalog seconds later. Seed the shared
+    // 60-s cache (_rvScanFramesCache, radar.js) so the byte cost buys data too.
+    try{
+      const rv=JSON.parse(_rvTxt);
+      const fr=(rv.radar?.past||[]).concat(rv.radar?.nowcast||[]);
+      const tp=fr.length?fr[fr.length-1].path:null;
+      if(tp&&typeof _rvScanFramesCache!=='undefined')_rvScanFramesCache={ts:Date.now(),frames:fr,tilePath:tp};
+    }catch(e){}
     const ms=Math.round(performance.now()-t0);
     S._netRttMs=ms;
     S._netSpeed=ms<500?'fast':ms<1500?'medium':ms<4000?'slow':'verySlow';

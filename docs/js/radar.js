@@ -2801,7 +2801,11 @@ function buildRelMotionLayers(map){
       S._relMotionLayers.push(line);
       const tip=L.circleMarker(ep,{pane,radius:4,color:col,fillColor:col,fillOpacity:opa,weight:1,interactive:false}).addTo(map);
       S._relMotionLayers.push(tip);
-      const pctStr=(sc.showPct&&b.impactScore!=null)?` ${Math.round(b.impactScore*100)}%`:'';
+      // v6.59: same closeness scale as the sonar (owner spec) — DIRECT shows
+      // 100%..50% across the shared 1.5-mi band; wider passes show real miles.
+      const _xd=(typeof XTRK_DIRECT_MI!=='undefined')?XTRK_DIRECT_MI:1.5;
+      const _dirCls=(b.classification==='direct'||b.classification==='near_direct');
+      const pctStr=sc.showPct?((_dirCls&&b.perpMissMi!=null&&b.perpMissMi<=_xd)?` ${Math.round(100-(b.perpMissMi/_xd)*50)}%`:(b.perpMissMi!=null?` ${b.perpMissMi}mi`:'')):'';
       const _rmEta=(b.etaMin!=null)?Math.round(Math.max(0,b.etaMin-radarAgeMin())):null;
       const lbl=(b.classification==='direct'||b.classification==='near_direct')?`${sc.badge}${pctStr} · ≈${b.closingMph} mph · ETA ${_rmEta}m`
                :(b.classification==='near_miss'||b.classification==='miss'||b.classification==='distant'||b.classification==='far')?`${sc.badge}${pctStr} · ≈${b.closingMph} mph`

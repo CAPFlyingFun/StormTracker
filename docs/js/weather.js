@@ -1131,7 +1131,12 @@ function drawMiniSonar(){
           ctx.moveTo(ex,ey);ctx.lineTo(ex-Math.cos(ang-0.5)*head,ey-Math.sin(ang-0.5)*head);
           ctx.moveTo(ex,ey);ctx.lineTo(ex-Math.cos(ang+0.5)*head,ey-Math.sin(ang+0.5)*head);
           ctx.strokeStyle=col;ctx.lineWidth=1.6;ctx.stroke();
-          const pctStr=(sc.showPct&&b.coneConfidence!=null)?` ${Math.round(b.coneConfidence*100)}%`:'';
+          // v6.59: the DIRECT % is CLOSENESS, not cone confidence — anchored to
+          // the shared 1.5-mi direct band (owner spec): 0mi=100%, 0.75mi=75%,
+          // 1.5mi=50%. Non-direct labels show the literal miss distance instead
+          // of an opaque sub-% ("list how close to the user").
+          const _xd=(typeof XTRK_DIRECT_MI!=='undefined')?XTRK_DIRECT_MI:1.5;
+          const pctStr=sc.showPct?((b.classification==='direct'&&b.perpMissMi!=null&&b.perpMissMi<=_xd)?` ${Math.round(100-(b.perpMissMi/_xd)*50)}%`:(b.perpMissMi!=null?` ${b.perpMissMi}mi`:'')):'';
           const lbl=b.classification==='direct'?`${sc.badge}${pctStr} ≈${b.closingMph}mph`
                    :b.classification==='near_miss'?`${sc.badge}${pctStr}`
                    :b.classification==='passing'?sc.badge:'';

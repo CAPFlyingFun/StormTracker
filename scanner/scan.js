@@ -29,7 +29,7 @@ import {
 import { fetchConditions, evalWx, fetchNws, nwsIcon, nwsWindow } from './alerts.js';
 import { fetchTropical, evalTropical } from './tropical.js';
 import { buildRainClock, formatRainClockPush, rainClockSignature, rainClockKeys } from './rainclock.js';
-import { isClutterCells } from './detect.js';   // v6.56: same clutter screen the app applies
+import { isClutterCells, ALERT_BAND_DEFS, BAND_CADENCE_OPTS, bandForDbz, XTRK_DIRECT_MI } from './detect.js';   // v6.56 clutter screen; v6.58 shared bands + X-TRK
 
 const WORKER_URL = (process.env.WORKER_URL || '').replace(/\/$/, '');
 const SCANNER_SECRET = process.env.SCANNER_SECRET || '';
@@ -166,18 +166,9 @@ function nwsCooldownMs(tier, cfg, endsIso) {
 // "rain right over you" push. When a subscription predates this feature (no
 // bands), default to ALL bands on + rovOn true so existing users keep getting
 // pushes at their old behavior.
-const BAND_DEFS = [
-  { key: 'light', label: 'Light', min: 20, max: 29, defOn: true, defMin: 10 },
-  { key: 'moderate', label: 'Moderate', min: 30, max: 44, defOn: true, defMin: 5 },
-  { key: 'heavy', label: 'Heavy', min: 45, max: 54, defOn: true, defMin: 5 },
-  { key: 'severe', label: 'Severe', min: 55, max: 9999, defOn: true, defMin: 5 },
-];
-const BAND_CADENCE_OPTS = [0, 5, 10, 15, 30, 45, 60];
-function bandForDbz(dbz) {
-  if (dbz == null || dbz < 20) return null;
-  for (const b of BAND_DEFS) if (dbz >= b.min && dbz <= b.max) return b.key;
-  return null;
-}
+// v6.58: band table + bandForDbz come from radar-shared.js via detect.js — the
+// hand-synced twin of the client's _ALERT_BAND_DEFS is gone.
+const BAND_DEFS = ALERT_BAND_DEFS;
 function bandLabel(key) { const b = BAND_DEFS.find(x => x.key === key); return b ? b.label : ''; }
 // Normalize a subscription's bands config, falling back to defaults for any
 // missing field so partial/legacy payloads behave like the in-app defaults.
@@ -720,7 +711,7 @@ async function run() {
         // still show on the radar + Storms tab (and their cones are still drawn),
         // they just don't ping. Cones stay a visual-only awareness layer.
         const hits = personal.filter(c =>
-          c.distance <= th.radius && c.approaching && c.xtrkMi <= 1.5 &&
+          c.distance <= th.radius && c.approaching && c.xtrkMi <= XTRK_DIRECT_MI &&
           c.dbz >= th.dbz && c.impactPct >= th.impact && c.distance <= th.dist &&
           (() => { const bk = bandForDbz(c.dbz); return bk && bands[bk] && bands[bk].on; })()
         );

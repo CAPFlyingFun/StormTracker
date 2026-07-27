@@ -47,9 +47,12 @@ function _showOfflineBanner(){
   const bar=document.createElement('div');
   bar.id='offline-banner';
   bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:10002;background:linear-gradient(90deg,#b45309,#92400e);color:#fbbf24;font-size:0.75em;font-weight:600;text-align:center;padding:6px 12px;display:flex;align-items:center;justify-content:center;gap:6px';
-  const lastFetch=_hazardData&&_hazardData._lastFetch?_hazardData._lastFetch:0;
+  // v6.58: honest wording — prefer the WEATHER payload's age (persisted as
+  // st_lastWeather); fall back to the hazards stamp. "showing cached data" was
+  // untrue on a cold offline launch before the payload was persisted.
+  const lastFetch=(typeof S!=='undefined'&&S._lastWeatherFetch)||(_hazardData&&_hazardData._lastFetch?_hazardData._lastFetch:0);
   const ago=lastFetch?_relativeTime(lastFetch):'';
-  bar.innerHTML=`<span>📡 Offline — showing cached data${ago?' · Last updated '+ago:''}</span>`;
+  bar.innerHTML=`<span>📡 Offline — ${lastFetch?('showing saved data'+(ago?' from '+ago:'')):'no saved data yet'}</span>`;
   document.body.appendChild(bar);
   const header=document.querySelector('.app-header');
   if(header)header.style.marginTop='30px';

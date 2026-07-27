@@ -151,10 +151,26 @@ function _buildPartialOmData(){
     _omPartial:true
   };
 }
+// v6.58: the last successful weather payload persists (st_lastWeather) so a
+// cold OFFLINE launch renders real data with an honest age instead of an error
+// screen — previously the offline banner claimed "cached data" that never
+// actually existed across a relaunch. 24-h max age; in-memory copy wins.
+function _hydrateLastWeather(){
+  if(S._lastWeatherData)return true;
+  try{
+    const c=JSON.parse(localStorage.getItem('st_lastWeather')||'null');
+    if(c&&c.data&&c.ts&&Date.now()-c.ts<86400000){
+      S._lastWeatherData=c.data;S._lastWeatherFetch=c.ts;
+      if(c.data.current)S.weather=c.data.current;
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
 async function fetchWeather(){
   const reqId=S._locReqId;
   const el=document.getElementById('page-weather');
-  if(_isOffline&&S._lastWeatherData){renderWeather(S._lastWeatherData);return}
+  if(_isOffline&&_hydrateLastWeather()){renderWeather(S._lastWeatherData);return}
   const _silentRefresh=S._lastWeatherData&&S._lastWeatherData._omPartial;
   if(!_silentRefresh)showSkel(el,6);
   if(typeof _bootStep==='function')_bootStep('wx','Fetching weather…');
@@ -282,14 +298,14 @@ async function fetchWeather(){
     if(!omData.current._nwsDesc&&_finalCC!=null){
       omData.current._nwsDesc=cloudCategory(_finalCC);
     }
-    S.weather=omData.current;S._lastWeatherFetch=Date.now();S._lastWeatherData=omData;_resetMinMax();renderWeather(omData);if(typeof updateThreatTicker==='function')updateThreatTicker();if(_curLang!=='en')setTimeout(quickTranslate,300);setTimeout(checkWeatherThresholds,500);if(typeof V3D!=='undefined'&&V3D.active&&typeof refreshSky3D==='function')refreshSky3D();
+    S.weather=omData.current;S._lastWeatherFetch=Date.now();S._lastWeatherData=omData;try{localStorage.setItem('st_lastWeather',JSON.stringify({ts:S._lastWeatherFetch,data:omData}))}catch(e){}_resetMinMax();renderWeather(omData);if(typeof updateThreatTicker==='function')updateThreatTicker();if(_curLang!=='en')setTimeout(quickTranslate,300);setTimeout(checkWeatherThresholds,500);if(typeof V3D!=='undefined'&&V3D.active&&typeof refreshSky3D==='function')refreshSky3D();
     if(typeof _bootStepDone==='function')_bootStepDone('wx',isPartial?'Weather partial (waiting on Open-Meteo)':'Weather data received');
     if(isPartial)_scheduleOMRetry(reqId,_omPath,_isUSLoc,0);
   }catch(e){
     if(reqId!==S._locReqId)return;
     if(typeof hideLoadingScreen==='function')hideLoadingScreen();
     if(typeof _bootStepFail==='function')_bootStepFail('wx','Weather fetch failed');
-    if(S._lastWeatherData){
+    if(_hydrateLastWeather()){
       renderWeather(S._lastWeatherData);
     } else {
       el.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><p>Could not load weather data.</p><button onclick="fetchWeather()" style="margin-top:8px;padding:6px 18px;border-radius:8px;background:var(--accent-blue,#3b82f6);color:#fff;border:none;cursor:pointer;font-size:0.85em">Retry</button></div>`;

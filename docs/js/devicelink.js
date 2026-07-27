@@ -20,7 +20,7 @@
   const DL_SECRET_KEYS=['st_aiKey','st_aiKeyAnthropic','st_pushAiKey','st_lightningKey','st_skylinkKey','st_syncToken','st_pushCode','st_pushFeedToken'];
   // Device-specific / transient — never sync (push subscription is bound to THIS
   // browser; caches, histories, cooldowns and one-time dismissals are noise).
-  const DL_SKIP_KEYS=['st_pushSub','st_pushEndpoint','st_installDismissed','st_locAsked','st_notifLog','st_notifSeen','st_notifPromptSeen','st_stRuns','st_tcache','st_spc_reports','st_stormAlertHistory','st_rainAlertHistory','st_wxAlertHistory','st_stormAlertCooldown','st_wxAlertCooldown','st_drizCooldown','st_rovCooldown','st_overheadPoll','st_syncLastTime','st_minDbzMerged_v533'];
+  const DL_SKIP_KEYS=['st_pushSub','st_pushEndpoint','st_installDismissed','st_locAsked','st_notifLog','st_notifSeen','st_notifPromptSeen','st_stRuns','st_tcache','st_spc_reports','st_stormAlertHistory','st_rainAlertHistory','st_wxAlertHistory','st_stormAlertCooldown','st_wxAlertCooldown','st_drizCooldown','st_rovCooldown','st_overheadPoll','st_syncLastTime','st_minDbzMerged_v533','st_pushCode','st_pushFeedToken','st_syncEmail','st_stormFreeze','st_defaults_v230e','st_lastWeather'];   // v6.58: device-bound secrets + per-device caches must not transfer
   const DL_SKIP_PREFIXES=['st_grid_'];
   function _isSecret(k){return DL_SECRET_KEYS.indexOf(k)>=0;}
   function _isSkipped(k){return DL_SKIP_KEYS.indexOf(k)>=0||DL_SKIP_PREFIXES.some(p=>k.indexOf(p)===0);}

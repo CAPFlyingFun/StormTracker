@@ -354,13 +354,11 @@ function clearStormAlertHistory(){_stormAlertHistory=[];_saveStormAlertHistory()
 // alert, which fires from the radar value on the user's exact spot even when
 // nothing is inbound. Stored in localStorage st_alertBands; rides the push
 // subscription in thresholds.bands so the background scanner matches exactly.
-const _ALERT_BAND_DEFS=[
-  {key:'light',label:'Light',range:'20–29 dBZ',color:'#3aa0ff',min:20,max:29,defOn:true,defMin:10},
-  {key:'moderate',label:'Moderate',range:'30–44 dBZ',color:'#36d96b',min:30,max:44,defOn:true,defMin:5},
-  {key:'heavy',label:'Heavy',range:'45–54 dBZ',color:'#ffb300',min:45,max:54,defOn:true,defMin:5},
-  {key:'severe',label:'Severe',range:'55+ dBZ',color:'#ff3b6b',min:55,max:9999,defOn:true,defMin:5}
-];
-const _BAND_CADENCE_OPTS=[0,5,10,15,30,45,60];
+// v6.58: band VALUES live in radar-shared.js (ALERT_BAND_DEFS) — one table for
+// app + scanner. Only the UI decoration (range text, colors) stays here.
+const _BAND_UI={light:{range:'20–29 dBZ',color:'#3aa0ff'},moderate:{range:'30–44 dBZ',color:'#36d96b'},heavy:{range:'45–54 dBZ',color:'#ffb300'},severe:{range:'55+ dBZ',color:'#ff3b6b'}};
+const _ALERT_BAND_DEFS=ALERT_BAND_DEFS.map(b=>({...b,..._BAND_UI[b.key]}));
+const _BAND_CADENCE_OPTS=BAND_CADENCE_OPTS;
 function _normAlertBands(o){
   o=o||{};
   const out={rovOn:o.rovOn!==false,rovMin:_BAND_CADENCE_OPTS.includes(o.rovMin)?o.rovMin:5,drizOn:o.drizOn===true,drizMin:_BAND_CADENCE_OPTS.includes(o.drizMin)?o.drizMin:15};
@@ -376,11 +374,7 @@ function _loadAlertBands(){
 }
 function _saveAlertBands(b){try{localStorage.setItem('st_alertBands',JSON.stringify(b))}catch(e){}}
 function bandDef(key){return _ALERT_BAND_DEFS.find(b=>b.key===key)||null}
-function bandForDbz(dbz){
-  if(dbz==null||dbz<20)return null;
-  for(const b of _ALERT_BAND_DEFS){if(dbz>=b.min&&dbz<=b.max)return b.key}
-  return null;
-}
+// v6.58: bandForDbz now provided by radar-shared.js (identical logic, one home).
 function bandEnabled(key){const b=_loadAlertBands();return!!(key&&b[key]&&b[key].on)}
 function bandCadenceMin(key){const b=_loadAlertBands();const def=bandDef(key);const c=b[key];return(c&&_BAND_CADENCE_OPTS.includes(c.min))?c.min:(def?def.defMin:5)}
 function rovCadenceMin(){const b=_loadAlertBands();return _BAND_CADENCE_OPTS.includes(b.rovMin)?b.rovMin:5}

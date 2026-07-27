@@ -201,6 +201,26 @@ function isClutterCells(cells){
   return cells.length<=8;
 }
 
+// Intensity BANDS (light/moderate/heavy/severe) — v6.58: the value-identical
+// tables in thresholds.js (_ALERT_BAND_DEFS) and scanner/scan.js (BAND_DEFS)
+// collapse to this ONE definition. The client decorates it with UI-only fields
+// (range text, colors); the scanner uses it as-is.
+const ALERT_BAND_DEFS=[
+  {key:'light',label:'Light',min:20,max:29,defOn:true,defMin:10},
+  {key:'moderate',label:'Moderate',min:30,max:44,defOn:true,defMin:5},
+  {key:'heavy',label:'Heavy',min:45,max:54,defOn:true,defMin:5},
+  {key:'severe',label:'Severe',min:55,max:9999,defOn:true,defMin:5}
+];
+const BAND_CADENCE_OPTS=[0,5,10,15,30,45,60];
+function bandForDbz(dbz){
+  if(dbz==null||dbz<20)return null;
+  for(const b of ALERT_BAND_DEFS){if(dbz>=b.min&&dbz<=b.max)return b.key}
+  return null;
+}
+// X-TRK "direct hit" half-width (mi) — core.js XTRK_TIERS' direct tier and the
+// scanner's push gate (scan.js) read this same number.
+const XTRK_DIRECT_MI=1.5;
+
 // Guarded CommonJS export — no-op in the browser (module is undefined), so the
 // file stays a valid global-scope script. Node (scanner/detect.js via
 // createRequire) picks up every shared symbol here.
@@ -211,6 +231,7 @@ if (typeof module !== 'undefined' && module.exports) {
     DBZ_SCALE, pixelToDbz,
     NEXRAD_PAL, nexradToDbz,
     RV_UB, rvToDbz,
-    STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells
+    STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells,
+    ALERT_BAND_DEFS, BAND_CADENCE_OPTS, bandForDbz, XTRK_DIRECT_MI
   };
 }

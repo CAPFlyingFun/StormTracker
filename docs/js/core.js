@@ -732,7 +732,7 @@ function perpTier(missMi){if(missMi==null||isNaN(missMi))return null;for(const t
 // possible arrival clock, no countdown · 'none' → too far/track-dependent for a
 // clock. impact = the legacy high/medium/low bucket the Alerts tab renders.
 const XTRK_TIERS=[
-  {key:'direct',    label:'DIRECT',    plain:'Direct',    word:'Direct impact', emoji:'🎯', color:'#ef4444', max:1.5,      eta:'live',  impact:'high'},
+  {key:'direct',    label:'DIRECT',    plain:'Direct',    word:'Direct impact', emoji:'🎯', color:'#ef4444', max:XTRK_DIRECT_MI, eta:'live',  impact:'high'},
   {key:'nearby',    label:'NEARBY',    plain:'Nearby',    word:'Nearby pass',   emoji:'🟠', color:'#f97316', max:6,        eta:'fixed', impact:'medium'},
   {key:'near_miss', label:'NEAR-MISS', plain:'Near-Miss', word:'Near-miss',     emoji:'🟡', color:'#eab308', max:12,       eta:'none',  impact:'low'},
   {key:'tracking',  label:'TRACKING',  plain:'Tracking',  word:'Tracking',      emoji:'🔵', color:'#3b82f6', max:48,       eta:'none',  impact:'low'},

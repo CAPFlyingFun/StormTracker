@@ -34,6 +34,10 @@ export const STORM_MIN_DBZ = shared.STORM_MIN_DBZ;
 export const OVERHEAD_MI = shared.OVERHEAD_MI;
 export const MOTION_MIN_MPH = shared.MOTION_MIN_MPH;
 export const isClutterCells = shared.isClutterCells;
+export const ALERT_BAND_DEFS = shared.ALERT_BAND_DEFS;
+export const BAND_CADENCE_OPTS = shared.BAND_CADENCE_OPTS;
+export const bandForDbz = shared.bandForDbz;
+export const XTRK_DIRECT_MI = shared.XTRK_DIRECT_MI;
 
 // ---------------------------------------------------------------------------
 // Tile fetch + decode (Node replacement for scanTileForPoints)

@@ -38,6 +38,7 @@ export const ALERT_BAND_DEFS = shared.ALERT_BAND_DEFS;
 export const BAND_CADENCE_OPTS = shared.BAND_CADENCE_OPTS;
 export const bandForDbz = shared.bandForDbz;
 export const XTRK_DIRECT_MI = shared.XTRK_DIRECT_MI;
+export const dedupeNwsAlerts = shared.dedupeNwsAlerts;
 
 // ---------------------------------------------------------------------------
 // Tile fetch + decode (Node replacement for scanTileForPoints)

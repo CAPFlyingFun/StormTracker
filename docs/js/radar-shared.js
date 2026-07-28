@@ -221,6 +221,29 @@ function bandForDbz(dbz){
 // scanner's push gate (scan.js) read this same number.
 const XTRK_DIRECT_MI=1.5;
 
+// One entry per NWS event name. api.weather.gov/alerts/active?point= can return
+// SEVERAL products for the same event at once: consecutive-day heat warnings
+// (today's and tomorrow's are both "active" once the later one's effective time
+// has begun), or a point that falls inside two overlapping zones. To the user
+// that is one threat, so collapse to a single entry and keep whichever one runs
+// LATEST — its window then covers the whole stretch. Accepts either the
+// scanner's flat shape {event, ends} or a raw NWS GeoJSON feature
+// {properties:{event, ends|expires}}, so both consumers call it unchanged.
+function _nwsProps(a){return(a&&a.properties)||a||{}}
+function _nwsEndMs(a){const p=_nwsProps(a);const t=Date.parse(p.ends||p.expires||'');return isFinite(t)?t:-Infinity}
+function dedupeNwsAlerts(list){
+  if(!Array.isArray(list))return[];
+  if(list.length<2)return list.slice();
+  const best=new Map(),order=[];
+  for(const a of list){
+    const k=_nwsProps(a).event||'';
+    if(!k){order.push(a);continue}       // unnamed: never collapsed, kept as-is
+    if(!best.has(k)){best.set(k,a);order.push(k);continue}
+    if(_nwsEndMs(a)>_nwsEndMs(best.get(k)))best.set(k,a);
+  }
+  return order.map(o=>(typeof o==='string')?best.get(o):o);
+}
+
 // Guarded CommonJS export — no-op in the browser (module is undefined), so the
 // file stays a valid global-scope script. Node (scanner/detect.js via
 // createRequire) picks up every shared symbol here.
@@ -232,6 +255,7 @@ if (typeof module !== 'undefined' && module.exports) {
     NEXRAD_PAL, nexradToDbz,
     RV_UB, rvToDbz,
     STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells,
-    ALERT_BAND_DEFS, BAND_CADENCE_OPTS, bandForDbz, XTRK_DIRECT_MI
+    ALERT_BAND_DEFS, BAND_CADENCE_OPTS, bandForDbz, XTRK_DIRECT_MI,
+    dedupeNwsAlerts
   };
 }

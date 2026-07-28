@@ -977,8 +977,14 @@ async function run() {
             // (each valid for hours/days, lowest priority) fold them into ONE
             // names-only line so they never push the live threats off the bottom.
             const MINOR = new Set(['nws-watch', 'nws-adv']);
-            const primary = ordered.filter(i => !MINOR.has(i.cat));
-            const minor = ordered.filter(i => MINOR.has(i.cat));
+            // The headline alert is already spelled out in the title (name + end
+            // time), so leave it out of the body — otherwise the most serious
+            // alert is the one item printed twice in every digest. The "N alerts"
+            // count stays the true total.
+            const titled = (headline && headline.label) ? headline : null;
+            const rest = titled ? ordered.filter(i => i !== titled) : ordered;
+            const primary = rest.filter(i => !MINOR.has(i.cat));
+            const minor = rest.filter(i => MINOR.has(i.cat));
             const MAX_PRIMARY = 5;
             const shown = primary.slice(0, MAX_PRIMARY).map(i => i.display);
             let hidden = Math.max(0, primary.length - MAX_PRIMARY);

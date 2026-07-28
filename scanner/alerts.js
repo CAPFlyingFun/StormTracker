@@ -74,7 +74,7 @@ const WX_DEFS = [
 
 // Great-circle distance in miles (units irrelevant — only used to pick the
 // nearest METAR station).
-import { haversine } from './detect.js';   // v6.57 (QW6): was a local duplicate of the shared implementation (radar-shared.js)
+import { haversine, dedupeNwsAlerts } from './detect.js';   // v6.57 (QW6): was a local duplicate of the shared implementation (radar-shared.js)
 
 // Nearest NWS station latest observation (US only; null elsewhere or on error).
 // Mirrors fetchNWSCurrent() in docs/js/weather.js. NWS returns SI units already
@@ -236,7 +236,7 @@ async function fetchNws(lat, lon) {
   const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(12000) });
   if (!r.ok) throw new Error(`nws HTTP ${r.status}`);
   const j = await r.json();
-  return (j.features || []).map(f => {
+  const mapped = (j.features || []).map(f => {
     const p = f.properties || {};
     return {
       id: p.id || f.id,
@@ -248,6 +248,9 @@ async function fetchNws(lat, lon) {
       ends: p.ends || p.expires || null,
     };
   }).filter(a => a.id);
+  // Collapse same-event products to one (shared with the app — radar-shared.js)
+  // so a pair of consecutive-day warnings is ONE digest line, not two.
+  return dedupeNwsAlerts(mapped);
 }
 
 // Format an NWS ISO timestamp into a short human local time. When the

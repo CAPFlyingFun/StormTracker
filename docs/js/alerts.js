@@ -119,7 +119,10 @@ async function fetchAlerts(force){
     const res=await fetch(`https://api.weather.gov/alerts/active?point=${S.lat.toFixed(4)},${S.lon.toFixed(4)}`,{headers:{'User-Agent':'StormTracker/1.50'},signal:AbortSignal.timeout(8000)});
     const data=await res.json();
     if(reqId!==S._locReqId)return;
-    S.alerts=data.features||[];renderAlerts();if(_curLang!=='en')setTimeout(quickTranslate,300);
+    // v6.60: collapse same-event NWS products (consecutive-day warnings, or a
+    // point inside two overlapping zones) to one entry, keeping the latest end
+    // time. Same helper the scanner uses, so the badge/tab and the push agree.
+    S.alerts=(typeof dedupeNwsAlerts==='function')?dedupeNwsAlerts(data.features||[]):(data.features||[]);renderAlerts();if(_curLang!=='en')setTimeout(quickTranslate,300);
   }catch(e){if(reqId!==S._locReqId)return;S.alerts=[];renderAlerts()}
   if(S.alerts&&S.alerts.length)S._alertsShownOnce=false;
   if(typeof updateThreatTicker==='function')updateThreatTicker();

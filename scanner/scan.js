@@ -24,7 +24,7 @@
 
 import webpush from 'web-push';
 import {
-  scanLocation, dbzAtPoint, haversine, bearingDeg, calcImpact, calcETA, crossTrackMi, degToDir,
+  scanLocation, dbzAtPoint, haversine, bearingDeg, calcImpact, calcETA, crossTrackMi, degToDir, watchDirHint,
 } from './detect.js';
 import { fetchConditions, evalWx, fetchNws, nwsIcon, nwsWindow } from './alerts.js';
 import { fetchTropical, evalTropical } from './tropical.js';
@@ -408,7 +408,12 @@ function fmtArea(area, mv, th, tz, h24) {
   const best = area.slice().sort((a, b) => a.distance - b.distance)[0];
   const peak = area.reduce((m, c) => Math.max(m, c.dbz), 0);
   const move = `moving ${degToDir(mv.direction)} ~${Math.round(mv.speed)} mph`;
-  const body = `Strong storms ~${Math.round(best.distance)} mi to the ${dirLong(best.bearing)} (within your ${th.radius} mi range), ${move} — not heading your way, but stay aware. Peak ${peak} dBZ.`;
+  // v6.61: close with the watch direction — the reciprocal of the steering
+  // heading — so "stay aware" tells the user WHERE to look. Shared wording
+  // with the in-app Rain Clock / System Briefing via watchDirHint.
+  const _wd = watchDirHint(mv);
+  const watchStr = _wd ? ` Keep an eye to the ${_wd.from} — that's the side new development would arrive from.` : '';
+  const body = `Strong storms ~${Math.round(best.distance)} mi to the ${dirLong(best.bearing)} (within your ${th.radius} mi range), ${move} — not heading your way, but stay aware. Peak ${peak} dBZ.${watchStr}`;
   const display = `🌩️ Strong storms ${degToDir(best.bearing)} @ ${Math.round(best.distance)}mi, moving ${degToDir(mv.direction)} @ ${Math.round(mv.speed)}mph — not inbound (${peak}dBZ)`;
   // Single aggregate dedupe key from the LEAD cell's sector (45°) + distance (15mi)
   // bucket: a standing line won't re-buzz, but activity that relocates to a new

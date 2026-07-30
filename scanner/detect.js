@@ -21,6 +21,7 @@ const shared = require('../docs/js/radar-shared.js');
 export const haversine = shared.haversine;
 export const bearingDeg = shared.bearingDeg;
 export const degToDir = shared.degToDir;
+export const watchDirHint = shared.watchDirHint;
 export const lonToTileX = shared.lonToTileX;
 export const latToTileY = shared.latToTileY;
 export const nexradToDbz = shared.nexradToDbz;

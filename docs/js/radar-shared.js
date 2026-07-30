@@ -23,6 +23,27 @@ function bearingDeg(lat1,lon1,lat2,lon2){const dLon=(lon2-lon1)*Math.PI/180;cons
 function degToDir(d){const dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];return dirs[Math.round(d/22.5)%16]}
 
 // ---------------------------------------------------------------------------
+// Watch-direction hint. Given a steering movement {direction, speed} (heading
+// storms travel TOWARD, degrees / mph), the side to WATCH is the reciprocal —
+// the direction new development would arrive FROM. Shared so the in-app copy
+// (Rain Clock, System Briefing) and the push scanner say the same thing.
+// Returns null when steering is missing or too weak to trust (same 2 mph floor
+// every other steering consumer uses).
+// ---------------------------------------------------------------------------
+function watchDirHint(mv){
+  if(!mv||!(mv.speed>=2)||mv.direction==null)return null;
+  const fromDeg=(mv.direction+180)%360;
+  const from=degToDir(fromDeg);
+  const toward=degToDir(mv.direction);
+  const spd=Math.round(mv.speed);
+  return {
+    fromDeg, from, toward, speed:spd,
+    text:`Keep an eye to the ${from} — storms are steering ${toward} (${Math.round(mv.direction)}\u00B0) at ~${spd} mph, so that's the side new development would arrive from.`,
+    short:`\uD83D\uDC40 Watch the ${from} — storms track ${toward} ~${spd} mph`
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Web-Mercator tile math (Slippy map). lon/lat → integer tile X/Y at zoom z.
 // ---------------------------------------------------------------------------
 function lonToTileX(lon,z){return Math.floor((lon+180)/360*Math.pow(2,z))}
@@ -249,7 +270,7 @@ function dedupeNwsAlerts(list){
 // createRequire) picks up every shared symbol here.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    haversine, bearingDeg, degToDir,
+    haversine, bearingDeg, degToDir, watchDirHint,
     lonToTileX, latToTileY,
     DBZ_SCALE, pixelToDbz,
     NEXRAD_PAL, nexradToDbz,

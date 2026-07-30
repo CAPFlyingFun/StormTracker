@@ -3,6 +3,19 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.61
+
+  **Watch-direction hint from steering winds — "Keep an eye to the NW."**
+
+  - New shared helper `watchDirHint(mv)` in `docs/js/radar-shared.js` (exported to the
+    scanner via `scanner/detect.js`): reciprocal of the steering heading = the side new
+    development arrives from. Gated on the same `speed >= 2 mph` floor every other
+    steering consumer uses.
+  - Surfaced in three places, one wording: Rain Clock footer (only when the dial has no
+    arcs — otherwise the dial already shows it), System Briefing quiet branch, and the
+    scanner's "Strong storms nearby" awareness push body.
+  - Cache: `?v=759`, SW `stormtracker-v759`.
+
   ## v5.86
 
   **GDACS tropical source: movement direction/speed + past-track history for every storm, global cones.**

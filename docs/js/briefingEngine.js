@@ -345,6 +345,12 @@
       lines.push(`[!yellow]Light to moderate rain is approaching${etaStr}.[/!] Plan around the cell — bring an umbrella, expect a brief downpour, then clearing.`);
     }else{
       lines.push('[!green]Conditions are quiet.[/!] Outdoor activity is fine; no storm-related restrictions.');
+      // v6.61: even when quiet, point out which side of the sky to watch,
+      // derived from the steering winds (shared watchDirHint wording).
+      if(typeof watchDirHint==='function'){
+        const _wd=watchDirHint((typeof getSteeringMv==='function')?getSteeringMv():null);
+        if(_wd)lines.push(`\uD83D\uDC40 ${_wd.text}`);
+      }
     }
     if(d.weather){
       const w=d.weather;

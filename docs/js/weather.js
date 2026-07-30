@@ -2783,6 +2783,17 @@ function renderRainClock(){
   if(data.motionUnknown&&data.radarReady&&!data.awaitingMotion){
     foot=`<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px;font-style:italic">Motion unknown — radar projection limited</div>`;
   }
+  // v6.61: watch-direction hint. When the dial is quiet but steering winds are
+  // known, tell the user which side of the sky new development would arrive
+  // from (the reciprocal of the steering heading). Shared wording with the
+  // System Briefing and the push scanner via watchDirHint (radar-shared.js).
+  // Only shown on a quiet dial — with arcs painted, the dial itself already
+  // shows where rain is coming from.
+  const hasArcs=data.ready&&data.windows.some(w=>w.cells&&w.cells.length);
+  if(!hasArcs&&typeof watchDirHint==='function'){
+    const _wd=watchDirHint((typeof getSteeringMv==='function')?getSteeringMv():null);
+    if(_wd)foot+=`<div style="font-size:0.62em;color:var(--text-secondary);text-align:center;margin-top:5px;line-height:1.4">\uD83D\uDC40 ${_wd.text}</div>`;
+  }
   const hasClickable=data.ready&&data.windows.some(w=>w.cells&&w.cells.length);
   const hint=hasClickable?`<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:2px;font-style:italic">${data.forecast?'Tap a colored arc for forecast details':'Tap a colored arc to see which storms cause it'}</div>`:'';
   // v4.70: confidence note. The dial is a LIVE-radar projection, which is very

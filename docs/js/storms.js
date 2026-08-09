@@ -400,11 +400,24 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   if(aloftSpeeds.length>=2){
     const sfc=aloftSpeeds.find(a=>a.p>=1000)||aloftSpeeds[0];
     const upper=aloftSpeeds[aloftSpeeds.length-1];
-    const shearSpd=Math.abs(upper.spd-sfc.spd);
+    // v6.62: bulk shear is the VECTOR difference between the surface and
+    // ~500 hPa winds, not |Δspeed|. The old scalar read ~0 whenever winds
+    // turned with height without speeding up, so the briefing quoted an
+    // impossible "0.1 mph bulk shear" in weak-flow directional regimes.
+    // computeShearProfile() (below) already does the u/v math for the storm
+    // cards — this is now the ONE shear source everywhere.
+    const prof=computeShearProfile();
     let dd=Math.abs(upper.dir-sfc.dir);if(dd>180)dd=360-dd;
-    S._windShear={speedDiff:shearSpd,dirDiff:dd,factor:Math.min(2.0,0.5+shearSpd/60+dd/180)};
+    if(prof&&isFinite(prof.bulkShearMs)){
+      const shearSpd=prof.bulkShearMs*3.6; // km/h, like every other S.* wind
+      S._windShear={speedDiff:shearSpd,bulkMs:prof.bulkShearMs,dirDiff:dd,factor:Math.min(2.0,0.5+shearSpd/60+dd/180)};
+      console.log('Wind shear (vector): '+prof.bulkShearMs.toFixed(1)+'m/s Δdir='+dd+'° turbFactor='+S._windShear.factor.toFixed(2));
+    }else{
+      // Degenerate profile (missing component winds): show nothing rather
+      // than a near-zero artifact the AI would narrate as fact.
+      S._windShear=null;
+    }
     S._upperWindDir=upper.dir;S._upperWindSpd=upper.spd;
-    console.log('Wind shear: Δspd='+shearSpd.toFixed(1)+'km/h Δdir='+dd+'° turbFactor='+S._windShear.factor.toFixed(2));
   }
   const steering=aloftSpeeds.filter(a=>a.p<=850);
   if(!steering.length)return;
@@ -765,7 +778,9 @@ function getStabilityData(){
   }
   let liftRat=1;
   if(S._windShear){
-    const shearMag=S._windShear.speedDiff;
+    // speedDiff is km/h; the documented bands (≥20 mph = 8, ≥10 = 6, ≥5 = 4)
+    // are mph — convert before scoring (was silently scoring km/h as mph).
+    const shearMag=S._windShear.speedDiff*0.621371;
     if(shearMag>=20)liftRat=8;else if(shearMag>=10)liftRat=6;else if(shearMag>=5)liftRat=4;else liftRat=2;
   }
   const overall=Math.round((moistRat+stabRat+liftRat)/3);
@@ -780,7 +795,9 @@ function getStabilityData(){
 function closeTstormIndexInfo(){ const el=document.getElementById('tstorm-index-panel'); if(el)el.remove(); }
 function showTstormIndexInfo(){
   const d = (typeof getStabilityData==='function') ? getStabilityData() : null;
-  const shear = (S._windShear && S._windShear.speedDiff!=null) ? Math.round(S._windShear.speedDiff) : null;
+  // speedDiff is km/h internally — convert for display and label the unit.
+  const shear = (S._windShear && S._windShear.speedDiff!=null) ? Math.round(S._windShear.speedDiff*0.621371) : null;
+  const shearKt = (S._windShear && S._windShear.speedDiff!=null) ? Math.round(S._windShear.speedDiff*0.539957) : null;
   const _row = (icon,name,score,inputs,scale) => `
     <div style="padding:9px 0;border-top:1px solid var(--border-subtle,#243040)">
       <div style="display:flex;align-items:center;gap:8px">
@@ -795,7 +812,7 @@ function showTstormIndexInfo(){
   const spread=(d&&d.temp!=null&&d.dewp!=null)?Math.round((d.temp-d.dewp)*10)/10:null;
   const moistIn = d?`RH ${humid!=null?Math.round(humid)+'%':'—'}${spread!=null?` · temp–dewpoint spread ${spread}°C`:''}`:'live values unavailable';
   const stabIn = d?`CAPE ${cape!=null?Math.round(cape)+' J/kg':'—'} · Lifted Index ${li!=null?li+'°C':'—'}${cin!=null?` · CIN ${Math.round(cin)} J/kg`:''}`:'live values unavailable';
-  const liftIn = shear!=null?`0–6 km bulk wind shear ${shear} mph`:'shear data unavailable';
+  const liftIn = shear!=null?`0–6 km bulk wind shear (vector) ${shear} mph (${shearKt} kt)`:'shear data unavailable';
   const overall = d?d.overall:null, risk = d?d.risk:'';
   const riskColor = overall>=8?'#ff3355':overall>=6?'#f97316':overall>=4?'#eab308':'#22c55e';
   closeTstormIndexInfo();
@@ -844,13 +861,13 @@ function getWindShearAnalysis(){
   const vecShearMs=vecShearKmh/3.6;
   let severity='Weak';
   if(vecShearMs>=18)severity='Strong';else if(vecShearMs>=10)severity='Moderate';
-  let impact='Minimal deep-layer shear — turbulence unlikely outside convection';
+  let impact='Minimal deep-layer shear — no shear-driven turbulence indicators in this data (check PIREPs/AIRMETs for the full picture)';
   if(vecShearMs>=18)impact='Strong deep-layer shear — turbulence likely in and near storms; caution for light aircraft';
   else if(vecShearMs>=10)impact='Moderate deep-layer shear — expect turbulence mainly in and near storm cores';
   else if(vecShearMs>=6)impact='Light chop possible near convection';
   const pToAlt={1013:'Surface',925:'~2,500 ft',850:'~5,000 ft',700:'~10,000 ft',500:'~18,000 ft'};
   return{
-    vectorShear:fmtWind(vecShearKmh),
+    vectorShear:`${fmtWind(vecShearKmh)} (${Math.round(vecShearKmh*0.539957)} kt)`,
     severity,
     dirDiff:S._windShear.dirDiff,
     surfaceWind:`${degToDir(sfc.dir)} at ${fmtWind(sfc.spd)}`,

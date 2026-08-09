@@ -3,6 +3,15 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.62
+
+  **Briefing accuracy pass — real bulk shear, calibrated certainty, honest aviation/marine wording.**
+
+  - **Wind shear fixed at the source.** The briefing's "bulk shear" was a scalar speed difference (|upper − surface|) in km/h, mislabeled as mph — in weak-flow directional regimes it read an impossible "0.1 mph". It's now the true 0–6 km VECTOR shear (same math as the storm cards' `computeShearProfile()`), shown with correct units plus knots everywhere (Thunderstorm Potential popup, structured briefing, AI context). If the wind profile is degenerate, shear is omitted rather than shown as a near-zero artifact. The Thunderstorm Potential lift score also converted km/h→mph before scoring (it was silently scoring km/h against mph bands).
+  - **Rain chances now reach the AI.** Hourly precipitation probability (PoP) was never requested from Open-Meteo, so the briefing could say "today stays dry" while the official forecast carried a 30% storm chance. The hourly request now includes `precipitation_probability`, and the AI context gets a RAIN CHANCES block (peak % next 12 h and 12–48 h, with timing) plus a rule: ≥20% is never "dry", and storm timing must match when the probability peaks.
+  - **Certainty calibration.** 48-h rain totals are now labeled as model-grid estimates ("could locally drop around X"), never promised amounts. Radar motion verdicts softened ("receding — not projected to affect your location" instead of "no threat"), and a new prompt rule stops flat "no rain is coming" claims when the environment can still pop new cells, plus bans categorical "not a flash-flood scenario" wording when downpours are possible.
+  - **Aviation/marine honesty.** Icing dropped from the standing convective-hazard lists (only mentioned when the data supports it); ceilings must come from actual METAR BKN/OVC layers (FEW/SCT = no ceiling); turbulence claims attributed to the data rather than asserted. Marine sea state / over-water visibility must be labeled as wind-derived estimates — the data contains no wave or marine-visibility observations to quote as fact.
+
   ## v6.61
 
   **Watch-direction hint from steering winds — "Keep an eye to the NW."**

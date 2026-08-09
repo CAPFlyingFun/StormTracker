@@ -140,7 +140,7 @@ function _buildPartialOmData(){
       wind_speed_10m:0,wind_direction_10m:0,wind_gusts_10m:0,is_day:1
     },
     hourly:{time:[],temperature_2m:[],apparent_temperature:[],relative_humidity_2m:[],
-      dew_point_2m:[],precipitation:[],weather_code:[],wind_speed_10m:[],
+      dew_point_2m:[],precipitation:[],precipitation_probability:[],weather_code:[],wind_speed_10m:[],
       wind_gusts_10m:[],wind_direction_10m:[],pressure_msl:[],cloud_cover:[],
       visibility:[],is_day:[],cape:[],lifted_index:[],convective_inhibition:[],
       uv_index:[],freezing_level_height:[]},
@@ -176,7 +176,7 @@ async function fetchWeather(){
   if(typeof _bootStep==='function')_bootStep('wx','Fetching weather…');
   const _omPath=`?latitude=${S.lat}&longitude=${S.lon}`
     +`&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day`
-    +`&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,cloud_cover,visibility,is_day,cape,lifted_index,convective_inhibition,uv_index,freezing_level_height`
+    +`&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,cloud_cover,visibility,is_day,cape,lifted_index,convective_inhibition,uv_index,freezing_level_height`
     +`&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,sunrise,sunset,wind_speed_10m_max`
     +`&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&timezone=auto&forecast_days=7&past_days=2`;
   const _isUSLoc=isUSLocation(S.lat,S.lon);

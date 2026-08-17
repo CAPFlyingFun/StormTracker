@@ -3,6 +3,41 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.63
+
+  **Lightning quota vs bad-key diagnosis · Rain Clock refresh after late winds aloft.**
+
+  - **Lightning (WarPulse) errors are now diagnosed, not lumped together.** The
+    `/lightning` proxy passes WarPulse's status through verbatim, and WarPulse can
+    answer 403 both for an invalid key AND when the plan's monthly units run out —
+    the client treated any 401/403 as "key rejected". `refreshLightningStrikes()`
+    now reads the error BODY: any 429, or a detail mentioning quota/limit/usage,
+    is classified as quota exhaustion (distinct toast, 60-min backoff) instead of
+    a rejected key (30-min backoff). The last real outcome (live strike count /
+    quota reached / key rejected, with the provider's own error text and time) is
+    stored in `S._ltgLastErr` and rendered into a new status line under
+    Settings → ⚡ Lightning (`#lightning-key-status`, populated by
+    `_ltgSetStatus()` on settings-open and after every fetch). A later successful
+    call clears the verdict and re-arms the one-shot warnings.
+  - **Rain Clock no longer stays on "No rain expected" after winds aloft lands
+    late.** Every per-storm motion product (`_eta`, `_brief`, `_m`, cone stats) is
+    cached under `S._stormScanId`, which only a radar scan bumps. When winds aloft
+    arrived after the scan had rendered (slow link: the 30 s gate fell through),
+    `refreshStormViewsForWinds()` re-ran `renderStorms()` but every ETA call hit
+    its same-scan cache and returned the pre-winds `eta:null` — so the dial kept
+    "No rain expected" while its own footer showed live steering. The refresh now
+    calls `bumpStormScanId()` first so ETAs/tiers genuinely recompute. Also,
+    `_applyAloftData()` now queues that refresh itself (dedup'd, deferred one
+    tick) whenever steering first resolves while storms are already rendered —
+    previously only the 4-attempt background retry path refreshed, so winds
+    arriving via the next scan's own fetch (or any other route) left the dial
+    stale until a full new scan.
+  - **Honest dial when timing is unresolved.** If `S._inboundShown` has cells but
+    none produced a paintable arrival window (ETAs unresolved), the dial center
+    now reads "N inbound · timing pending" instead of "No rain expected",
+    which flatly contradicted the "N inbound" badge above it.
+  - Cache: `?v=761`, SW `stormtracker-v761`.
+
   ## v6.62
 
   **Briefing accuracy pass — real bulk shear, calibrated certainty, honest aviation/marine wording.**

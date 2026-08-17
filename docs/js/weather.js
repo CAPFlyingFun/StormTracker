@@ -2655,6 +2655,17 @@ function renderRainClock(){
   else if(!data.windows.length){
     if(_omPart){centerLines=['Waiting on','Open-Meteo…'];_phrases.push({title:'Waiting on Open-Meteo',body:'Forecast service is slow or unreachable right now. The Rain Clock will fill in as soon as data arrives.'});}
     else if(data.stale&&!data.forecastReady){centerLines=['Radar stale','run a scan'];_phrases.push({title:'Radar is stale',body:'Run a fresh scan to update the Rain Clock with the latest radar.'});}
+    else if(Array.isArray(S._inboundShown)&&S._inboundShown.length){
+      // v6.63: the header pill / Storms tab show N inbound cells, but none of
+      // them produced a paintable arrival window (their ETAs are still
+      // unresolved — typically winds aloft landing late on a slow connection).
+      // Saying "No rain expected" here flatly contradicts the "N inbound" badge
+      // two inches above; say what's actually happening instead. The dial fills
+      // in on the next refresh once motion resolves.
+      const _nIn=S._inboundShown.length;
+      centerLines=[_nIn+' inbound','timing pending'];
+      _phrases.push({title:_nIn+' storm'+(_nIn!==1?'s':'')+' inbound — timing pending',body:'Radar shows '+_nIn+' cell'+(_nIn!==1?'s':'')+' on a track toward you, but arrival times can\'t be projected yet — storm motion is still resolving (usually winds aloft arriving late on a slow connection). The dial fills in as soon as motion data lands; the Storms tab has each cell\'s details meanwhile.'});
+    }
     else{centerLines=['No rain expected',_spanWord];_phrases.push({title:'No rain expected',body:`Nothing showing up on radar for the ${_spanWord}. Disclaimer: radar can sometimes be delayed or miss certain conditions (like light drizzle or mist). If you're seeing or feeling it but it's not on here — congratulations, you beat the radar to it! 🤣`});}
   } else {
     const w=data.windows[0];

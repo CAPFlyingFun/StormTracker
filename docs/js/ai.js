@@ -83,6 +83,7 @@ function syncAISettings(){
   if(sk&&typeof getSkylinkKey==='function')sk.value=getSkylinkKey();
   const lk=document.getElementById('settings-lightning-key');
   if(lk&&typeof getLightningKey==='function')lk.value=getLightningKey();
+  if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last WarPulse outcome (live / quota / rejected)
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
 }
 function clearAIChat(){

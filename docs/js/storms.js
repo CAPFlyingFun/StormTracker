@@ -191,7 +191,8 @@ function saveLightningKey(v){
   try{localStorage.setItem('st_lightningKey',t)}catch(e){}
   // Fresh key = fresh start: clear any bad-key backoff and cached strikes,
   // then fetch immediately so the user sees live data without waiting a scan.
-  _ltgBackoffUntil=0;_ltgBadKeyWarned=false;_ltgLastAt=0;
+  _ltgBackoffUntil=0;_ltgBadKeyWarned=false;_ltgQuotaWarned=false;_ltgLastAt=0;S._ltgLastErr=null;
+  if(typeof _ltgSetStatus==='function')_ltgSetStatus();
   if(!t){S._ltgStrikes=null;if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof drawMiniSonar==='function')drawMiniSonar();}
   else refreshLightningStrikes(true);
   if(typeof toast==='function')toast(t?'✓ Lightning key saved':'Lightning key cleared');
@@ -209,7 +210,31 @@ function toggleLightningKeyVis(){
 // throttled to one per 60s, since_minutes=15, limit=500 (free-plan cap).
 const LTG_FRESH_MS=10*60000;   // strikes older than this = fall back to radar estimate
 const LTG_MIN_GAP_MS=60000;    // min spacing between API calls
-let _ltgLastAt=0,_ltgBackoffUntil=0,_ltgBadKeyWarned=false;
+let _ltgLastAt=0,_ltgBackoffUntil=0,_ltgBadKeyWarned=false,_ltgQuotaWarned=false;
+// v6.63: live status line under Settings → ⚡ Lightning. WarPulse answers 401/403
+// for an invalid key AND (like many APIs) 403 when the plan's monthly units run
+// out, so "rejected" alone is undiagnosable from the toast. This surfaces the
+// last real API outcome — live strike count, quota exhausted, or key rejected,
+// with the provider's own error text — so the user can tell which one happened.
+function _ltgSetStatus(){
+  const el=document.getElementById('lightning-key-status');
+  if(!el)return;
+  if(!getLightningKey()){el.style.display='none';el.textContent='';return}
+  const err=S._ltgLastErr;
+  let msg,col;
+  if(err){
+    const when=new Date(err.ts).toLocaleTimeString();
+    const det=err.detail?' — “'+err.detail+'”':'';
+    if(err.quota){col='#facc15';msg='⚠️ Quota reached (HTTP '+err.status+' at '+when+det+'). The key looks valid but the plan\'s monthly units appear used up — strikes fall back to the radar estimate until the quota resets. Check usage at lightning.warpulse.com.'}
+    else{col='#ef4444';msg='❌ Key rejected (HTTP '+err.status+' at '+when+det+'). Re-paste the key, or check it at lightning.warpulse.com.'}
+  }else if(S._ltgStrikes){
+    col='#4ade80';
+    msg='✓ Live — '+S._ltgStrikes.flashes.length+' strike'+(S._ltgStrikes.flashes.length!==1?'s':'')+' (last 15 min) received at '+new Date(S._ltgStrikes.ts).toLocaleTimeString();
+  }else{col='';msg='Key saved — waiting for the first strike fetch (runs with each radar scan).'}
+  el.style.display='block';
+  el.style.color=col||'var(--text-muted)';
+  el.textContent=msg;
+}
 function ltgLive(){return !!(S._ltgStrikes&&S._ltgStrikes.flashes.length&&Date.now()-S._ltgStrikes.ts<LTG_FRESH_MS)}
 async function refreshLightningStrikes(force){
   const key=getLightningKey();
@@ -230,12 +255,32 @@ async function refreshLightningStrikes(force){
     const opts={headers:{'X-API-Key':key}};
     if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
     const r=await fetch(u,opts);
-    if(r.status===401||r.status===403){
-      _ltgBackoffUntil=now+30*60000;
-      if(!_ltgBadKeyWarned){_ltgBadKeyWarned=true;if(typeof toast==='function')toast('⚡ Lightning key rejected — check Settings → Lightning')}
+    if(r.status===401||r.status===403||r.status===429){
+      // v6.63: read the error BODY before deciding what to tell the user.
+      // WarPulse (like many APIs) can answer 403 for an exhausted monthly quota
+      // as well as for a bad key, so a bare status can't distinguish "your key
+      // is wrong" from "your free units ran out". Any 429, or an error detail
+      // mentioning quota/limit/usage, is treated as quota — everything else as
+      // a rejected key. The raw outcome lands in Settings → Lightning either way.
+      let detail='';
+      try{
+        const raw=await r.text();
+        try{const eb=JSON.parse(raw);detail=String((eb&&(eb.detail||eb.error||eb.message))||'').trim()}
+        catch(_){detail=(raw||'').slice(0,200).trim()}
+      }catch(e){}
+      const quotaLike=r.status===429||/quota|rate.?limit|limit (reached|exceeded)|exceed|usage|credit|too many|plan/i.test(detail);
+      S._ltgLastErr={status:r.status,detail:detail.slice(0,200),quota:quotaLike,ts:now};
+      _ltgSetStatus();
+      console.warn('[ltg] HTTP '+r.status+(detail?' — '+detail:'')+(quotaLike?' → treating as quota exhausted':' → treating as rejected key'));
+      if(quotaLike){
+        _ltgBackoffUntil=now+60*60000;
+        if(!_ltgQuotaWarned){_ltgQuotaWarned=true;if(typeof toast==='function')toast('⚡ Lightning quota used up (HTTP '+r.status+') — radar estimate until it resets. Details in Settings → Lightning')}
+      }else{
+        _ltgBackoffUntil=now+30*60000;
+        if(!_ltgBadKeyWarned){_ltgBadKeyWarned=true;if(typeof toast==='function')toast('⚡ Lightning key rejected (HTTP '+r.status+') — check Settings → Lightning')}
+      }
       return;
     }
-    if(r.status===429){_ltgBackoffUntil=now+10*60000;console.warn('[ltg] quota/rate limited — backing off 10 min');return}
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
     const flashes=[];
@@ -257,6 +302,10 @@ async function refreshLightningStrikes(force){
       flashes.push({lat:f.lat,lon:f.lon,t,distMi,bear});
     }
     S._ltgStrikes={ts:Date.now(),flashes};
+    // A successful call clears any earlier bad-key/quota verdict (and re-arms the
+    // one-shot warnings) so a transient provider error doesn't stick forever.
+    S._ltgLastErr=null;_ltgBadKeyWarned=false;_ltgQuotaWarned=false;
+    _ltgSetStatus();
     console.log('[ltg] '+flashes.length+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
     if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
     if(typeof drawMiniSonar==='function')drawMiniSonar();
@@ -396,6 +445,10 @@ async function fetchWindsAloftNOMADS(lat,lon){
 // parsed aloftSpeeds array. Extracted so both Open-Meteo and NOMADS-GFS
 // providers can drive the same downstream consumers.
 function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
+  // v6.63: remember whether steering was already known — if this call is the
+  // moment motion FIRST resolves and storms are already on screen, their ETAs/
+  // tiers/dial were computed without it and must be refreshed (see bottom).
+  const _hadSteer=!!(S.stormMovement&&S.stormMovement.speed>=2);
   S._aloftData=aloftSpeeds;
   if(aloftSpeeds.length>=2){
     const sfc=aloftSpeeds.find(a=>a.p>=1000)||aloftSpeeds[0];
@@ -439,6 +492,21 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   console.log('[WindsAloft] Steering ('+providerInfo.provider+(providerInfo.host?'/'+providerInfo.host:'')+'): '+steering.map(a=>a.p+'hPa').join(',')+' Vx='+ax.toFixed(2)+' Vy='+ay.toFixed(2)+' → '+spdKt.toFixed(1)+'kt '+Math.round(dir)+'° → '+spdMph+' mph');
   if(S.map&&S._showPathArrows)buildPathArrows(S.map);
   if(typeof _bootStepDone==='function')_bootStepDone('wind',`Winds aloft: ${spdMph} mph @ ${Math.round(dir)}° · ${providerInfo.label}`);
+  // v6.63: steering just became known for the first time. If a scan already
+  // rendered storms without it (slow connection: the 30 s gate fell through and a
+  // retry — or the next scan's own fetch — finally landed), queue ONE deferred
+  // full refresh so cards, badges AND the Rain Clock recompute with real motion.
+  // Previously only the background-retry path refreshed, so winds arriving via
+  // any other route left the dial stale until the next scan. Deferred a tick so
+  // in-scan callers (the winds-aloft gate) don't double-render mid-pipeline; on
+  // first boot S.storms is empty and this is a no-op.
+  if(!_hadSteer&&S.storms&&S.storms.length)_queueWindStormRefresh();
+}
+// Dedup'd deferred storm-surface refresh for late-arriving winds aloft.
+function _queueWindStormRefresh(){
+  if(S._windRefreshQueued)return;
+  S._windRefreshQueued=true;
+  setTimeout(()=>{S._windRefreshQueued=false;try{refreshStormViewsForWinds()}catch(e){}},0);
 }
 
 // v6.23: WINDS-ALOFT FIELD groundwork for the 200-mi outer awareness layer.
@@ -602,7 +670,7 @@ function _scheduleWindsAloftRetry(lat,lon,attempt){
     await fetchWindsAloft(lat,lon);
     if(S._aloftData&&S._aloftData.length>=2){
       console.log('Winds aloft retry succeeded — refreshing ALL storm surfaces');
-      refreshStormViewsForWinds();
+      _queueWindStormRefresh();   // v6.63: same dedup'd path _applyAloftData uses
     } else if((S._aloftData?S._aloftData.length:0)===before) {
       _scheduleWindsAloftRetry(lat,lon,attempt+1);
     }
@@ -623,6 +691,15 @@ function _scheduleWindsAloftRetry(lat,lon,attempt){
 // so route every late-winds refresh through here to keep map and counts in sync.
 function refreshStormViewsForWinds(){
   if(!(S.storms&&S.storms.length))return;
+  // v6.63: every per-storm motion product (_eta, _brief, _m, cone stats) is
+  // cached under S._stormScanId, which only a radar scan bumps. When winds aloft
+  // landed AFTER the scan had rendered, this refresh re-ran renderStorms but every
+  // calcStormETA()/calcStormETAForBriefing() call hit its same-scan cache and
+  // returned the pre-winds result (eta:null everywhere) — so the Rain Clock kept
+  // saying "No rain expected" until the NEXT scan while the steering hint below it
+  // already showed live storm motion. Invalidate the caches first so this refresh
+  // actually recomputes ETAs/tiers with the steering data that just arrived.
+  if(typeof bumpStormScanId==='function')bumpStormScanId();
   if(typeof renderStorms==='function')renderStorms();
   if(typeof drawMiniSonar==='function')drawMiniSonar();
   if(typeof refreshHeroFromZone==='function')refreshHeroFromZone();

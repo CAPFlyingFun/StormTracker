@@ -3,6 +3,38 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.76
+
+  **Stuck in Settings after weather loaded (iOS) — fixed.**
+
+  - `#app-loading` (fullscreen loading screen) sat at `z-index:9999` — the
+    *same* level as `#settings-panel`, but later in the DOM, so it painted and
+    hit-tested **above** Settings whenever both were up. During its 420ms
+    `.fade-out` window it was invisible but still tap-blocking. It is now
+    `z-index:9998` (below Settings) and `.fade-out` adds
+    `pointer-events:none`.
+  - Removed `backdrop-filter` blur from the tap-critical fixed surfaces:
+    `.app-header` (blur(20px) — it blurred nothing anyway, since the header
+    is a flex sibling above the scroll container), the inline
+    `#settings-panel` (blur(8px) → backdrop darkened 0.88→0.94), and
+    `.settings-overlay` (blur(8px) → 0.92→0.95). Fixed overlays with
+    `backdrop-filter` are a known iOS Safari hit-test desync: when the DOM
+    behind them repaints heavily (exactly what happens when the weather
+    render lands), taps can land on stale layout. `#settings-panel` also
+    gets `transform:translateZ(0)` for its own compositing layer.
+  - Matches the field report: Settings opened fine while weather was still
+    loading, then became unresponsive the moment the weather render landed.
+
+  Cache `?v=774`, SW `stormtracker-v774`.
+
+  ## v6.75
+
+  **WarPulse links point at lightningapi.dev; Settings names the partnership.**
+  (Entry backfilled — shipped without a CHANGELOG.md section.) All WarPulse
+  attribution links now point to https://lightningapi.dev/ and Settings → ⚡
+  Lightning explains the shared-key arrangement. Cache `?v=773`, SW
+  `stormtracker-v773`.
+
   ## v6.74
 
   **Header buttons unresponsive on the Weather tab — fixed.**

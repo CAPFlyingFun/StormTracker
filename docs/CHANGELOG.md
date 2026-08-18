@@ -3,6 +3,27 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.74
+
+  **Header buttons unresponsive on the Weather tab — fixed.**
+
+  - `.toast` had `pointer-events:auto` while the toast container sits at
+    `top:16px`/`z-index:99999` — directly over the header row. Toasts have no
+    tap action anywhere in the app, yet each one (including at opacity 0
+    during its fade-in/out) was an invisible tap-shield over the header
+    buttons. The Weather tab is where load-time toasts burst and queue
+    (staggered up to ~10s+ on slow connections), which is why only that tab
+    appeared broken. Toasts are now `pointer-events:none`.
+  - `.app-header` carried `position:sticky` from an older layout, but the
+    header is a flex sibling *above* the scrolling `.container` (body is
+    `overflow:hidden`), so sticky did nothing — while sticky +
+    `backdrop-filter` near a `-webkit-overflow-scrolling` region is a known
+    iOS Safari hit-test desync. Now `position:relative` +
+    `transform:translateZ(0)` (own compositing layer) and
+    `touch-action:manipulation` on the header and its buttons (kills the
+    350ms double-tap-zoom delay). Visually identical.
+  - Cache bust `?v=772`, SW cache `stormtracker-v772`.
+
   ## v6.68
 
   **In-app real-time strike zones — follow-me or pinned, per-user keys.**

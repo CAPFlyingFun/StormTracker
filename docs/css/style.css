@@ -65,7 +65,12 @@ body{font-family:var(--font-body);background:var(--bg-deep);color:var(--text-pri
 .loc-overlay-btns .loc-btn-gps{background:rgba(59,130,246,0.2);color:var(--accent-blue)}
 .loc-overlay-btns .loc-btn-search{background:var(--accent-blue);color:#fff}
 .loc-overlay-btns .loc-btn-close{background:rgba(255,255,255,0.08);color:var(--text-muted);flex:0.5}
-.header-status{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:2px;font-size:0.65em;color:var(--text-secondary)}
+/* v6.77: keep the status line to ONE row — a long saved address used to wrap
+   to 4 lines, ballooning the header and visually colliding with the inbound
+   badge and net chip (and pushing tap targets around mid-load). The address
+   now ellipsizes instead. */
+.header-status{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:2px;font-size:0.65em;color:var(--text-secondary);flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.header-status #status-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex-shrink:1}
 .status-dot{width:6px;height:6px;border-radius:50%;background:var(--accent-yellow);animation:pulse-dot 2s ease-in-out infinite}
 .status-dot.live{background:var(--accent-green)}
 @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:0.4}}

@@ -1125,3 +1125,56 @@ function updateStormBadges(){
   const hdrLightning=document.getElementById('header-lightning');
   if(hdrLightning)hdrLightning.className=inbound>0?'lightning-active':'';
 }
+// ==========================================
+// v6.77: TAP FORENSICS — on-device diagnostic for the "header buttons dead
+// after weather loads" iPhone report, which desktop hit-testing cannot
+// reproduce. Capture-phase listeners record where every touch/click actually
+// lands (and what elementFromPoint says is on top there). Reading the log
+// after a freeze distinguishes the three failure modes:
+//   - touchstart on the right button but NO click  → iOS click-synthesis died
+//   - touchstart/click on a DIFFERENT element      → that element is the
+//     invisible overlay, named in the log
+//   - NO entries at all while tapping              → input delivery is dead
+//     (main thread hung / compositor desync)
+// Ring of 80 entries in localStorage (st_tapLog) so it survives relaunches;
+// viewer lives in Settings → 🕵️ Tap Diagnostic.
+// ==========================================
+(function(){
+  const MAX=80;
+  let _log=[];
+  try{_log=JSON.parse(localStorage.getItem('st_tapLog')||'[]')}catch(e){_log=[]}
+  function _desc(el){
+    if(!el)return 'null';
+    if(el===document.documentElement)return 'html';
+    if(el===document.body)return 'body';
+    let s=(el.tagName||'?').toLowerCase();
+    if(el.id)s+='#'+el.id;
+    else if(typeof el.className==='string'&&el.className)s+='.'+el.className.split(' ')[0];
+    return s.slice(0,48);
+  }
+  function _push(kind,e){
+    try{
+      const t=e.target;
+      const entry={k:kind,t:_desc(t),ts:Date.now()};
+      if(t&&t.closest){
+        if(t.closest('.app-header'))entry.h=1;
+        const sp=document.getElementById('settings-panel');
+        if(sp&&sp.style.display&&sp.style.display!=='none')entry.st=1;
+      }
+      if(typeof S!=='undefined'&&S.currentPage)entry.pg=S.currentPage;
+      const p=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||((e.clientX!=null)?e:null);
+      if(p&&p.clientX!=null){
+        const top=document.elementFromPoint(p.clientX,p.clientY);
+        if(top&&top!==t&&!(t.contains&&t.contains(top)))entry.top=_desc(top);
+      }
+      _log.push(entry);
+      if(_log.length>MAX)_log.splice(0,_log.length-MAX);
+      localStorage.setItem('st_tapLog',JSON.stringify(_log));
+    }catch(err){}
+  }
+  document.addEventListener('touchstart',e=>_push('ts',e),{capture:true,passive:true});
+  document.addEventListener('touchend',e=>_push('te',e),{capture:true,passive:true});
+  document.addEventListener('click',e=>_push('cl',e),{capture:true,passive:true});
+  window._tapLogGet=()=>_log.slice();
+  window._tapLogClear=()=>{_log=[];try{localStorage.removeItem('st_tapLog')}catch(e){}};
+})();

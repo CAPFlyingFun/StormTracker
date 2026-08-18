@@ -86,6 +86,7 @@ function syncAISettings(){
   const ls=document.getElementById('settings-lightning-source');
   if(ls&&typeof getLightningSource==='function')ls.value=getLightningSource();
   if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last lightning-source outcome (live / quota / rejected)
+  if(typeof _ltgZoneSyncUI==='function')_ltgZoneSyncUI(); // v6.68: real-time zone mode + status
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
   _refreshLiveUsers();   // v6.67: community counts at the bottom of Settings
 }

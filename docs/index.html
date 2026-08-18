@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v6.67</title>
+<title>StormTracker v6.68</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=765">
+<link rel="stylesheet" href="css/style.css?v=766">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.67</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.68</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -429,6 +429,16 @@
           </select>
         </div>
         <div class="setting-hint">Real observed strikes come from your optional <a href="https://lightning.warpulse.com" target="_blank" rel="noopener" style="color:#facc15">WarPulse key</a> (ground network, ~1 km precision; stored on your device only, relayed through the StormTracker proxy which doesn't store it) or the free keyless <b>GOES GLM satellite feed</b> (NOAA, updates ~every 5 min, ~8–14 km precision). Auto prefers the key and falls back to the satellite, then to the radar estimate (cells ≥ 48 dBZ).</div>
+        <div class="setting-row-6" style="margin-top:6px">
+          <span class="text-xxs-muted">Real-time zone</span>
+          <select id="settings-lightning-zone" onchange="setLightningZoneMode(this.value)" style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px">
+            <option value="off">Off</option>
+            <option value="follow">Follow my location</option>
+            <option value="pin">Pin current location</option>
+          </select>
+        </div>
+        <div class="setting-hint">Optional, needs your WarPulse key — sets a ~10 mi strike zone on your location via your own WarPulse account (free plan includes 1 zone). WarPulse then notifies StormTracker the instant a real strike lands inside it, triggering a background push alert within about a minute — <b>even with the app closed</b>, and without using any API quota. "Follow" re-anchors the zone when you move more than 5 mi.</div>
+        <div id="lightning-zone-status" class="setting-hint" style="display:none;margin-top:4px"></div>
         <div id="lightning-key-status" class="setting-hint" style="display:none;margin-top:4px"></div>
       </div>
       <div class="setting-sep">
@@ -731,25 +741,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=765" defer></script>
-<script src="js/core.js?v=765" defer></script>
-<script src="js/gauges.js?v=765" defer></script>
-<script src="js/icons.js?v=765" defer></script>
-<script src="js/geo.js?v=765" defer></script>
-<script src="js/settings.js?v=765" defer></script>
-<script src="js/thresholds.js?v=765" defer></script>
-<script src="js/weather.js?v=765" defer></script>
-<script src="js/radar.js?v=765" defer></script>
-<script src="js/tropical-model.js?v=765" defer></script>
-<script src="js/storms.js?v=765" defer></script>
-<script src="js/station.js?v=765" defer></script>
-<script src="js/alerts.js?v=765" defer></script>
-<script src="js/briefingEngine.js?v=765" defer></script>
-<script src="js/ai.js?v=765" defer></script>
-<script src="js/push.js?v=765" defer></script>
-<script src="js/qrcode.js?v=765" defer></script>
-<script src="js/devicelink.js?v=765" defer></script>
-<script src="js/init.js?v=765" defer></script>
+<script src="js/radar-shared.js?v=766" defer></script>
+<script src="js/core.js?v=766" defer></script>
+<script src="js/gauges.js?v=766" defer></script>
+<script src="js/icons.js?v=766" defer></script>
+<script src="js/geo.js?v=766" defer></script>
+<script src="js/settings.js?v=766" defer></script>
+<script src="js/thresholds.js?v=766" defer></script>
+<script src="js/weather.js?v=766" defer></script>
+<script src="js/radar.js?v=766" defer></script>
+<script src="js/tropical-model.js?v=766" defer></script>
+<script src="js/storms.js?v=766" defer></script>
+<script src="js/station.js?v=766" defer></script>
+<script src="js/alerts.js?v=766" defer></script>
+<script src="js/briefingEngine.js?v=766" defer></script>
+<script src="js/ai.js?v=766" defer></script>
+<script src="js/push.js?v=766" defer></script>
+<script src="js/qrcode.js?v=766" defer></script>
+<script src="js/devicelink.js?v=766" defer></script>
+<script src="js/init.js?v=766" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -759,7 +769,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=765')
+    navigator.serviceWorker.register('sw.js?v=766')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

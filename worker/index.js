@@ -329,16 +329,94 @@ function _timingSafeEq(a, b) {
   for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return r === 0;
 }
-async function lightningWebhook(request, env, ctx) {
-  if (!env.WARPULSE_WEBHOOK_SECRET) return json({ error: 'webhook not configured' }, 503);
-  const body = await request.text();
-  const sig = request.headers.get('X-Lightning-Signature') || '';
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.WARPULSE_WEBHOOK_SECRET),
+async function _hmacHex(secret, body) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
-  const expected = 'sha256=' + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, '0')).join('');
-  if (!_timingSafeEq(sig, expected)) return json({ error: 'bad signature' }, 401);
+  return 'sha256=' + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// --- In-app zone management (v6.68) ---
+// The app can create/list/delete each user's OWN WarPulse proximity zone
+// (their key, their account's zone allowance) — the zones API blocks browser
+// CORS like the flashes API, so these are the same DUMB-RELAY pattern as
+// /lightning: the user's key arrives per-request in X-API-Key, is forwarded
+// verbatim to WarPulse, and is never stored (see the EULA note above — that
+// constraint applies to these routes too). Using the api.lightningapi.dev
+// hostname per their docs (api.warpulse.com retires early 2027).
+const ZONES_API = 'https://api.lightningapi.dev/developer/zones';
+async function proxyZones(request, env, zoneId) {
+  const key = request.headers.get('X-API-Key') || '';
+  if (!key) return json({ error: 'missing X-API-Key header' }, 400);
+  const target = zoneId ? `${ZONES_API}/${encodeURIComponent(zoneId)}` : ZONES_API;
+  const init = { method: request.method, headers: { 'X-API-Key': key, 'Accept': 'application/json' } };
+  if (request.method === 'POST') {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = await request.text();
+  }
+  try {
+    const resp = await fetch(target, init);
+    const body = await resp.text();
+    return new Response(body, {
+      status: resp.status,
+      headers: { 'Content-Type': resp.headers.get('Content-Type') || 'application/json', 'Cache-Control': 'no-store', ...CORS },
+    });
+  } catch (e) {
+    return json({ error: 'upstream: ' + e.message }, 502);
+  }
+}
+// Per-zone webhook-secret registry, so /lightning-webhook can verify
+// deliveries from EVERY user's zone (each zone has its own secret, shown once
+// at creation). The secret stored here is OUR delivery-verification credential
+// — never the user's API key. Registration is insert-only (a conflicting
+// re-register must present the existing secret) and unregistration must
+// present the secret, so a stranger can neither hijack nor evict a zone
+// they don't own — zone ids look guessable, secrets are not.
+const ZONES_TABLE = 'CREATE TABLE IF NOT EXISTS webhook_zones (zone_id TEXT PRIMARY KEY, secret TEXT NOT NULL, created INTEGER)';
+async function zoneRegister(request, env) {
+  if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+  let b; try { b = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+  const id = b && b.zone_id != null ? String(b.zone_id).slice(0, 64) : '';
+  const secret = b && typeof b.webhook_secret === 'string' ? b.webhook_secret.slice(0, 256) : '';
+  if (!id || !secret) return json({ error: 'zone_id and webhook_secret required' }, 400);
+  await env.DB.prepare(ZONES_TABLE).run();
+  const row = await env.DB.prepare('SELECT secret FROM webhook_zones WHERE zone_id = ?').bind(id).first();
+  if (row && !_timingSafeEq(row.secret, secret)) return json({ error: 'zone already registered' }, 409);
+  await env.DB.prepare('INSERT INTO webhook_zones (zone_id, secret, created) VALUES (?, ?, ?) ON CONFLICT(zone_id) DO NOTHING')
+    .bind(id, secret, Date.now()).run();
+  return json({ ok: true });
+}
+async function zoneUnregister(request, env) {
+  if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+  let b; try { b = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+  const id = b && b.zone_id != null ? String(b.zone_id).slice(0, 64) : '';
+  const secret = b && typeof b.webhook_secret === 'string' ? b.webhook_secret : '';
+  if (!id || !secret) return json({ error: 'zone_id and webhook_secret required' }, 400);
+  await env.DB.prepare(ZONES_TABLE).run();
+  const row = await env.DB.prepare('SELECT secret FROM webhook_zones WHERE zone_id = ?').bind(id).first();
+  if (!row) return json({ ok: true, note: 'not registered' });
+  if (!_timingSafeEq(row.secret, secret)) return json({ error: 'secret mismatch' }, 403);
+  await env.DB.prepare('DELETE FROM webhook_zones WHERE zone_id = ?').bind(id).run();
+  return json({ ok: true });
+}
+async function lightningWebhook(request, env, ctx) {
+  const body = await request.text();
+  const sig = request.headers.get('X-Lightning-Signature') || '';
+  // Parse first ONLY to read zone_id for secret lookup — nothing from the
+  // payload is trusted until a signature verifies against a known secret.
   let p; try { p = JSON.parse(body); } catch { return json({ error: 'bad json' }, 400); }
+  let verified = false;
+  // v6.68: per-zone secrets from the in-app registry take priority; the env
+  // secret still covers a manually-created (dashboard) zone.
+  if (env.DB && p && p.zone_id != null) {
+    try {
+      await env.DB.prepare(ZONES_TABLE).run();
+      const row = await env.DB.prepare('SELECT secret FROM webhook_zones WHERE zone_id = ?').bind(String(p.zone_id)).first();
+      if (row && _timingSafeEq(sig, await _hmacHex(row.secret, body))) verified = true;
+    } catch (e) {}
+  }
+  if (!verified && env.WARPULSE_WEBHOOK_SECRET && _timingSafeEq(sig, await _hmacHex(env.WARPULSE_WEBHOOK_SECRET, body))) verified = true;
+  if (!verified) return json({ error: 'bad signature' }, 401);
   ctx.waitUntil((async () => {
     try {
       if (env.DB) {
@@ -426,6 +504,10 @@ export default {
     if (path === '/glm' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return glmServe(url, env); }
     if (path === '/stats' && request.method === 'GET') return serveStats(env);
     if (path === '/lightning-webhook' && request.method === 'POST') return lightningWebhook(request, env, ctx);
+    if (path === '/zones' && (request.method === 'POST' || request.method === 'GET')) return proxyZones(request, env, null);
+    if (path.startsWith('/zones/') && request.method === 'DELETE') return proxyZones(request, env, path.slice('/zones/'.length));
+    if (path === '/zone-register' && request.method === 'POST') return zoneRegister(request, env);
+    if (path === '/zone-unregister' && request.method === 'POST') return zoneUnregister(request, env);
 
     // ---- Device Link relay: ephemeral, zero-knowledge settings hand-off ----
     // One device PUTs an already-encrypted blob under an opaque id, gets a short
@@ -946,7 +1028,7 @@ Rules:
     }
 
     return new Response(
-      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nLightning:\n  GET  /lightning?since_minutes=15&limit=500&min_lat=... (X-API-Key header; WarPulse relay)\n  GET  /glm?since_minutes=15&limit=500&min_lat=...       (keyless; GOES GLM snapshot)\n  POST /glm-ingest    (scanner)\n  POST /lightning-webhook  (WarPulse zone alerts; HMAC-verified)\n  GET  /stats         (anonymous usage counts: daily/active users)\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
+      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nLightning:\n  GET  /lightning?since_minutes=15&limit=500&min_lat=... (X-API-Key header; WarPulse relay)\n  GET  /glm?since_minutes=15&limit=500&min_lat=...       (keyless; GOES GLM snapshot)\n  POST /glm-ingest    (scanner)\n  POST /lightning-webhook  (WarPulse zone alerts; HMAC-verified)\n  POST/GET /zones + DELETE /zones/{id}  (X-API-Key relay; user zone mgmt)\n  POST /zone-register | /zone-unregister  (webhook-secret registry)\n  GET  /stats         (anonymous usage counts: daily/active users)\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
       { headers: { 'Content-Type': 'text/plain', ...CORS } }
     );
   },

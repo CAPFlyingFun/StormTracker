@@ -3,6 +3,35 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.68
+
+  **In-app real-time strike zones — follow-me or pinned, per-user keys.**
+
+  - Worker: `/zones` (POST/GET) and `/zones/{id}` (DELETE) relay the WarPulse
+    zone-management API (`api.lightningapi.dev/developer/zones` — new
+    hostname per their docs; `api.warpulse.com` retires early 2027) with the
+    same dumb-relay contract as `/lightning`: user's key per-request in
+    X-API-Key, forwarded verbatim, never stored. New D1 `webhook_zones`
+    registry (`/zone-register`, `/zone-unregister`) holds each zone's
+    delivery-verification secret: registration is insert-only (conflicting
+    re-register must present the existing secret) and unregistration must
+    present the secret — zone ids are guessable, secrets are not, so a
+    stranger can neither hijack nor evict someone else's zone.
+  - Worker: `lightningWebhook()` now verifies per-zone — payload is parsed
+    ONLY to read zone_id for the registry lookup, nothing trusted until the
+    HMAC verifies against that zone's secret (env WARPULSE_WEBHOOK_SECRET
+    still covers a dashboard-created zone). Verify logic covered by a
+    5-case simulation (user zone good/bad sig, env fallback, unknown zone).
+  - App: Settings → Lightning "Real-time zone" select — off / follow / pin.
+    Create runs through `_ltgZoneCreate()` (zone via relay with the user's
+    key, then secret registration with rollback if registration fails, so a
+    zone never exists whose webhooks can't be verified). Follow mode
+    re-anchors via `ltgZoneSync()` riding the lightning refresh path
+    (>5 mi move, ≥10 min apart; delete + recreate since there's no update
+    API — each re-anchor mints a fresh secret). Zone id/secret live in
+    localStorage alongside the API key; status line under the select.
+  - Cache: `?v=766`, SW `stormtracker-v766`.
+
   ## v6.67
 
   **Anonymous usage counters — daily/active devices, zero PII.**

@@ -204,6 +204,114 @@ function toggleLightningKeyVis(){
   if(!inp)return;
   inp.type=inp.type==='password'?'text':'password';
 }
+// --- ⚡ Real-time strike zone (v6.68) ---
+// One WarPulse proximity zone per user, created in-app with their OWN key
+// against their own account's zone allowance (Free plan = 1 zone). WarPulse
+// webhooks the worker the instant a strike lands inside the ~16 km zone,
+// which fast-tracks a background push scan — a real-time tripwire that works
+// with the app CLOSED (the in-app proximity alert needs the app open).
+// Modes: off / follow (re-anchors when the app's active location moves >5 mi)
+// / pin (fixed where it was created — there's no zone-update API, so a
+// re-anchor is delete + recreate, which also mints a fresh webhook secret).
+// The zone id + secret live in localStorage like the API key; the secret is
+// also registered with the worker (zone-register) purely so it can verify
+// webhook deliveries — the user's API key itself is relayed per-request and
+// never stored anywhere.
+const LTG_ZONE_RADIUS_KM=16, LTG_ZONE_MOVE_MI=5;
+function _ltgZoneState(){try{return JSON.parse(localStorage.getItem('st_ltgZone')||'null')||{mode:'off'}}catch(e){return{mode:'off'}}}
+function _ltgZoneSave(z){try{localStorage.setItem('st_ltgZone',JSON.stringify(z))}catch(e){}}
+function _ltgZoneBase(){return (typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev'}
+async function _ltgZoneCreate(lat,lon,mode){
+  const key=getLightningKey();
+  if(!key)throw new Error('add your WarPulse key first');
+  const base=_ltgZoneBase();
+  const opts={method:'POST',headers:{'X-API-Key':key,'Content-Type':'application/json'},
+    body:JSON.stringify({name:'StormTracker '+(mode==='follow'?'(follow)':'(pinned)'),
+      center_lat:+lat.toFixed(4),center_lon:+lon.toFixed(4),
+      radius_km:LTG_ZONE_RADIUS_KM,cooldown_minutes:5,
+      webhook_url:base+'/lightning-webhook'})};
+  if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
+  const r=await fetch(base+'/zones',opts);
+  const j=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error((j&&(j.detail||j.error||j.message))||('HTTP '+r.status));
+  const id=j&&(j.id!=null?j.id:j.zone_id);
+  const secret=j&&j.webhook_secret;
+  if(id==null||!secret)throw new Error('unexpected zone response shape');
+  // Register the delivery-verification secret with the worker; if that fails,
+  // roll the zone back so a zone never exists whose webhooks we can't verify.
+  const rr=await fetch(base+'/zone-register',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({zone_id:String(id),webhook_secret:secret})});
+  if(!rr.ok){
+    try{await fetch(base+'/zones/'+encodeURIComponent(id),{method:'DELETE',headers:{'X-API-Key':key}})}catch(e){}
+    throw new Error('worker registration failed (HTTP '+rr.status+')');
+  }
+  return{id:String(id),secret,lat,lon};
+}
+async function _ltgZoneDelete(z){
+  if(!z||!z.id)return;
+  const base=_ltgZoneBase();
+  const key=getLightningKey();
+  if(key){try{await fetch(base+'/zones/'+encodeURIComponent(z.id),{method:'DELETE',headers:{'X-API-Key':key}})}catch(e){}}
+  if(z.secret){try{await fetch(base+'/zone-unregister',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({zone_id:z.id,webhook_secret:z.secret})})}catch(e){}}
+}
+async function setLightningZoneMode(mode){
+  const m=(mode==='follow'||mode==='pin')?mode:'off';
+  const cur=_ltgZoneState();
+  try{
+    if(m==='off'){
+      if(cur.id)await _ltgZoneDelete(cur);
+      _ltgZoneSave({mode:'off'});
+      if(typeof toast==='function')toast('⚡ Real-time zone off');
+    }else{
+      if(S.lat==null||S.lon==null)throw new Error('set a location first');
+      if(!getLightningKey())throw new Error('add your WarPulse key first');
+      if(cur.id)await _ltgZoneDelete(cur);
+      const z=await _ltgZoneCreate(S.lat,S.lon,m);
+      _ltgZoneSave({mode:m,...z,at:Date.now()});
+      if(typeof toast==='function')toast(m==='follow'?'⚡ Zone following your location':'⚡ Zone pinned here');
+    }
+  }catch(e){
+    // Creation failed — reflect reality (no zone) rather than the picked mode.
+    _ltgZoneSave(cur.id?cur:{mode:'off'});
+    if(typeof toast==='function')toast('⚡ Zone: '+(e&&e.message||'failed'));
+  }
+  _ltgZoneSyncUI();
+}
+// Follow mode: re-anchor when the app's active location has moved. Called from
+// the lightning refresh path (rides every scan); throttled so a re-anchor
+// happens at most once per 10 min and only past the 5-mi threshold.
+let _ltgZoneSyncAt=0;
+async function ltgZoneSync(){
+  const z=_ltgZoneState();
+  if(z.mode!=='follow'||!z.id||S.lat==null||S.lon==null)return;
+  if(Date.now()-_ltgZoneSyncAt<10*60000)return;
+  if(haversine(S.lat,S.lon,z.lat,z.lon)<=LTG_ZONE_MOVE_MI)return;
+  _ltgZoneSyncAt=Date.now();
+  try{
+    await _ltgZoneDelete(z);
+    const nz=await _ltgZoneCreate(S.lat,S.lon,'follow');
+    _ltgZoneSave({mode:'follow',...nz,at:Date.now()});
+    console.log('[ltg] zone re-anchored to '+S.lat.toFixed(3)+','+S.lon.toFixed(3));
+  }catch(e){
+    console.warn('[ltg] zone re-anchor failed:',e&&e.message||e);
+    _ltgZoneSave({mode:'off'});
+    if(typeof toast==='function')toast('⚡ Zone re-anchor failed ('+(e&&e.message||'error')+') — real-time zone turned off');
+  }
+  _ltgZoneSyncUI();
+}
+function _ltgZoneSyncUI(){
+  const sel=document.getElementById('settings-lightning-zone');
+  const z=_ltgZoneState();
+  if(sel)sel.value=z.mode||'off';
+  const el=document.getElementById('lightning-zone-status');
+  if(!el)return;
+  if(z.mode==='off'||!z.id){el.style.display='none';el.textContent='';return}
+  const kmMi=S.radarMetric?LTG_ZONE_RADIUS_KM+' km':Math.round(LTG_ZONE_RADIUS_KM*0.6214)+' mi';
+  el.style.display='block';el.style.color='#4ade80';
+  el.textContent='🟢 Zone active ('+(z.mode==='follow'?'follows your location, re-anchors past '+LTG_ZONE_MOVE_MI+' mi':'pinned at '+z.lat.toFixed(3)+', '+z.lon.toFixed(3))+') — a strike within ~'+kmMi+' triggers a background alert within about a minute, even with the app closed.';
+}
+
 // --- Live lightning strikes: source chain (v6.64) ---
 // Three sources, one S._ltgStrikes consumer surface (map dots, sonar, AI):
 //   1. WarPulse (personal key, ground network, ~1 km) via the worker's
@@ -401,6 +509,9 @@ async function _ltgFetchGLM(now){
 }
 async function refreshLightningStrikes(force){
   if(S.lat==null||S.lon==null)return;
+  // v6.68: follow-mode zone re-anchor rides the same refresh path (internally
+  // throttled + distance-gated; fire-and-forget so it never delays strikes).
+  try{ltgZoneSync()}catch(e){}
   const src=getLightningSource();
   if(src==='radar'){
     // Pinned to the estimate: make sure no stale observed strikes linger.

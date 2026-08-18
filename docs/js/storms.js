@@ -378,13 +378,13 @@ function _ltgSetStatus(){
     if(src==='auto')msg+=' Auto mode is using the free GOES satellite feed (or the radar estimate) meanwhile.';
   }else if(st&&st.flashes.length){
     col='#4ade80';
-    const srcLbl=st.src==='glm'?('GOES GLM satellite'+(st.sat?' ('+st.sat+')':'')):'WarPulse';
+    const srcLbl=st.src==='glm'?('GOES GLM satellite'+(st.sat?' ('+st.sat+')':'')):('WarPulse'+(st.shared?' (built-in)':' (your key)'));
     msg='✓ Live via '+srcLbl+' — '+st.flashes.length+' strike'+(st.flashes.length!==1?'s':'')+' (last 15 min), received '+new Date(st.ts).toLocaleTimeString();
     if(st.src==='glm')msg+='. Satellite geolocation is ~8–14 km, coarser than a ground network.';
-  }else if(src==='glm'||(src==='auto'&&!getLightningKey())){
+  }else if(src==='glm'){
     col='';msg='Using the free GOES GLM satellite feed — no key needed. Updates ~every 5 min; strikes appear when there\'s lightning in range. Radar estimate covers any gap.';
   }else if(getLightningKey()){col='';msg='Key saved — waiting for the first strike fetch (runs with each radar scan).'}
-  else{col='';msg='No key — auto mode uses the free GOES satellite feed when available, otherwise the radar estimate.'}
+  else{col='';msg='No key needed — auto mode uses StormTracker\'s built-in WarPulse access when available, then the free GOES satellite feed, then the radar estimate.'}
   el.style.display='block';
   el.style.color=col||'var(--text-muted)';
   el.textContent=msg;
@@ -451,13 +451,34 @@ function _ltgApplyFlashes(j,src,ts,sat){
 // lets auto mode fall through to GLM.
 async function _ltgFetchWarPulse(now){
   const key=getLightningKey();
-  if(!key||now<_ltgBackoffUntil)return false;
+  if(now<_ltgBackoffUntil)return false;
   try{
     const base=(typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';
-    const opts={headers:{'X-API-Key':key}};
+    // v6.73: SHARED-KEY mode. With no personal key, the call goes keyless and
+    // the worker signs it with StormTracker's WarPulse-provisioned shared key
+    // (arrangement approved by WarPulse support, Aug 2026) — lightning becomes
+    // built-in, no signup. Shared responses are edge-cached ~60 s per area and
+    // per-IP rate-limited server-side. A personal key still takes precedence:
+    // own quota, pure relay, no cache.
+    const opts={headers:{}};
+    if(key)opts.headers['X-API-Key']=key;
     if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
     const r=await fetch(base+'/lightning?'+_ltgBboxQS(),opts);
-    if(r.status===401||r.status===403||r.status===429){
+    if(!key&&r.status===503){
+      // Shared key not provisioned on the worker yet — quietly fall through to
+      // GLM. Long backoff so we don't knock every scan on a dormant feature.
+      _ltgBackoffUntil=now+30*60000;
+      console.log('[ltg] shared WarPulse key not provisioned yet — using satellite/estimate');
+      return false;
+    }
+    if(!key&&(r.status===429||r.status===401||r.status===403)){
+      // Shared-mode throttle or a shared-key problem — server-side concern,
+      // nothing the user can fix. Brief backoff, fall through to GLM.
+      _ltgBackoffUntil=now+(r.status===429?2:15)*60000;
+      console.warn('[ltg] shared relay HTTP '+r.status+' — falling back to satellite');
+      return false;
+    }
+    if(key&&(r.status===401||r.status===403||r.status===429)){
       // v6.63: read the error BODY before deciding what to tell the user.
       // WarPulse (like many APIs) can answer 403 for an exhausted monthly quota
       // as well as for a bad key, so a bare status can't distinguish "your key
@@ -486,11 +507,12 @@ async function _ltgFetchWarPulse(now){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
     const n=_ltgApplyFlashes(j,'warpulse',Date.now(),null);
+    if(S._ltgStrikes)S._ltgStrikes.shared=!key;   // built-in shared access vs the user's own key
     // A successful call clears any earlier bad-key/quota verdict (and re-arms the
     // one-shot warnings) so a transient provider error doesn't stick forever.
     S._ltgLastErr=null;_ltgBadKeyWarned=false;_ltgQuotaWarned=false;
     _ltgSetStatus();
-    console.log('[ltg] WarPulse: '+n+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
+    console.log('[ltg] WarPulse'+(key?'':' (shared)')+': '+n+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+(r.headers.get('X-Cache')==='HIT'?', cached':'')+')');
     return true;
   }catch(e){console.warn('[ltg] WarPulse fetch failed:',e&&e.message||e);return false}
 }

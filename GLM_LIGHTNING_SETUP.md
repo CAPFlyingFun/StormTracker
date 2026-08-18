@@ -81,6 +81,30 @@ retries every 10 minutes.
 - **Cost:** $0. NOAA open data is free to fetch; the Actions job runs in the
   free tier for public repos; the worker stores one ~400 KB blob in D1.
 
+## Shared WarPulse key (built-in lightning, v6.73)
+
+WarPulse approved a shared-key arrangement (support email, Aug 2026: rate
+limiting + ~60 s per-area response caching both explicitly OK'd, scanner
+use included; account limit raised to 500k calls/month with headroom to be
+provisioned). When the key arrives from their team:
+
+1. Add it as worker secret **`WARPULSE_SHARED_KEY`** (Cloudflare dashboard →
+   `stormtracker-proxy` → Settings → Variables and Secrets).
+2. Done. Keyless `/lightning` calls immediately switch from 503 to live
+   shared-key data: the app's Auto chain becomes built-in WarPulse → GLM →
+   estimate for every user, and the push scanner's observed-strike source
+   flips from GLM to the ground network on its next run.
+
+Behavior under the shared key: per-IP rate limit 4 req/min (scanner-secret
+calls exempt), responses cached ~60 s per rounded area (0.05°) so nearby
+users share one upstream call (`X-Cache: HIT`, `X-Quota-Cost: 0`), and
+`/stats` keeps counting devices for honest usage reporting. Personal keys
+bypass all of it — pure relay, own quota, exactly as before.
+
+License note: the non-profit waiver is active for one year (accepted
+Aug 2026) — re-request it from the WarPulse dashboard's Licensing card
+before Aug 2027.
+
 ## Real-time Storm Proximity webhook (WarPulse zones)
 
 WarPulse's zone feature POSTs to a webhook the instant a strike lands inside

@@ -496,13 +496,36 @@ function fmtLightning(personal, tz, h24) {
 // endpoint — and any failure just means the estimate path runs as before.
 const LTG_OBS_MI = 10;         // observed-strike alert ring (matches the in-app alert)
 const LTG_OBS_FRESH_MS = 10 * 60 * 1000; // stale snapshot = ignore, fall back to estimate
-async function fetchGlmStrikes(lat, lon) {
+function _obsBbox(lat, lon) {
   const padMi = 30; // covers the 10 mi ring + the 25 mi context count
   const latPad = padMi / 69;
   const lonPad = padMi / (69 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
-  const u = `${WORKER_URL}/glm?since_minutes=15&limit=500`
-    + `&min_lat=${(lat - latPad).toFixed(3)}&max_lat=${(lat + latPad).toFixed(3)}`
+  return `&min_lat=${(lat - latPad).toFixed(3)}&max_lat=${(lat + latPad).toFixed(3)}`
     + `&min_lon=${(lon - lonPad).toFixed(3)}&max_lon=${(lon + lonPad).toFixed(3)}`;
+}
+// v6.73: WarPulse ground network via the worker's SHARED key (arrangement
+// approved by WarPulse — Niall, Aug 2026, explicitly including scanner use:
+// "you can put the background scanner on the shared key too"). The scanner
+// authenticates with x-scanner-secret, which exempts it from the per-IP rate
+// limit. 503 = shared key not provisioned yet → GLM fallback takes over.
+async function fetchWarPulseStrikes(lat, lon) {
+  const u = `${WORKER_URL}/lightning?since_minutes=15&limit=500` + _obsBbox(lat, lon);
+  const r = await fetch(u, {
+    headers: { 'x-scanner-secret': SCANNER_SECRET },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (r.status === 503) return null; // shared key not configured yet
+  if (!r.ok) throw new Error(`warpulse HTTP ${r.status}`);
+  const j = await r.json();
+  const strikes = [];
+  for (const f of (j.flashes || [])) {
+    if (typeof f.lat !== 'number' || typeof f.lon !== 'number') continue;
+    strikes.push({ lat: f.lat, lon: f.lon });
+  }
+  return { src: 'warpulse', sat: null, updated: Date.now(), strikes };
+}
+async function fetchGlmStrikes(lat, lon) {
+  const u = `${WORKER_URL}/glm?since_minutes=15&limit=500` + _obsBbox(lat, lon);
   const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
   if (r.status === 404) return null; // no snapshot yet (pipeline just deployed)
   if (!r.ok) throw new Error(`glm HTTP ${r.status}`);
@@ -514,15 +537,26 @@ async function fetchGlmStrikes(lat, lon) {
     if (typeof f.lat !== 'number' || typeof f.lon !== 'number') continue;
     strikes.push({ lat: f.lat, lon: f.lon });
   }
-  return { sat: j.sat || 'GOES', updated: snapTs, strikes };
+  return { src: 'glm', sat: j.sat || 'GOES', updated: snapTs, strikes };
+}
+// Observed-strike source chain for pushes: WarPulse ground network (shared key)
+// first — better precision for the alert use case — GLM satellite as fallback.
+// Any failure in one source falls through to the next; both failing means the
+// radar-estimated ⚡ path runs exactly as before.
+async function fetchObservedStrikes(lat, lon) {
+  try {
+    const wp = await fetchWarPulseStrikes(lat, lon);
+    if (wp) return wp;
+  } catch (e) { console.warn(`  warpulse strikes failed: ${e.message}`); }
+  return fetchGlmStrikes(lat, lon);
 }
 // Observed-strike push body for one subscriber. Fires when a real strike landed
 // within LTG_OBS_MI in the last 15 min. GLM geolocates from orbit at ~8–14 km,
 // so distances are worded as approximate. Dedupe keys use 45° sectors + 5 mi
 // buckets over the in-ring strikes; the 'ltg_' prefix keeps keyKind() = 'ltg'
 // so the existing 30-min ltg cooldown and severe-escalation rules apply.
-function fmtLightningObserved(glm, lat, lon) {
-  const withDist = glm.strikes.map(s => ({
+function fmtLightningObserved(obs, lat, lon) {
+  const withDist = obs.strikes.map(s => ({
     distance: haversine(lat, lon, s.lat, s.lon),
     bearing: bearingDeg(lat, lon, s.lat, s.lon),
   }));
@@ -533,10 +567,19 @@ function fmtLightningObserved(glm, lat, lon) {
   const w25 = withDist.filter(s => s.distance <= 25).length;
   const cks = [...new Set(near.map(s => `ltg_o${Math.round(s.bearing / 45)}_${Math.round(s.distance / 5)}`))];
   const context = w25 > near.length ? ` (${w25} within 25 mi)` : '';
+  // Wording tracks the source's precision: WarPulse's ground network resolves
+  // ~1 km (state distances plainly); GLM sees optically from orbit at ~8–14 km
+  // (distances stay "~approximate").
+  const sat = obs.src === 'glm';
+  const approx = sat ? '~' : '';
+  const srcTag = sat ? ' (satellite)' : '';
+  const srcSentence = sat
+    ? `Detected by the ${obs.sat} satellite (locations approximate).`
+    : 'Detected by the WarPulse ground network.';
   return {
     cks,
-    display: `⚡ Lightning OBSERVED ~${dist} mi ${degToDir(lead.bearing)} (satellite)`,
-    body: `Real lightning observed ~${dist} mi to the ${dirLong(lead.bearing)} — ${near.length} strike${near.length !== 1 ? 's' : ''} within ${LTG_OBS_MI} mi in the last 15 min${context}. Detected by the ${glm.sat} satellite (locations approximate). Move indoors now and wait 30 min after the last strike.`,
+    display: `⚡ Lightning OBSERVED ${approx}${dist} mi ${degToDir(lead.bearing)}${srcTag}`,
+    body: `Real lightning observed ${approx}${dist} mi to the ${dirLong(lead.bearing)} — ${near.length} strike${near.length !== 1 ? 's' : ''} within ${LTG_OBS_MI} mi in the last 15 min${context}. ${srcSentence} Move indoors now and wait 30 min after the last strike.`,
   };
 }
 
@@ -724,14 +767,14 @@ async function run() {
     // Rain directly overhead also warrants at least the yellow (mid) cadence.
     if (overheadDbz != null && overheadDbz >= 20) maxThreat = Math.max(maxThreat, 1);
 
-    // 5. Real observed lightning (GOES GLM snapshot via the worker, v6.64).
-    // One keyless fetch per group; null (no/stale snapshot or fetch error)
-    // means the radar-estimated ⚡ path below runs exactly as before.
+    // 5. Real observed lightning, one fetch per group (v6.73): WarPulse ground
+    // network via the shared key first, GLM satellite as fallback. null (both
+    // unavailable) means the radar-estimated ⚡ path below runs as before.
     let glm = null;
     try {
-      glm = await fetchGlmStrikes(o.lat, o.lon);
-      if (glm) console.log(`  GLM: ${glm.strikes.length} strikes in range (snapshot ${Math.round((Date.now() - glm.updated) / 60000)} min old)`);
-    } catch (e) { console.warn(`  glm ${key} failed: ${e.message}`); }
+      glm = await fetchObservedStrikes(o.lat, o.lon);
+      if (glm) console.log(`  strikes (${glm.src}): ${glm.strikes.length} in range${glm.src === 'glm' ? ` (snapshot ${Math.round((Date.now() - glm.updated) / 60000)} min old)` : ''}`);
+    } catch (e) { console.warn(`  observed strikes ${key} failed: ${e.message}`); }
     // Observed lightning near the group location = red (fast) scan cadence.
     if (glm && glm.strikes.some(s => haversine(o.lat, o.lon, s.lat, s.lon) <= LTG_OBS_MI)) {
       maxThreat = Math.max(maxThreat, 2);

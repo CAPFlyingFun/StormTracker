@@ -213,39 +213,109 @@ async function proxyAWC(kind, url) {
   }
 }
 
-// ⚡ WarPulse lightning proxy — pure pass-through. The user's own API key
-// arrives in the X-API-Key request header (stored only on their device) and is
-// forwarded verbatim to api.warpulse.com; it is never logged or stored here.
-// WarPulse sends no Access-Control-Allow-Origin header, so browsers can't call
-// it directly — this route only adds CORS + relays the x-quota-cost header.
+// ⚡ WarPulse lightning proxy — TWO modes, one route (v6.73):
 //
-// EULA CONSTRAINT (WarPulse support, Aug 2026, account-reinstatement review):
-// this route is compliant with personal non-commercial use PRECISELY BECAUSE it
-// is a dumb relay — each user's own key, forwarded verbatim, nothing stored or
-// cached server-side. Do NOT add response caching, a shared/pooled key, or
-// worker-side auth for this route without contacting WarPulse first: any of
-// those shifts it toward a "redistribution service", which their EULA restricts
-// on every plan. (The /glm routes below are unrelated — that's our own snapshot
-// of public-domain NOAA data and may be cached freely.)
-async function proxyLightning(url, request) {
-  const key = request.headers.get('X-API-Key') || '';
-  if (!key) return json({ error: 'missing X-API-Key header' }, 400);
+// 1. PERSONAL KEY (X-API-Key header present): pure pass-through, exactly as
+//    always — the user's own key, forwarded verbatim, nothing stored or cached
+//    server-side. The original EULA constraint still applies verbatim to this
+//    mode: do NOT add caching or auth to personal-key requests.
+//
+// 2. SHARED KEY (no X-API-Key header): signs the upstream call with the
+//    account's WarPulse-provisioned shared key (env.WARPULSE_SHARED_KEY),
+//    making lightning a built-in feature — no per-user signup. This mode and
+//    BOTH of its guardrails were EXPLICITLY APPROVED by WarPulse support
+//    (Niall, email Aug 2026: "go ahead with both... No need to keep the
+//    Worker a pure relay for this key"):
+//      - per-IP rate limiting (4 req/min; scanner-secret calls exempt) so a
+//        bad actor can't burn the shared quota, and
+//      - a ~60 s per-area response cache so several users near the same spot
+//        share one upstream call — cuts WarPulse's load and our quota burn.
+//    Until the shared key secret is set, shared-mode requests answer 503 and
+//    clients quietly fall through to the GLM satellite feed.
+//    (The /glm routes below remain unrelated — our own snapshot of
+//    public-domain NOAA data, cacheable freely.)
+const LTG_UPSTREAM = 'https://api.lightningapi.dev/v1/flashes'; // new hostname per their docs (api.warpulse.com retires early 2027)
+const LTG_CACHE_TTL_MS = 60000;
+const LTG_RL_PER_MIN = 4;
+async function _ltgRateLimited(env, request) {
+  try {
+    if (!env.DB) return false;
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const minute = Math.floor(Date.now() / 60000);
+    // Same salted-hash treatment as the usage counters — no raw IPs stored,
+    // and the rows self-expire (pruned two minutes later).
+    const data = new TextEncoder().encode(`${env.SCANNER_SECRET || 'st'}:rl:${minute}:${ip}`);
+    const dig = await crypto.subtle.digest('SHA-256', data);
+    const h = [...new Uint8Array(dig)].slice(0, 10).map(b => b.toString(16).padStart(2, '0')).join('');
+    const key = 'rl:' + minute + ':' + h;
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)').run();
+    const row = await env.DB.prepare('SELECT value FROM meta WHERE key = ?').bind(key).first();
+    const n = row ? (parseInt(row.value, 10) || 0) : 0;
+    if (n >= LTG_RL_PER_MIN) return true;
+    await env.DB.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .bind(key, String(n + 1)).run();
+    if (n === 0) { // once per ip/minute: prune stale limiter rows
+      try { await env.DB.prepare("DELETE FROM meta WHERE key LIKE 'rl:%' AND key < ?").bind('rl:' + (minute - 2) + ':').run(); } catch (e) {}
+    }
+    return false;
+  } catch (e) { return false; } // limiter failure must never block real data
+}
+// Per-area cache key: bbox coords rounded to 0.05° (~3.5 mi) + window/limit —
+// coalesces GPS jitter so neighbors share an entry without mixing far areas.
+function _ltgCacheKeyOf(p) {
+  const r = (k) => { const v = parseFloat(p.get(k)); return isFinite(v) ? (Math.round(v * 20) / 20).toFixed(2) : 'x'; };
+  return `ltgc:${p.get('since_minutes') || '15'}:${p.get('limit') || '500'}:${r('min_lat')}:${r('max_lat')}:${r('min_lon')}:${r('max_lon')}`;
+}
+async function proxyLightning(url, request, env, ctx) {
+  let key = request.headers.get('X-API-Key') || '';
+  const personal = !!key;
+  const isScanner = !!(env && env.SCANNER_SECRET && request.headers.get('x-scanner-secret') === env.SCANNER_SECRET);
   const p = new URLSearchParams();
   for (const k of ['since_minutes', 'min_lat', 'max_lat', 'min_lon', 'max_lon', 'limit']) {
     const v = url.searchParams.get(k);
     if (v != null && v !== '') p.set(k, v);
   }
+  let cacheKey = null;
+  if (!personal) {
+    if (!env || !env.WARPULSE_SHARED_KEY) return json({ error: 'shared lightning key not configured' }, 503);
+    if (!isScanner && await _ltgRateLimited(env, request)) return json({ error: 'rate limited' }, 429);
+    key = env.WARPULSE_SHARED_KEY;
+    cacheKey = _ltgCacheKeyOf(p);
+    try {
+      const raw = env.DB ? await metaGet(env, cacheKey) : null;
+      if (raw) {
+        const c = JSON.parse(raw);
+        if (c && Date.now() - c.ts < LTG_CACHE_TTL_MS && typeof c.body === 'string') {
+          return new Response(c.body, {
+            headers: { 'Content-Type': 'application/json', 'X-Quota-Cost': '0', 'X-Cache': 'HIT',
+              'Access-Control-Expose-Headers': 'X-Quota-Cost, X-Cache', 'Cache-Control': 'no-store', ...CORS },
+          });
+        }
+      }
+    } catch (e) {}
+  }
   try {
-    const resp = await fetch('https://api.warpulse.com/v1/flashes?' + p.toString(), {
+    const resp = await fetch(LTG_UPSTREAM + '?' + p.toString(), {
       headers: { 'X-API-Key': key, 'Accept': 'application/json' },
     });
     const body = await resp.text();
+    if (!personal && resp.ok && env && env.DB && ctx && body.length < 400000) {
+      const store = JSON.stringify({ ts: Date.now(), body });
+      ctx.waitUntil((async () => {
+        try {
+          await metaSet(env, cacheKey, store);
+          // Light prune: cached areas older than 5 min are dead weight.
+          await env.DB.prepare("DELETE FROM meta WHERE key LIKE 'ltgc:%' AND key != ? AND json_extract(value,'$.ts') < ?").bind(cacheKey, Date.now() - 5 * 60000).run();
+        } catch (e) {}
+      })());
+    }
     return new Response(body, {
       status: resp.status,
       headers: {
         'Content-Type': resp.headers.get('Content-Type') || 'application/json',
         'X-Quota-Cost': resp.headers.get('x-quota-cost') || '',
-        'Access-Control-Expose-Headers': 'X-Quota-Cost',
+        'X-Cache': personal ? 'BYPASS' : 'MISS',
+        'Access-Control-Expose-Headers': 'X-Quota-Cost, X-Cache',
         'Cache-Control': 'no-store',
         ...CORS,
       },
@@ -499,7 +569,7 @@ export default {
     // ---- AWC proxy (unchanged) ----
     if (path === '/metar') return proxyAWC('metar', url);
     if (path === '/taf') return proxyAWC('taf', url);
-    if (path === '/lightning' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return proxyLightning(url, request); }
+    if (path === '/lightning' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return proxyLightning(url, request, env, ctx); }
     if (path === '/glm-ingest' && request.method === 'POST') return glmIngest(request, env);
     if (path === '/glm' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return glmServe(url, env); }
     if (path === '/stats' && request.method === 'GET') return serveStats(env);

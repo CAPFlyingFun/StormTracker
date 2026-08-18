@@ -1,0 +1,83 @@
+name: Deploy Worker
+
+# Auto-deploys the Cloudflare worker (worker/) whenever it changes on main,
+# so worker code in the repo can never drift from what's actually serving.
+# Also runnable by hand from the Actions tab (workflow_dispatch) — useful for
+# the very first deploy after adding the secrets below.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   dash.cloudflare.com → My Profile → API Tokens →
+#                          Create Token → "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  Workers & Pages overview page, right sidebar
+#   D1_DATABASE_ID         Storage & Databases → D1 → stormtracker_push → ID
+#                          (the checked-in wrangler.toml deliberately holds a
+#                          placeholder; this secret is injected at deploy time)
+#
+# Until those secrets exist, runs end green with a notice instead of failing.
+# Worker runtime secrets (SCANNER_SECRET etc., set via `wrangler secret put`)
+# live in Cloudflare and are NOT touched by deploys.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - ".github/workflows/worker-deploy.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: worker-deploy
+  # Never cancel a deploy mid-flight; a newer push just queues behind it.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check deploy secrets
+        id: check
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1ID: ${{ secrets.D1_DATABASE_ID }}
+        run: |
+          missing=""
+          [ -z "$TOKEN" ] && missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -z "$ACCOUNT" ] && missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -z "$D1ID" ] && missing="$missing D1_DATABASE_ID"
+          if [ -n "$missing" ]; then
+            echo "::warning::Worker NOT deployed — missing repo secret(s):$missing. Add them (see comments in this workflow file), then re-run from the Actions tab."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Inject D1 database id
+        if: steps.check.outputs.skip == 'false'
+        env:
+          D1ID: ${{ secrets.D1_DATABASE_ID }}
+        run: sed -i "s/REPLACE_WITH_D1_DATABASE_ID/$D1ID/" worker/wrangler.toml
+
+      - name: Deploy
+        if: steps.check.outputs.skip == 'false'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+
+      - name: Verify live routes
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          sleep 5
+          code=$(curl -s -o /tmp/glm.json -w '%{http_code}' https://stormtracker-proxy.joshua-622.workers.dev/glm)
+          echo "GET /glm -> HTTP $code: $(head -c 200 /tmp/glm.json)"
+          # 200 (snapshot present) and 404 (JSON "no snapshot yet") both prove
+          # the new route is live; the old worker answered with the help page.
+          if [ "$code" != "200" ] && [ "$code" != "404" ]; then
+            echo "::error::/glm did not answer as expected — deploy may not have taken effect"
+            exit 1
+          fi

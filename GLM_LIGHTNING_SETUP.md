@@ -30,15 +30,33 @@ App: Settings → ⚡ Lightning → source "Auto" (key → satellite → estimat
 
 ## One-time deploy steps
 
-1. **Deploy the worker** (adds `/glm-ingest` and `/glm`):
-   ```
-   cd worker && wrangler deploy
-   ```
-2. **Nothing else.** The Actions job reuses the existing `WORKER_URL` and
-   `SCANNER_SECRET` repository secrets, and runs as a second job inside the
-   existing `storm-scan.yml` workflow. The first successful run makes
-   `GET /glm` start answering; until then the app logs
-   "GLM: no snapshot yet" and quietly retries every 10 minutes.
+The worker must be redeployed once so `/glm-ingest` and `/glm` exist.
+Two ways — the first needs no local tooling at all:
+
+**A. Via the auto-deploy workflow (recommended).** Add three repository
+secrets (GitHub → Settings → Secrets and variables → Actions):
+
+| Secret | Where to find it |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | dash.cloudflare.com → My Profile → API Tokens → Create Token → **"Edit Cloudflare Workers"** template |
+| `CLOUDFLARE_ACCOUNT_ID` | Workers & Pages overview page, right sidebar |
+| `D1_DATABASE_ID` | Storage & Databases → D1 → `stormtracker_push` → database ID (the repo's `wrangler.toml` holds a placeholder; the workflow injects the real id at deploy time) |
+
+Then run **Actions → Deploy Worker → Run workflow**. From then on, every
+push to `main` that touches `worker/` deploys automatically. Until the
+secrets exist, the workflow ends green with a "not deployed" notice rather
+than failing. Worker runtime secrets (`SCANNER_SECRET`, set via
+`wrangler secret put`) live in Cloudflare and are untouched by deploys.
+
+**B. Locally:** `cd worker && npx wrangler deploy` (after
+`npx wrangler login`), from a checkout whose `wrangler.toml` has the real
+`database_id`.
+
+Nothing else is needed: the GLM Actions job reuses the existing
+`WORKER_URL` and `SCANNER_SECRET` repository secrets and runs as a second
+job inside `storm-scan.yml`. The first successful run makes `GET /glm`
+start answering; until then the app logs "GLM: no snapshot yet" and quietly
+retries every 10 minutes.
 
 ## Tunables (workflow env, all optional)
 

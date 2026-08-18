@@ -87,6 +87,32 @@ function syncAISettings(){
   if(ls&&typeof getLightningSource==='function')ls.value=getLightningSource();
   if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last lightning-source outcome (live / quota / rejected)
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
+  _refreshLiveUsers();   // v6.67: community counts at the bottom of Settings
+}
+// v6.67: live-user line at the bottom of Settings — anonymous counts from the
+// worker's GET /stats (salted daily IP hashes server-side; no accounts, no
+// cookies, no raw IPs — see worker/index.js). Hidden entirely when the worker
+// doesn't answer (old deploy / offline), throttled to one fetch per minute to
+// match the endpoint's own 60 s edge cache.
+let _liveUsersAt=0;
+async function _refreshLiveUsers(){
+  const el=document.getElementById('live-users-line');
+  if(!el)return;
+  const now=Date.now();
+  if(now-_liveUsersAt<60000)return;
+  _liveUsersAt=now;
+  try{
+    const base=(typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';
+    const opts={};
+    if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(6000);
+    const r=await fetch(base+'/stats',opts);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    if(!j||!j.today)throw new Error('bad shape');
+    el.textContent=`🟢 ${j.activeNow} active now · ${j.today.users} device${j.today.users!==1?'s':''} today`;
+    el.title='Anonymous counts — distinct devices via a daily-rotating hash, no IPs or accounts stored.';
+    el.style.display='block';
+  }catch(e){el.style.display='none';_liveUsersAt=0}
 }
 function clearAIChat(){
   _aiChatHistory.length=0;

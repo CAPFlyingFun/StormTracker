@@ -308,6 +308,50 @@ async function glmServe(url, env) {
   });
 }
 
+// 📊 Anonymous usage counters — daily + current active users, no PII.
+// The app has no accounts/cookies and that stays true: each browser request to
+// a strike route records SHA-256(secret : day : ip) truncated to 12 bytes — a
+// salted hash that can't be reversed to an IP, and whose identifiers rotate
+// every day by construction (the day is in the hash input). Raw IPs are never
+// stored. GET /stats returns aggregates only: today's distinct devices/calls,
+// devices active in the last 10 min, and a 7-day history. Rows older than 60
+// days are pruned. Non-browser callers (the scanner, CI, curl) are excluded
+// via the Mozilla UA check so the counts approximate real app users.
+const USAGE_TABLE = 'CREATE TABLE IF NOT EXISTS usage_daily (day TEXT, iphash TEXT, calls INTEGER NOT NULL DEFAULT 0, last_seen INTEGER, PRIMARY KEY (day, iphash))';
+async function recordUsage(env, request) {
+  try {
+    if (!env.DB) return;
+    const ua = request.headers.get('User-Agent') || '';
+    if (!ua.includes('Mozilla')) return; // scanner/CI traffic must not inflate user counts
+    const ip = request.headers.get('CF-Connecting-IP') || '';
+    if (!ip) return;
+    const now = Date.now();
+    const day = new Date(now).toISOString().slice(0, 10);
+    const data = new TextEncoder().encode(`${env.SCANNER_SECRET || 'st'}:${day}:${ip}`);
+    const dig = await crypto.subtle.digest('SHA-256', data);
+    const h = [...new Uint8Array(dig)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join('');
+    await env.DB.prepare(USAGE_TABLE).run();
+    await env.DB
+      .prepare('INSERT INTO usage_daily (day, iphash, calls, last_seen) VALUES (?, ?, 1, ?) ON CONFLICT(day, iphash) DO UPDATE SET calls = calls + 1, last_seen = excluded.last_seen')
+      .bind(day, h, now).run();
+  } catch (e) { /* counting must never break the data path */ }
+}
+async function serveStats(env) {
+  if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+  await env.DB.prepare(USAGE_TABLE).run();
+  try { await env.DB.prepare("DELETE FROM usage_daily WHERE day < date('now', '-60 day')").run(); } catch (e) {}
+  const today = new Date().toISOString().slice(0, 10);
+  const t = await env.DB.prepare('SELECT COUNT(*) AS users, COALESCE(SUM(calls), 0) AS calls FROM usage_daily WHERE day = ?').bind(today).first();
+  const act = await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_daily WHERE day = ? AND last_seen > ?').bind(today, Date.now() - 10 * 60000).first();
+  const week = (await env.DB.prepare('SELECT day, COUNT(*) AS users, SUM(calls) AS calls FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT 7').all()).results || [];
+  return new Response(JSON.stringify({
+    today: { day: today, users: t ? t.users : 0, strikeCalls: t ? t.calls : 0 },
+    activeNow: act ? act.n : 0,
+    last7Days: week,
+    note: 'Distinct devices per day via salted daily IP hash (no raw IPs stored, identifiers rotate daily). Counts browsers hitting the lightning routes; scanner/CI excluded.',
+  }, null, 2), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60', ...CORS } });
+}
+
 export default {
   // Cloudflare Cron Trigger (every 5 min) — the reliable heartbeat that kicks
   // off each background storm scan. See triggerScan() above.
@@ -324,9 +368,10 @@ export default {
     // ---- AWC proxy (unchanged) ----
     if (path === '/metar') return proxyAWC('metar', url);
     if (path === '/taf') return proxyAWC('taf', url);
-    if (path === '/lightning' && request.method === 'GET') return proxyLightning(url, request);
+    if (path === '/lightning' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return proxyLightning(url, request); }
     if (path === '/glm-ingest' && request.method === 'POST') return glmIngest(request, env);
-    if (path === '/glm' && request.method === 'GET') return glmServe(url, env);
+    if (path === '/glm' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return glmServe(url, env); }
+    if (path === '/stats' && request.method === 'GET') return serveStats(env);
 
     // ---- Device Link relay: ephemeral, zero-knowledge settings hand-off ----
     // One device PUTs an already-encrypted blob under an opaque id, gets a short
@@ -847,7 +892,7 @@ Rules:
     }
 
     return new Response(
-      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
+      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nLightning:\n  GET  /lightning?since_minutes=15&limit=500&min_lat=... (X-API-Key header; WarPulse relay)\n  GET  /glm?since_minutes=15&limit=500&min_lat=...       (keyless; GOES GLM snapshot)\n  POST /glm-ingest    (scanner)\n  GET  /stats         (anonymous usage counts: daily/active users)\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
       { headers: { 'Content-Type': 'text/plain', ...CORS } }
     );
   },

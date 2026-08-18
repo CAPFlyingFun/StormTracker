@@ -3,6 +3,30 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.67
+
+  **Anonymous usage counters — daily/active devices, zero PII.**
+
+  - Worker: `recordUsage()` runs via `ctx.waitUntil` on browser hits to
+    `/lightning` and `/glm` — stores `SHA-256(SCANNER_SECRET : day : ip)`
+    truncated to 12 bytes in a new D1 `usage_daily` table (day, iphash,
+    calls, last_seen). No raw IPs stored; the day in the hash input makes
+    identifiers rotate daily by construction. Non-browser UAs (scanner, CI,
+    curl) are excluded so counts approximate real app users. Rows older
+    than 60 days pruned. Counting failures are swallowed — they must never
+    break the data path.
+  - Worker: new public `GET /stats` — today's distinct devices + strike
+    calls, devices active in the last 10 min, 7-day history; aggregates
+    only, 60 s edge cache. Listed on the worker help page (which also now
+    documents the lightning routes).
+  - App: Settings bottom shows "🟢 N active now · M devices today" via
+    `_refreshLiveUsers()` (ai.js, fetched on settings-open, ≥60 s apart,
+    hidden when the worker doesn't answer — e.g. the /stats route isn't
+    deployed yet).
+  - Needs the worker redeploy to activate (same pending Deploy Worker run
+    as the GLM routes).
+  - Cache: `?v=765`, SW `stormtracker-v765`.
+
   ## v6.66
 
   **WarPulse Section 6 attribution on every strike-display surface.**

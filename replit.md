@@ -15,7 +15,7 @@ This repository contains the **live StormTracker app**: a static, vanilla-JavaSc
 - `windy-plugin-stormtracker/` — a separate, self-contained Windy.com plugin (own build).
 - `scripts/`, `.github/workflows/` — asset generation and automation.
 
-The older **React + Express + TypeScript** version (which rendered "v1.50") has been moved to its own private repository, `CAPFlyingFun/StormTracker-TS`, to keep the two projects from being confused. Nothing in this repo depends on it. The local Replit preview serves `docs/` directly (static file server on port 5000).
+The Windy plugin lives in its own repo (CAPFlyingFun/StormTracker-Windy-Plugin); the windy-plugin-stormtracker folder here is just a pointer README. The older **React + Express + TypeScript** version (which rendered "v1.50") has been moved to its own private repository, `CAPFlyingFun/StormTracker-TS`, to keep the two projects from being confused. Nothing in this repo depends on it. The local Replit preview serves `docs/` directly (static file server on port 5000).
 
 ## User Preferences
 

@@ -1,6 +1,6 @@
 name: Deploy Worker
 
-# Auto-deploys the Cloudflare worker (worker/) whenever it changes on main,
+# Auto-deploys the Cloudflare worker (worker/) whenever it changes on main
 # so worker code in the repo can never drift from what's actually serving.
 # Also runnable by hand from the Actions tab (workflow_dispatch) — useful for
 # the very first deploy after adding the secrets below.

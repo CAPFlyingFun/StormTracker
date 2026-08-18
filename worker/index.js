@@ -3,7 +3,10 @@
 //   2. Push-subscription API (D1-backed) for multi-user background storm alerts
 //
 // D1 binding:   env.DB           (see schema.sql / wrangler.toml)
-// Secret:       env.SCANNER_SECRET  (shared with the GitHub Actions scanner)
+// Secrets:      env.SCANNER_SECRET      (shared with the GitHub Actions scanner)
+//               env.WARPULSE_SHARED_KEY (signs keyless /lightning requests —
+//                                        dashboard-added Aug 2026; any wrangler
+//                                        deploy binds it to the live version)
 //
 // Public endpoints (called by the static PWA):
 //   POST /subscribe     { subscription, lat, lon, name, thresholds, code? } -> { ok, code }

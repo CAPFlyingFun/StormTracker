@@ -489,6 +489,57 @@ function fmtLightning(personal, tz, h24) {
   };
 }
 
+// --- Real observed lightning via the GOES GLM snapshot (v6.64) ---
+// The glm-lightning job keeps a fresh flash snapshot in the worker; this pulls
+// the strikes around a scan group's location so the ⚡ push can lead with REAL
+// observed lightning instead of the radar estimate. Keyless — it's our own
+// endpoint — and any failure just means the estimate path runs as before.
+const LTG_OBS_MI = 10;         // observed-strike alert ring (matches the in-app alert)
+const LTG_OBS_FRESH_MS = 10 * 60 * 1000; // stale snapshot = ignore, fall back to estimate
+async function fetchGlmStrikes(lat, lon) {
+  const padMi = 30; // covers the 10 mi ring + the 25 mi context count
+  const latPad = padMi / 69;
+  const lonPad = padMi / (69 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+  const u = `${WORKER_URL}/glm?since_minutes=15&limit=500`
+    + `&min_lat=${(lat - latPad).toFixed(3)}&max_lat=${(lat + latPad).toFixed(3)}`
+    + `&min_lon=${(lon - lonPad).toFixed(3)}&max_lon=${(lon + lonPad).toFixed(3)}`;
+  const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
+  if (r.status === 404) return null; // no snapshot yet (pipeline just deployed)
+  if (!r.ok) throw new Error(`glm HTTP ${r.status}`);
+  const j = await r.json();
+  const snapTs = (j && typeof j.updated === 'number') ? j.updated * 1000 : 0;
+  if (!snapTs || Date.now() - snapTs > LTG_OBS_FRESH_MS) return null; // stale — estimate wins
+  const strikes = [];
+  for (const f of (j.flashes || [])) {
+    if (typeof f.lat !== 'number' || typeof f.lon !== 'number') continue;
+    strikes.push({ lat: f.lat, lon: f.lon });
+  }
+  return { sat: j.sat || 'GOES', updated: snapTs, strikes };
+}
+// Observed-strike push body for one subscriber. Fires when a real strike landed
+// within LTG_OBS_MI in the last 15 min. GLM geolocates from orbit at ~8–14 km,
+// so distances are worded as approximate. Dedupe keys use 45° sectors + 5 mi
+// buckets over the in-ring strikes; the 'ltg_' prefix keeps keyKind() = 'ltg'
+// so the existing 30-min ltg cooldown and severe-escalation rules apply.
+function fmtLightningObserved(glm, lat, lon) {
+  const withDist = glm.strikes.map(s => ({
+    distance: haversine(lat, lon, s.lat, s.lon),
+    bearing: bearingDeg(lat, lon, s.lat, s.lon),
+  }));
+  const near = withDist.filter(s => s.distance <= LTG_OBS_MI).sort((a, b) => a.distance - b.distance);
+  if (!near.length) return null;
+  const lead = near[0];
+  const dist = Math.max(1, Math.round(lead.distance));
+  const w25 = withDist.filter(s => s.distance <= 25).length;
+  const cks = [...new Set(near.map(s => `ltg_o${Math.round(s.bearing / 45)}_${Math.round(s.distance / 5)}`))];
+  const context = w25 > near.length ? ` (${w25} within 25 mi)` : '';
+  return {
+    cks,
+    display: `⚡ Lightning OBSERVED ~${dist} mi ${degToDir(lead.bearing)} (satellite)`,
+    body: `Real lightning observed ~${dist} mi to the ${dirLong(lead.bearing)} — ${near.length} strike${near.length !== 1 ? 's' : ''} within ${LTG_OBS_MI} mi in the last 15 min${context}. Detected by the ${glm.sat} satellite (locations approximate). Move indoors now and wait 30 min after the last strike.`,
+  };
+}
+
 // Returns 'ok' | 'dead' | 'err'. 'dead' means the push endpoint is gone (404/410).
 async function trySend(sub, payload, opts) {
   try {
@@ -673,6 +724,19 @@ async function run() {
     // Rain directly overhead also warrants at least the yellow (mid) cadence.
     if (overheadDbz != null && overheadDbz >= 20) maxThreat = Math.max(maxThreat, 1);
 
+    // 5. Real observed lightning (GOES GLM snapshot via the worker, v6.64).
+    // One keyless fetch per group; null (no/stale snapshot or fetch error)
+    // means the radar-estimated ⚡ path below runs exactly as before.
+    let glm = null;
+    try {
+      glm = await fetchGlmStrikes(o.lat, o.lon);
+      if (glm) console.log(`  GLM: ${glm.strikes.length} strikes in range (snapshot ${Math.round((Date.now() - glm.updated) / 60000)} min old)`);
+    } catch (e) { console.warn(`  glm ${key} failed: ${e.message}`); }
+    // Observed lightning near the group location = red (fast) scan cadence.
+    if (glm && glm.strikes.some(s => haversine(o.lat, o.lon, s.lat, s.lon) <= LTG_OBS_MI)) {
+      maxThreat = Math.max(maxThreat, 2);
+    }
+
     for (const sub of members) {
       const st = epState.get(sub.endpoint);
       if (!st || st.dead) continue; // endpoint already dead/pruned this run
@@ -696,6 +760,18 @@ async function run() {
       // and the 'rov' line). These hold the legacy items as a no-regression
       // fallback in case the projection can't build a timeline.
       let scItem = null, rovItem = null, rcHits = [];
+
+      // --- ⚡ Lightning: observed strikes first, radar estimate as fallback ---
+      // v6.64: when the GLM snapshot is fresh and a REAL strike landed within
+      // ~10 mi, that leads the ⚡ push (worded as observed, satellite-sourced).
+      // Otherwise the long-standing radar-derived corridor estimate (inside the
+      // cells block below) fires exactly as before — GLM detection efficiency
+      // isn't 100%, so the estimate is never suppressed, only outranked.
+      let ltgItem = null;
+      if (glm && glm.strikes.length) {
+        const obs = fmtLightningObserved(glm, sub.lat, sub.lon);
+        if (obs) ltgItem = { kind: 'ltg', cat: 'ltg', urgency: 'high', cks: obs.cks, sig: 'ltg:obs', display: obs.display, titleSingle: '⚡ Lightning Nearby', body: obs.body };
+      }
 
       // --- Storm cells + estimated lightning ---
       if (cells.length) {
@@ -749,11 +825,14 @@ async function run() {
           rcHits = hits;
         }
 
-        // Lightning runs off the full corridor (approaching strong cells out to
-        // 80 mi), independent of the user's dBZ/impact filter, so a strong cell
-        // bearing down can warn even if it hasn't met the storm-alert bar yet.
-        const ltg = fmtLightning(personal, tz, h24);
-        if (ltg) items.push({ kind: 'ltg', cat: 'ltg', urgency: 'high', cks: ltg.cks, sig: 'ltg', display: ltg.display, titleSingle: '⚡ Lightning Nearby', body: ltg.body });
+        // Lightning estimate runs off the full corridor (approaching strong
+        // cells out to 80 mi), independent of the user's dBZ/impact filter, so
+        // a strong cell bearing down can warn even if it hasn't met the
+        // storm-alert bar yet. Skipped when an OBSERVED strike already leads.
+        if (!ltgItem) {
+          const ltg = fmtLightning(personal, tz, h24);
+          if (ltg) ltgItem = { kind: 'ltg', cat: 'ltg', urgency: 'high', cks: ltg.cks, sig: 'ltg', display: ltg.display, titleSingle: '⚡ Lightning Nearby', body: ltg.body };
+        }
 
         // --- Awareness: strong storms nearby that are NOT heading at the user ---
         // Strong cells inside the user's radius that are parallel/passing/receding
@@ -773,6 +852,9 @@ async function run() {
           }
         }
       }
+      // One ⚡ item per digest, whichever source produced it (observed strikes
+      // fire even on a cell-less radar scan — GLM sees what radar hasn't yet).
+      if (ltgItem) items.push(ltgItem);
 
       // --- Rain right over you (radar dBZ on the exact spot, no inbound needed) ---
       // Fires whenever the overhead radar value lands in an enabled band, even

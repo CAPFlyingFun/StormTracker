@@ -32,6 +32,18 @@ Newest first. Service-worker cache name follows the version (e.g., `stormtracker
     Settings status line, and AI context all name it (with the ~8–14 km GLM
     geolocation caveat; satellite proximity alerts show "~" distances).
     Clearing the WarPulse key now hands over to GLM instead of going dark.
+  - **Background push upgraded to observed lightning.** The scanner's
+    "⚡ Lightning Nearby" push could never use WarPulse (device-local key);
+    with GLM server-side it now fetches the snapshot per scan group
+    (`fetchGlmStrikes()`, one keyless worker GET, 30-mi pad) and a real
+    strike within 10 mi in the last 15 min leads the ⚡ item as
+    "Lightning OBSERVED ~N mi (satellite)" (`fmtLightningObserved()`,
+    `sig: 'ltg:obs'`, dedupe keys `ltg_o<sector45>_<5mi-bucket>` so
+    `keyKind()` still maps to the 30-min `ltg` cooldown and the severe
+    escalation path). The radar-derived estimate is never suppressed, only
+    outranked — GLM detection efficiency isn't 100% — and fires exactly as
+    before when there are no observed strikes. Observed strikes near the
+    group location also force the red (fastest) adaptive scan cadence.
   - **Deploy notes:** worker redeploy required (`wrangler deploy` in
     `worker/`); no new secrets (reuses `WORKER_URL`/`SCANNER_SECRET` already
     set for the scanner). See `GLM_LIGHTNING_SETUP.md`.

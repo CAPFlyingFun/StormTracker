@@ -21,6 +21,11 @@ GET {WORKER_URL}/glm?since_minutes=15&limit=500&min_lat=…   (public, CORS)
         │  same response shape as the WarPulse /lightning proxy
         ▼
 App: Settings → ⚡ Lightning → source "Auto" (key → satellite → estimate)
+        │
+        └─► Push scanner (scan.js) also reads GET /glm per scan group:
+            a real strike within ~10 mi in the last 15 min sends a
+            "⚡ Lightning OBSERVED (satellite)" push and forces the fastest
+            scan cadence; otherwise the radar-estimate ⚡ push runs as before.
 ```
 
 ## One-time deploy steps

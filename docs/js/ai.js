@@ -83,7 +83,9 @@ function syncAISettings(){
   if(sk&&typeof getSkylinkKey==='function')sk.value=getSkylinkKey();
   const lk=document.getElementById('settings-lightning-key');
   if(lk&&typeof getLightningKey==='function')lk.value=getLightningKey();
-  if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last WarPulse outcome (live / quota / rejected)
+  const ls=document.getElementById('settings-lightning-source');
+  if(ls&&typeof getLightningSource==='function')ls.value=getLightningSource();
+  if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last lightning-source outcome (live / quota / rejected)
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();
 }
 function clearAIChat(){
@@ -435,9 +437,10 @@ function buildWeatherContext(){
     }
   }
 
-  // LIGHTNING — real observed WarPulse strikes (client-side, last 15 min). Only
-  // present when the user has a key and fresh data; otherwise the AI relies on
-  // the radar-derived storm intensity for convective/lightning reasoning.
+  // LIGHTNING — real observed strikes (WarPulse ground network or GOES GLM
+  // satellite, last 15 min). Only present when a source has fresh data;
+  // otherwise the AI relies on radar-derived storm intensity for
+  // convective/lightning reasoning.
   try{
     if(typeof ltgLive==='function'&&ltgLive()&&S._ltgStrikes&&S._ltgStrikes.flashes.length&&S.lat!=null){
       const fl=S._ltgStrikes.flashes;
@@ -448,7 +451,8 @@ function buildWeatherContext(){
         if(d<=10)w10++; if(d<=25)w25++;
       }
       const nd=S.radarMetric?(nearest*1.60934).toFixed(1)+' km':nearest.toFixed(1)+' mi';
-      parts.push(`\nLIGHTNING (REAL observed strikes via WarPulse, last 15 min — NOT a radar estimate):`);
+      const _lsrc=S._ltgStrikes.src==='glm'?('GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')+', geolocation ~8-14 km'):'WarPulse ground network';
+      parts.push(`\nLIGHTNING (REAL observed strikes via ${_lsrc}, last 15 min — NOT a radar estimate):`);
       parts.push(`  Total: ${fl.length} strike${fl.length!==1?'s':''} · within 10 mi: ${w10} · within 25 mi: ${w25}`);
       if(isFinite(nearest))parts.push(`  Nearest strike: ${nd} to the ${degToDir(nBrg)}`);
       parts.push(`  Treat lightning within ~10 mi as an active outdoor-safety hazard (30/30 rule); prefer this observed data over radar-implied lightning when both are present.`);

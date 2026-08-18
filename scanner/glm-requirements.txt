@@ -1,0 +1,3 @@
+# Deps for glm_fetch.py (GOES GLM lightning snapshot job). netCDF4 wheels
+# bundle the HDF5/netCDF C libraries, so no apt packages are needed.
+netCDF4>=1.6,<2

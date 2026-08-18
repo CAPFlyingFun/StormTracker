@@ -246,6 +246,59 @@ async function proxyLightning(url, request) {
   }
 }
 
+// 🛰️ GOES GLM lightning snapshot — free, keyless observed strikes.
+// The glm-lightning GitHub Actions job (scanner/glm_fetch.py) POSTs a compact
+// flash snapshot here every ~5 min (auth: the same x-scanner-secret as the push
+// scanner); the app reads it back via GET /glm with the SAME query/response
+// shape as the WarPulse /lightning proxy, so the client parses both with one
+// code path. Stored as one JSON blob in the existing D1 `meta` table.
+async function glmIngest(request, env) {
+  if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+  if (!env.SCANNER_SECRET || request.headers.get('x-scanner-secret') !== env.SCANNER_SECRET) {
+    return json({ error: 'unauthorized' }, 401);
+  }
+  const raw = await request.text();
+  if (raw.length > 900000) return json({ error: 'snapshot too large' }, 413);
+  let snap;
+  try { snap = JSON.parse(raw); } catch { return json({ error: 'bad json' }, 400); }
+  if (!snap || typeof snap.updated !== 'number' || !Array.isArray(snap.flashes)) {
+    return json({ error: 'updated + flashes[] required' }, 400);
+  }
+  await metaSet(env, 'glm:latest', raw);
+  return json({ ok: true, flashes: snap.flashes.length });
+}
+
+async function glmServe(url, env) {
+  if (!env.DB) return json({ error: 'D1 not configured' }, 500);
+  const raw = await metaGet(env, 'glm:latest');
+  if (!raw) return json({ error: 'no GLM snapshot yet' }, 404);
+  let snap;
+  try { snap = JSON.parse(raw); } catch { return json({ error: 'corrupt snapshot' }, 500); }
+  const q = (k, d) => { const v = parseFloat(url.searchParams.get(k)); return isFinite(v) ? v : d; };
+  const minLat = q('min_lat', -90), maxLat = q('max_lat', 90);
+  const minLon = q('min_lon', -180), maxLon = q('max_lon', 180);
+  const sinceMin = Math.min(60, Math.max(1, q('since_minutes', 15)));
+  const limit = Math.min(2000, Math.max(1, Math.round(q('limit', 500))));
+  const cutoff = Math.floor(Date.now() / 1000) - sinceMin * 60;
+  const out = [];
+  // Snapshot is chronological; walk newest-first so the limit keeps the newest.
+  for (let i = snap.flashes.length - 1; i >= 0 && out.length < limit; i--) {
+    const f = snap.flashes[i];
+    if (!f || f.t < cutoff) continue;
+    if (f.lat < minLat || f.lat > maxLat || f.lon < minLon || f.lon > maxLon) continue;
+    // flash_timestamp_utc mirrors WarPulse's "YYYY-MM-DD HH:MM:SS" shape so the
+    // client's existing timestamp parsing works unchanged.
+    const d = new Date(f.t * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    out.push({ lat: f.lat, lon: f.lon, flash_timestamp_utc: d, energy_fj: f.e });
+  }
+  return new Response(JSON.stringify({
+    source: 'glm', sat: snap.sat || null, updated: snap.updated,
+    granules: snap.granules || null, flashes: out,
+  }), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=30', ...CORS },
+  });
+}
+
 export default {
   // Cloudflare Cron Trigger (every 5 min) — the reliable heartbeat that kicks
   // off each background storm scan. See triggerScan() above.
@@ -263,6 +316,8 @@ export default {
     if (path === '/metar') return proxyAWC('metar', url);
     if (path === '/taf') return proxyAWC('taf', url);
     if (path === '/lightning' && request.method === 'GET') return proxyLightning(url, request);
+    if (path === '/glm-ingest' && request.method === 'POST') return glmIngest(request, env);
+    if (path === '/glm' && request.method === 'GET') return glmServe(url, env);
 
     // ---- Device Link relay: ephemeral, zero-knowledge settings hand-off ----
     // One device PUTs an already-encrypted blob under an opaque id, gets a short

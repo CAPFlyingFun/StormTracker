@@ -3,6 +3,40 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.64
+
+  **GOES GLM satellite lightning — free, keyless observed strikes + source picker.**
+
+  - **New pipeline: NOAA GOES GLM → worker → app.** `scanner/glm_fetch.py`
+    (new `glm-lightning` job in `storm-scan.yml`, riding the same ~5-min
+    workflow_dispatch heartbeat as the push scan) downloads the last
+    ~16 minutes of GLM L2 LCFA granules from the public `noaa-goes19` S3
+    bucket (public domain, keyless, quota-less), parses them with netCDF4
+    (downloads parallel, parsing sequential — the HDF5 C library is not
+    thread-safe), keeps `flash_quality_flag == 0` flashes inside a CONUS bbox
+    (env-tunable: `GOES_BUCKET`, `GLM_WINDOW_MIN`, `GLM_BBOX`), and POSTs a
+    compact snapshot (~8000-flash cap) to the worker's new `POST /glm-ingest`
+    (auth: existing `x-scanner-secret`; stored as one blob in D1 `meta`).
+    `GET /glm` serves it back with the same query params and response shape as
+    the WarPulse `/lightning` proxy (`flash_timestamp_utc` string included) so
+    the client parses both with one code path. Measured end-to-end: 46
+    granules fetched+parsed in ~4 s; newest flash 28 s old at ingest time.
+  - **Client source chain + picker.** `refreshLightningStrikes()` is now an
+    orchestrator over `_ltgFetchWarPulse()` / `_ltgFetchGLM()` with shared
+    `_ltgApplyFlashes()` (parse, plot, sonar, proximity alert). New setting
+    `st_ltgSource`: auto (key → satellite → estimate, default) / warpulse /
+    glm / radar, with a dropdown in Settings → ⚡ Lightning. GLM freshness is
+    anchored to the snapshot's build time, so a stalled pipeline ages out via
+    the existing `ltgLive()` 10-min window and the radar estimate takes over.
+    `S._ltgStrikes.src`/`sat` tag the active source; the Storms-tab footnote,
+    Settings status line, and AI context all name it (with the ~8–14 km GLM
+    geolocation caveat; satellite proximity alerts show "~" distances).
+    Clearing the WarPulse key now hands over to GLM instead of going dark.
+  - **Deploy notes:** worker redeploy required (`wrangler deploy` in
+    `worker/`); no new secrets (reuses `WORKER_URL`/`SCANNER_SECRET` already
+    set for the scanner). See `GLM_LIGHTNING_SETUP.md`.
+  - Cache: `?v=762`, SW `stormtracker-v762`.
+
   ## v6.63
 
   **Lightning quota vs bad-key diagnosis · Rain Clock refresh after late winds aloft.**

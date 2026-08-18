@@ -192,9 +192,11 @@ function saveLightningKey(v){
   // Fresh key = fresh start: clear any bad-key backoff and cached strikes,
   // then fetch immediately so the user sees live data without waiting a scan.
   _ltgBackoffUntil=0;_ltgBadKeyWarned=false;_ltgQuotaWarned=false;_ltgLastAt=0;S._ltgLastErr=null;
-  if(typeof _ltgSetStatus==='function')_ltgSetStatus();
   if(!t){S._ltgStrikes=null;if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof drawMiniSonar==='function')drawMiniSonar();}
-  else refreshLightningStrikes(true);
+  // v6.64: refetch either way — with a key this validates it immediately; with
+  // the key cleared, auto mode falls through to the free GOES GLM feed.
+  refreshLightningStrikes(true);
+  if(typeof _ltgSetStatus==='function')_ltgSetStatus();
   if(typeof toast==='function')toast(t?'✓ Lightning key saved':'Lightning key cleared');
 }
 function toggleLightningKeyVis(){
@@ -202,15 +204,40 @@ function toggleLightningKeyVis(){
   if(!inp)return;
   inp.type=inp.type==='password'?'text':'password';
 }
-// --- Live lightning strikes (WarPulse via the Cloudflare worker proxy) ---
-// WarPulse blocks browser CORS, so the fetch goes through the worker's
-// /lightning pass-through route; the key travels per-request in X-API-Key and
-// is never stored server-side. Quota safety (free plan = 50k units/month,
-// cost = ceil(flashes/100) per call, min 1): calls ride the scan pipeline,
-// throttled to one per 60s, since_minutes=15, limit=500 (free-plan cap).
+// --- Live lightning strikes: source chain (v6.64) ---
+// Three sources, one S._ltgStrikes consumer surface (map dots, sonar, AI):
+//   1. WarPulse (personal key, ground network, ~1 km) via the worker's
+//      /lightning CORS pass-through — key travels per-request in X-API-Key,
+//      never stored server-side. Quota safety: throttled to one call per 60s,
+//      since_minutes=15, limit=500.
+//   2. GOES GLM satellite (free, keyless, ~8–14 km geolocation) via the
+//      worker's /glm route — a GitHub Actions job (scanner/glm_fetch.py)
+//      refreshes the snapshot about every 5 min from NOAA's public bucket.
+//   3. Radar-derived estimate (cells ≥48 dBZ) — not observed strikes; always
+//      available, used when neither observed source has fresh data.
+// Settings → ⚡ Lightning picks the source: auto (WarPulse → GLM → estimate),
+// or pin any single one. S._ltgStrikes.src tags what's currently shown.
 const LTG_FRESH_MS=10*60000;   // strikes older than this = fall back to radar estimate
 const LTG_MIN_GAP_MS=60000;    // min spacing between API calls
 let _ltgLastAt=0,_ltgBackoffUntil=0,_ltgBadKeyWarned=false,_ltgQuotaWarned=false;
+let _glmUnavailUntil=0;        // backoff for the keyless GLM endpoint
+function getLightningSource(){
+  try{const v=localStorage.getItem('st_ltgSource');if(v==='warpulse'||v==='glm'||v==='radar')return v}catch(e){}
+  return 'auto';
+}
+function setLightningSource(v){
+  const t=(v==='warpulse'||v==='glm'||v==='radar')?v:'auto';
+  try{localStorage.setItem('st_ltgSource',t)}catch(e){}
+  // Fresh source = fresh data: drop whatever the old source painted, lift GLM
+  // backoff so a pinned/auto GLM tries immediately, and refetch now.
+  S._ltgStrikes=null;_glmUnavailUntil=0;_ltgLastAt=0;
+  if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
+  if(typeof drawMiniSonar==='function')drawMiniSonar();
+  if(t!=='radar')refreshLightningStrikes(true);
+  _ltgSetStatus();
+  const lbl={auto:'Auto (key → satellite → estimate)',warpulse:'WarPulse only',glm:'GOES satellite only',radar:'Radar estimate only'}[t];
+  if(typeof toast==='function')toast('⚡ Lightning source: '+lbl);
+}
 // v6.63: live status line under Settings → ⚡ Lightning. WarPulse answers 401/403
 // for an invalid key AND (like many APIs) 403 when the plan's monthly units run
 // out, so "rejected" alone is undiagnosable from the toast. This surfaces the
@@ -219,42 +246,98 @@ let _ltgLastAt=0,_ltgBackoffUntil=0,_ltgBadKeyWarned=false,_ltgQuotaWarned=false
 function _ltgSetStatus(){
   const el=document.getElementById('lightning-key-status');
   if(!el)return;
-  if(!getLightningKey()){el.style.display='none';el.textContent='';return}
+  const src=getLightningSource();
   const err=S._ltgLastErr;
+  const st=S._ltgStrikes;
   let msg,col;
-  if(err){
+  if(src==='radar'){col='';msg='Source pinned to the radar-derived estimate (cells ≥48 dBZ) — no observed-strike feeds are fetched.'}
+  else if(err&&getLightningKey()&&src!=='glm'){
     const when=new Date(err.ts).toLocaleTimeString();
     const det=err.detail?' — “'+err.detail+'”':'';
-    if(err.quota){col='#facc15';msg='⚠️ Quota reached (HTTP '+err.status+' at '+when+det+'). The key looks valid but the plan\'s monthly units appear used up — strikes fall back to the radar estimate until the quota resets. Check usage at lightning.warpulse.com.'}
-    else{col='#ef4444';msg='❌ Key rejected (HTTP '+err.status+' at '+when+det+'). Re-paste the key, or check it at lightning.warpulse.com.'}
-  }else if(S._ltgStrikes){
+    if(err.quota){col='#facc15';msg='⚠️ WarPulse quota reached (HTTP '+err.status+' at '+when+det+'). The key looks valid but the plan\'s monthly units appear used up. Check usage at lightning.warpulse.com.'}
+    else{col='#ef4444';msg='❌ WarPulse key rejected (HTTP '+err.status+' at '+when+det+'). Re-paste the key, or check it at lightning.warpulse.com.'}
+    if(src==='auto')msg+=' Auto mode is using the free GOES satellite feed (or the radar estimate) meanwhile.';
+  }else if(st&&st.flashes.length){
     col='#4ade80';
-    msg='✓ Live — '+S._ltgStrikes.flashes.length+' strike'+(S._ltgStrikes.flashes.length!==1?'s':'')+' (last 15 min) received at '+new Date(S._ltgStrikes.ts).toLocaleTimeString();
-  }else{col='';msg='Key saved — waiting for the first strike fetch (runs with each radar scan).'}
+    const srcLbl=st.src==='glm'?('GOES GLM satellite'+(st.sat?' ('+st.sat+')':'')):'WarPulse';
+    msg='✓ Live via '+srcLbl+' — '+st.flashes.length+' strike'+(st.flashes.length!==1?'s':'')+' (last 15 min), received '+new Date(st.ts).toLocaleTimeString();
+    if(st.src==='glm')msg+='. Satellite geolocation is ~8–14 km, coarser than a ground network.';
+  }else if(src==='glm'||(src==='auto'&&!getLightningKey())){
+    col='';msg='Using the free GOES GLM satellite feed — no key needed. Updates ~every 5 min; strikes appear when there\'s lightning in range. Radar estimate covers any gap.';
+  }else if(getLightningKey()){col='';msg='Key saved — waiting for the first strike fetch (runs with each radar scan).'}
+  else{col='';msg='No key — auto mode uses the free GOES satellite feed when available, otherwise the radar estimate.'}
   el.style.display='block';
   el.style.color=col||'var(--text-muted)';
   el.textContent=msg;
 }
 function ltgLive(){return !!(S._ltgStrikes&&S._ltgStrikes.flashes.length&&Date.now()-S._ltgStrikes.ts<LTG_FRESH_MS)}
-async function refreshLightningStrikes(force){
-  const key=getLightningKey();
-  if(!key||S.lat==null||S.lon==null)return;
-  const now=Date.now();
-  if(now<_ltgBackoffUntil)return;
-  if(!force&&now-_ltgLastAt<LTG_MIN_GAP_MS)return;
-  if(S._ltgFetching)return;
-  S._ltgFetching=true;_ltgLastAt=now;
+function _ltgBboxQS(){
+  const radMi=Math.max(S.scanRadius||80,60);
+  const latPad=radMi/69;
+  const lonPad=radMi/(69*Math.max(0.2,Math.cos(S.lat*Math.PI/180)));
+  return 'since_minutes=15&limit=500'
+    +'&min_lat='+(S.lat-latPad).toFixed(3)+'&max_lat='+(S.lat+latPad).toFixed(3)
+    +'&min_lon='+(S.lon-lonPad).toFixed(3)+'&max_lon='+(S.lon+lonPad).toFixed(3);
+}
+// Shared flash-list processor: both observed sources answer the same shape
+// ({flashes:[{lat,lon,flash_timestamp_utc}]}), so parsing, plotting, and the
+// proximity alert live here once. `ts` is the freshness anchor — Date.now()
+// for a direct WarPulse call, the snapshot's build time for GLM (so a stalled
+// GLM pipeline ages out via ltgLive() and the radar estimate takes over).
+function _ltgApplyFlashes(j,src,ts,sat){
+  const flashes=[];
+  for(const f of (j&&j.flashes)||[]){
+    if(typeof f.lat!=='number'||typeof f.lon!=='number')continue;
+    let t=0;
+    if(f.flash_timestamp_utc){
+      // Both feeds return "YYYY-MM-DD HH:MM:SS[.ffffff]" (UTC, space, no zone)
+      let s=String(f.flash_timestamp_utc).replace(' ','T');
+      if(!/[zZ]$|[+-]\d\d:?\d\d$/.test(s))s+='Z';
+      t=Date.parse(s)||0;
+    }
+    // Precompute polar coords relative to the fetch location once, so the
+    // sonar (redrawn every animation frame) doesn't haversine 500 strikes
+    // per frame. The bbox is centered on this same location, so these stay
+    // consistent with the data itself.
+    const distMi=haversine(S.lat,S.lon,f.lat,f.lon);
+    const bear=(bearingDeg(S.lat,S.lon,f.lat,f.lon)+360)%360;
+    flashes.push({lat:f.lat,lon:f.lon,t,distMi,bear});
+  }
+  S._ltgStrikes={ts:ts||Date.now(),flashes,src:src,sat:sat||null};
+  _ltgSetStatus();
+  if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
+  if(typeof drawMiniSonar==='function')drawMiniSonar();
+  // v5.77: in-app lightning proximity alert (browser notification while the app
+  // is open — background push can't use the device-local key/feed). At most
+  // once per 10 min when a fresh observed strike lands within ~10 mi.
   try{
-    const radMi=Math.max(S.scanRadius||80,60);
-    const latPad=radMi/69;
-    const lonPad=radMi/(69*Math.max(0.2,Math.cos(S.lat*Math.PI/180)));
+    let _near=Infinity,_nBrg=null;
+    for(const f of flashes){
+      const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
+      if(d<_near){_near=d;_nBrg=(f.bear!=null)?f.bear:bearingDeg(S.lat,S.lon,f.lat,f.lon);}
+    }
+    if(isFinite(_near)&&_near<=10&&Date.now()-(S._ltgNotifyAt||0)>10*60000){
+      S._ltgNotifyAt=Date.now();
+      const nd=S.radarMetric?(_near*1.60934).toFixed(1)+' km':_near.toFixed(1)+' mi';
+      const dirStr=(_nBrg!=null)?` to the ${degToDir(_nBrg)} (${Math.round(_nBrg)}°)`:'';
+      // GLM geolocation is ~8–14 km, so satellite distances are approximate.
+      const approx=src==='glm'?'~':'';
+      if(typeof _sendBrowserNotification==='function')_sendBrowserNotification('⚡ Lightning nearby',`Observed strike ${approx}${nd}${dirStr} away — seek shelter (30/30 rule).`);
+      if(typeof toast==='function')toast(`⚡ Real lightning ${approx}${nd}${dirStr}`);
+    }
+  }catch(e){}
+  return flashes.length;
+}
+// WarPulse (personal key). Returns true when it delivered usable data; false
+// lets auto mode fall through to GLM.
+async function _ltgFetchWarPulse(now){
+  const key=getLightningKey();
+  if(!key||now<_ltgBackoffUntil)return false;
+  try{
     const base=(typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';
-    const u=base+'/lightning?since_minutes=15&limit=500'
-      +'&min_lat='+(S.lat-latPad).toFixed(3)+'&max_lat='+(S.lat+latPad).toFixed(3)
-      +'&min_lon='+(S.lon-lonPad).toFixed(3)+'&max_lon='+(S.lon+lonPad).toFixed(3);
     const opts={headers:{'X-API-Key':key}};
     if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
-    const r=await fetch(u,opts);
+    const r=await fetch(base+'/lightning?'+_ltgBboxQS(),opts);
     if(r.status===401||r.status===403||r.status===429){
       // v6.63: read the error BODY before deciding what to tell the user.
       // WarPulse (like many APIs) can answer 403 for an exhausted monthly quota
@@ -271,63 +354,71 @@ async function refreshLightningStrikes(force){
       const quotaLike=r.status===429||/quota|rate.?limit|limit (reached|exceeded)|exceed|usage|credit|too many|plan/i.test(detail);
       S._ltgLastErr={status:r.status,detail:detail.slice(0,200),quota:quotaLike,ts:now};
       _ltgSetStatus();
-      console.warn('[ltg] HTTP '+r.status+(detail?' — '+detail:'')+(quotaLike?' → treating as quota exhausted':' → treating as rejected key'));
+      console.warn('[ltg] WarPulse HTTP '+r.status+(detail?' — '+detail:'')+(quotaLike?' → treating as quota exhausted':' → treating as rejected key'));
       if(quotaLike){
         _ltgBackoffUntil=now+60*60000;
-        if(!_ltgQuotaWarned){_ltgQuotaWarned=true;if(typeof toast==='function')toast('⚡ Lightning quota used up (HTTP '+r.status+') — radar estimate until it resets. Details in Settings → Lightning')}
+        if(!_ltgQuotaWarned){_ltgQuotaWarned=true;if(typeof toast==='function')toast('⚡ Lightning quota used up (HTTP '+r.status+') — details in Settings → Lightning')}
       }else{
         _ltgBackoffUntil=now+30*60000;
         if(!_ltgBadKeyWarned){_ltgBadKeyWarned=true;if(typeof toast==='function')toast('⚡ Lightning key rejected (HTTP '+r.status+') — check Settings → Lightning')}
       }
-      return;
+      return false;
     }
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
-    const flashes=[];
-    for(const f of (j&&j.flashes)||[]){
-      if(typeof f.lat!=='number'||typeof f.lon!=='number')continue;
-      let t=0;
-      if(f.flash_timestamp_utc){
-        // API returns "2026-07-19 20:21:57.797745" (UTC, space, no zone marker)
-        let s=String(f.flash_timestamp_utc).replace(' ','T');
-        if(!/[zZ]$|[+-]\d\d:?\d\d$/.test(s))s+='Z';
-        t=Date.parse(s)||0;
-      }
-      // Precompute polar coords relative to the fetch location once, so the
-      // sonar (redrawn every animation frame) doesn't haversine 500 strikes
-      // per frame. The bbox is centered on this same location, so these stay
-      // consistent with the data itself.
-      const distMi=haversine(S.lat,S.lon,f.lat,f.lon);
-      const bear=(bearingDeg(S.lat,S.lon,f.lat,f.lon)+360)%360;
-      flashes.push({lat:f.lat,lon:f.lon,t,distMi,bear});
-    }
-    S._ltgStrikes={ts:Date.now(),flashes};
+    const n=_ltgApplyFlashes(j,'warpulse',Date.now(),null);
     // A successful call clears any earlier bad-key/quota verdict (and re-arms the
     // one-shot warnings) so a transient provider error doesn't stick forever.
     S._ltgLastErr=null;_ltgBadKeyWarned=false;_ltgQuotaWarned=false;
     _ltgSetStatus();
-    console.log('[ltg] '+flashes.length+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
-    if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
-    if(typeof drawMiniSonar==='function')drawMiniSonar();
-    // v5.77: in-app lightning proximity alert (browser notification while the app
-    // is open — background push can't use the device-local WarPulse key). At most
-    // once per 10 min when a fresh observed strike lands within ~10 mi.
-    try{
-      let _near=Infinity,_nBrg=null;
-      for(const f of flashes){
-        const d=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
-        if(d<_near){_near=d;_nBrg=(f.bear!=null)?f.bear:bearingDeg(S.lat,S.lon,f.lat,f.lon);}
-      }
-      if(isFinite(_near)&&_near<=10&&Date.now()-(S._ltgNotifyAt||0)>10*60000){
-        S._ltgNotifyAt=Date.now();
-        const nd=S.radarMetric?(_near*1.60934).toFixed(1)+' km':_near.toFixed(1)+' mi';
-        const dirStr=(_nBrg!=null)?` to the ${degToDir(_nBrg)} (${Math.round(_nBrg)}°)`:'';
-        if(typeof _sendBrowserNotification==='function')_sendBrowserNotification('⚡ Lightning nearby',`Observed strike ${nd}${dirStr} away — seek shelter (30/30 rule).`);
-        if(typeof toast==='function')toast(`⚡ Real lightning ${nd}${dirStr}`);
-      }
-    }catch(e){}
-  }catch(e){console.warn('[ltg] fetch failed:',e&&e.message||e)}
-  finally{S._ltgFetching=false}
+    console.log('[ltg] WarPulse: '+n+' live strikes (quota cost '+(r.headers.get('X-Quota-Cost')||'?')+')');
+    return true;
+  }catch(e){console.warn('[ltg] WarPulse fetch failed:',e&&e.message||e);return false}
+}
+// GOES GLM satellite snapshot (keyless). Returns true when a FRESH snapshot
+// came back — even with 0 flashes in range, that's a valid answer; the radar
+// estimate still covers display when the flash list is empty (ltgLive()=false).
+async function _ltgFetchGLM(now){
+  if(now<_glmUnavailUntil)return false;
+  try{
+    const base=(typeof _pushApiUrl==='function')?_pushApiUrl():'https://stormtracker-proxy.joshua-622.workers.dev';
+    const opts={};
+    if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(10000);
+    const r=await fetch(base+'/glm?'+_ltgBboxQS(),opts);
+    if(r.status===404){_glmUnavailUntil=now+10*60000;console.log('[ltg] GLM: no snapshot yet (pipeline not running?) — retry in 10 min');return false}
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const snapTs=(j&&typeof j.updated==='number')?j.updated*1000:0;
+    if(!snapTs||now-snapTs>LTG_FRESH_MS){
+      console.log('[ltg] GLM snapshot stale ('+(snapTs?Math.round((now-snapTs)/60000)+' min old':'no timestamp')+') — ignoring');
+      _glmUnavailUntil=now+5*60000;
+      return false;
+    }
+    const n=_ltgApplyFlashes(j,'glm',snapTs,j.sat||null);
+    console.log('[ltg] GLM ('+(j.sat||'?')+'): '+n+' strikes in range, snapshot '+Math.round((now-snapTs)/1000)+'s old');
+    return true;
+  }catch(e){console.warn('[ltg] GLM fetch failed:',e&&e.message||e);_glmUnavailUntil=now+5*60000;return false}
+}
+async function refreshLightningStrikes(force){
+  if(S.lat==null||S.lon==null)return;
+  const src=getLightningSource();
+  if(src==='radar'){
+    // Pinned to the estimate: make sure no stale observed strikes linger.
+    if(S._ltgStrikes){S._ltgStrikes=null;if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);if(typeof drawMiniSonar==='function')drawMiniSonar()}
+    return;
+  }
+  const now=Date.now();
+  if(!force&&now-_ltgLastAt<LTG_MIN_GAP_MS)return;
+  if(S._ltgFetching)return;
+  S._ltgFetching=true;_ltgLastAt=now;
+  try{
+    if(src==='warpulse'){await _ltgFetchWarPulse(now);return}
+    if(src==='glm'){await _ltgFetchGLM(now);return}
+    // auto: personal key first (best precision), free satellite otherwise —
+    // including when the key call fails or is backed off (quota/bad key).
+    if(await _ltgFetchWarPulse(now))return;
+    await _ltgFetchGLM(now);
+  }finally{S._ltgFetching=false}
 }
 function _ftToHPa(ft){
   // ISA: P = 1013.25 * (1 - 0.0065*h/288.15)^5.255 ; h in meters
@@ -4862,7 +4953,7 @@ function _renderStormsCore(){
     </div>
     ${gridHtml}
     <div style="font-size:0.65em;color:var(--text-muted);text-align:center;padding:4px">
-      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Observed via WarPulse<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
+      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Observed via ${S._ltgStrikes.src==='glm'?('GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')):'WarPulse'}<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
       Impact % based on direction, distance, speed &amp; intensity via winds aloft
     </div>`;
   startEtaCountdowns();

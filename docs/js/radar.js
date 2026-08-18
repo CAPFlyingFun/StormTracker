@@ -857,7 +857,8 @@ async function commitScanResults(rawPoints,opts){
   }
   updateThreatTicker();
   // v5.69: live lightning rides the scan pipeline (non-blocking — internally
-  // throttled + no-op without a WarPulse key). Re-plots map/sonar on arrival.
+  // throttled; v6.64: WarPulse key → GOES GLM satellite → radar estimate, per
+  // Settings → Lightning source). Re-plots map/sonar on arrival.
   if(typeof refreshLightningStrikes==='function')refreshLightningStrikes();
   return true;
 }

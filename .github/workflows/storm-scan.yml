@@ -44,3 +44,29 @@ jobs:
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
         run: node scan.js
+
+  # GOES GLM lightning snapshot — free, keyless observed strikes (see
+  # scanner/glm_fetch.py). Rides the same 5-min workflow_dispatch heartbeat as
+  # the push scan; a separate job so a GLM hiccup can never fail the push scan
+  # (and vice versa). Reuses the existing WORKER_URL / SCANNER_SECRET secrets.
+  glm-lightning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scanner/glm-requirements.txt
+
+      - name: Install GLM deps
+        run: pip install -r scanner/glm-requirements.txt
+
+      - name: Fetch GLM flashes and ingest
+        working-directory: scanner
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          SCANNER_SECRET: ${{ secrets.SCANNER_SECRET }}
+        run: python3 glm_fetch.py

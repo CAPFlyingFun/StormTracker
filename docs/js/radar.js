@@ -785,9 +785,18 @@ async function runRadarScan(opts){
     }
   }
   const tileResults=await Promise.all(tilePromises);
-  const points=tileResults.flat();
+  // v6.72: scanTileForPoints returns NULL for a tile that failed at the
+  // network level (timeout/error) vs [] for a genuinely dry tile. Count the
+  // failures so commitScanResults can tell a broken refresh from clear skies.
+  let failedTiles=0;
+  const points=[];
+  for(const r of tileResults){
+    if(r===null){failedTiles++;continue}
+    for(const p of r)points.push(p);
+  }
+  if(failedTiles)console.warn('[SCAN] '+failedTiles+'/'+tileResults.length+' tiles failed to load');
   const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
-  return{points,frames,tilePath,radarAgeMs,zoom};
+  return{points,frames,tilePath,radarAgeMs,zoom,failedTiles,totalTiles:tileResults.length};
 }
 
 // ---------------------------------------------------------------------------
@@ -815,6 +824,25 @@ async function runRadarScan(opts){
 // Returns true when committed (false only when abortCheck failed).
 async function commitScanResults(rawPoints,opts){
   opts=opts||{};
+  // v6.72: KEEP-LAST-GOOD. When a large share of tiles failed at the NETWORK
+  // level (very slow / dropping connection) and the field came back near-empty
+  // while the previous scan had real echoes, this is a FAILED REFRESH — not
+  // clear skies. Committing it wiped every storm and showed "All Clear" while
+  // it was raining (the "very slow net erased my storms mid-scan" bug). Keep
+  // the previous picture instead; scanTime is NOT updated, so the existing
+  // staleness surfaces (Rain Clock "radar stale", scan-age readouts) stay
+  // honest about the data being old. A clean scan that truly finds nothing
+  // (few/no failed tiles) still clears storms exactly as before.
+  if(opts.failedTiles&&opts.totalTiles){
+    const failFrac=opts.failedTiles/opts.totalTiles;
+    const prevPts=(S._rawScanPts&&S._rawScanPts.length)||0;
+    const nearEmpty=rawPoints.length<Math.max(20,prevPts*0.2);
+    if(failFrac>=0.4&&prevPts>0&&nearEmpty){
+      console.warn('[SCAN] keep-last-good: '+opts.failedTiles+'/'+opts.totalTiles+' tiles failed, '+rawPoints.length+' pts vs '+prevPts+' before — refusing to commit a failed refresh');
+      if(opts.spliceRadiusMi==null&&typeof toast==='function')toast('📶 Radar refresh failed ('+opts.failedTiles+'/'+opts.totalTiles+' tiles) — keeping last scan');
+      return false;
+    }
+  }
   // --- overhead-poll splice mode ---
   if(opts.spliceRadiusMi!=null){
     const c=opts.center;
@@ -1036,6 +1064,8 @@ async function scanRadarForView(){
     await commitScanResults(rawPoints,{
       useNexrad,
       radarAgeMs:result.radarAgeMs,
+      failedTiles:result.failedTiles,
+      totalTiles:result.totalTiles,
       plotLabel:n=>`Plotting ${n.toLocaleString()} storm points...`
     });
     const srcLabel=useNexrad?'NEXRAD':'RainViewer';
@@ -1095,6 +1125,8 @@ async function scanRadarHiRes(map,fromHome){
     await commitScanResults(rawPoints,{
       useNexrad,
       radarAgeMs:result.radarAgeMs,
+      failedTiles:result.failedTiles,
+      totalTiles:result.totalTiles,
       hiRes:true,
       sonarZoomReset:true,
       map,
@@ -2276,7 +2308,7 @@ async function pollOverheadRain(){
     console.log('[OverheadPoll]',useNexrad?'NEX':'RV','newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
     // v5.46: splice-merge + hero/rain-clock refresh via the unified commit
     // pipeline (spliceRadiusMi mode) — no storm-list rebuild on quick polls.
-    await commitScanResults(newPts,{spliceRadiusMi:POLL_RADIUS_MI,center:{lat:cLat,lon:cLon}});
+    await commitScanResults(newPts,{spliceRadiusMi:POLL_RADIUS_MI,center:{lat:cLat,lon:cLon},failedTiles:result.failedTiles,totalTiles:result.totalTiles});
   }catch(e){console.log('[OverheadPoll] failed:',e.message)}
   finally{S._overheadPollBusy=false}
 }

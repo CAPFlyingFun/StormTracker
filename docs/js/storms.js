@@ -92,6 +92,13 @@ async function decodeRvRgba(buf){
   }
   return{w,h,data:rgba};
 }
+// v6.72: returns an ARRAY of points on success (possibly empty — a dry tile),
+// or NULL when the tile couldn't be fetched (timeout/network/decode). The old
+// code returned [] for both, so on a very slow connection a scan whose tiles
+// all timed out was indistinguishable from genuinely clear skies — and the
+// commit pipeline would wipe every existing storm and show "All Clear" while
+// it was raining. runRadarScan counts the nulls so commitScanResults can tell
+// a failed refresh from a dry one.
 async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOverride,centerLat,centerLon){
   const tileSize=256,step=stepOverride||S._scanStep||2;
   // v5.44: center coords are passed in explicitly by runRadarScan so the
@@ -120,10 +127,10 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
         }
       }
       return pts;
-    }catch(e){return[]}
+    }catch(e){return null}   // timeout/network/decode — FAILED, not dry
   }
   const img=await loadTileImage(url);
-  if(!img)return[];
+  if(!img)return null;       // load error or 15s timeout — FAILED, not dry
   const c=document.createElement('canvas');c.width=tileSize;c.height=tileSize;
   const ctx=c.getContext('2d',{willReadFrequently:true});
   ctx.drawImage(img,0,0);
@@ -1785,10 +1792,21 @@ async function scanRadarForStorms(){
       minDbz:(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15,
       source:useNexrad?'nexrad':'rainviewer'
     });
-    if(!result){toast('No radar data available');S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();computeTopStorms();renderStorms();updateStormBadges();return}
+    if(!result){
+      // v6.72: a failed refresh (couldn't even reach the radar service) must
+      // never erase the last good picture — the old code cleared every storm
+      // here and rendered "All Clear" mid-rain on a slow connection.
+      if(S.storms&&S.storms.length){
+        toast('📶 Radar unreachable — keeping last scan');
+        if(typeof _bootStepFail==='function')_bootStepFail('scan','Radar unreachable — kept last scan');
+      }else{
+        toast('No radar data available');
+      }
+      return;
+    }
     if(!useNexrad)S.radarFrames=result.frames;
     const rawPoints=result.points;
-    console.log('[SCAN] src='+S.radarSource+' zoom='+result.zoom+' rawPoints='+rawPoints.length);
+    console.log('[SCAN] src='+S.radarSource+' zoom='+result.zoom+' rawPoints='+rawPoints.length+(result.failedTiles?' failedTiles='+result.failedTiles+'/'+result.totalTiles:''));
 
     // v5.46: unified commit pipeline (radar.js) — state + consumer updates in
     // ONE place; only the storms-scan extras (polygons, boot step, tiered
@@ -1796,6 +1814,8 @@ async function scanRadarForStorms(){
     const committed=await commitScanResults(rawPoints,{
       useNexrad,
       radarAgeMs:result.radarAgeMs,
+      failedTiles:result.failedTiles,
+      totalTiles:result.totalTiles,
       fullDetect:true,
       plotLabel:n=>`Plotting ${n} storm points...`,
       abortCheck:()=>reqId===S._locReqId

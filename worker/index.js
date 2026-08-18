@@ -218,6 +218,15 @@ async function proxyAWC(kind, url) {
 // forwarded verbatim to api.warpulse.com; it is never logged or stored here.
 // WarPulse sends no Access-Control-Allow-Origin header, so browsers can't call
 // it directly — this route only adds CORS + relays the x-quota-cost header.
+//
+// EULA CONSTRAINT (WarPulse support, Aug 2026, account-reinstatement review):
+// this route is compliant with personal non-commercial use PRECISELY BECAUSE it
+// is a dumb relay — each user's own key, forwarded verbatim, nothing stored or
+// cached server-side. Do NOT add response caching, a shared/pooled key, or
+// worker-side auth for this route without contacting WarPulse first: any of
+// those shifts it toward a "redistribution service", which their EULA restricts
+// on every plan. (The /glm routes below are unrelated — that's our own snapshot
+// of public-domain NOAA data and may be cached freely.)
 async function proxyLightning(url, request) {
   const key = request.headers.get('X-API-Key') || '';
   if (!key) return json({ error: 'missing X-API-Key header' }, 400);

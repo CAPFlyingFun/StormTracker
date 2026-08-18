@@ -3,4 +3,5 @@ dist
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gz__pycache__/
+*.tar.gz
+__pycache__/

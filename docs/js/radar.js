@@ -9,7 +9,7 @@ function initRadar(){
   if(!S.lat)return;
   const el=document.getElementById('page-radar');
   el.innerHTML=`
-    <div class="card-title"><span class="icon">📡</span> ${tStr('Live Radar')}</div>
+    <div class="card-title"><span class="icon">📡</span> ${tStr('Live Radar')}<span id="radar-title-refresh" style="margin-left:8px;font-size:0.62em;font-weight:600;color:var(--accent-cyan);font-family:var(--font-mono)"></span></div>
     <div class="map-container">
       <div id="radar-map"></div>
       <div class="radar-crosshair">
@@ -25,7 +25,7 @@ function initRadar(){
       <div class="map-controls map-controls-left">
         <div class="map-ctrl-btn" id="radar-scan" title="Home location">${_ri('scan-home')}</div>
         <div class="map-ctrl-btn" id="radar-scan-view" title="Scan map center">${_ri('scan-view')}</div>
-        <div class="map-ctrl-btn" id="radar-scan-hires" title="HD Scan (15mi zoom 12)">${_ri('scan-hires')}</div>
+        <div class="map-ctrl-btn" id="radar-scan-hires" title="HD Scan — 15 mi, fine detail">${_ri('scan-hires')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-src" title="Toggle radar source">${_ri(S.radarSource==='nexrad'?'source-nex':'source-rv')}</div>
         <div class="map-ctrl-btn" id="btn-radar-overlay" title="Radar overlay on/off" onclick="toggleRadarOverlay()" style="opacity:${S._radarOverlayVisible?1:0.4}">${_ri('radar-overlay')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-units" title="Toggle mi/km">${_ri(S.radarMetric?'units-km':'units')}</div>
@@ -64,13 +64,13 @@ function initRadar(){
       </div>
       </div>
     </div>
-    <div id="scan-status-bar" style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;font-size:0.7em;color:var(--text-muted);padding:4px 8px;min-height:20px">
+    <div id="scan-status-bar" style="display:flex;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:wrap;font-size:0.7em;color:var(--text-muted);padding:4px 84px 4px 12px;min-height:20px">
       <span id="scan-dot1" style="display:none"><span class="scan-dot" id="scan-dot1-c">⚫</span> <span id="scan-dot1-t">Winds</span></span>
       <span id="scan-dot2" style="display:none"><span class="scan-dot" id="scan-dot2-c">⚫</span> <span id="scan-dot2-t">Radar</span></span>
       <span id="scan-dot3" style="display:none"><span class="scan-dot" id="scan-dot3-c">⚫</span> <span id="scan-dot3-t">Storms</span></span>
-      <span id="scan-refresh-timer" style="font-family:var(--font-mono);color:var(--accent-cyan);font-weight:600"></span>
+      <span id="ltg-attrib-line" style="display:none"></span>
     </div>
-    <div id="radar-source-label" style="font-size:0.7em;color:var(--text-muted);text-align:center"></div>`;
+    <div id="radar-source-label" style="font-size:0.7em;color:var(--text-muted);text-align:left;padding:0 84px 0 12px"></div>`;
   setTimeout(async()=>{
     S._radarAnimPlaying=false;S._radarAnimPaused=false;
     clearInterval(S._radarAnimTimer);S._radarAnimFrames=[];
@@ -489,20 +489,24 @@ function startScanRefreshTimer(){
     nextRefreshMs=mins>0?mins*60*1000:0;
   }
   S._nextRefreshAt=nextRefreshMs>0?S._lastScanTime+nextRefreshMs:0;
-  const el=document.getElementById('scan-refresh-timer');if(!el)return;
-  if(!S._nextRefreshAt){el.textContent='🔄 Off';return;}
+  // v6.70: the countdown lives in the page header next to "📡 Live Radar"
+  // (was a bare "🔄 14:44" in the status bar, easy to misread without units).
+  const el=document.getElementById('radar-title-refresh');if(!el)return;
+  if(!S._nextRefreshAt){el.textContent='— '+tStr('auto-refresh off');return;}
   function tick(){
     const remain=Math.max(0,Math.round((S._nextRefreshAt-Date.now())/1000));
+    let t;
     if(remain>=3600){
       const h=Math.floor(remain/3600),m=Math.floor((remain%3600)/60);
-      el.textContent='🔄 '+h+'h'+String(m).padStart(2,'0')+'m';
+      t=h+'h:'+String(m).padStart(2,'0')+'m';
     }else if(remain>=60){
       const m=Math.floor(remain/60),s=remain%60;
-      el.textContent='🔄 '+m+':'+String(s).padStart(2,'0');
+      t=m+'m:'+String(s).padStart(2,'0')+'s';
     }else{
-      el.textContent='🔄 '+remain+'s';
+      t=remain+'s';
     }
-    if(remain<=0){el.textContent='🔄 now';clearInterval(S._scanRefreshTimer);}
+    el.textContent='- '+tStr('Refreshes in')+' '+t;
+    if(remain<=0){el.textContent='- '+tStr('Refreshing now…');clearInterval(S._scanRefreshTimer);}
   }
   tick();
   S._scanRefreshTimer=setInterval(tick,1000);
@@ -940,21 +944,21 @@ function toggleLightning(){
   if(typeof toast==='function')toast(on?'⚡ Lightning shown':'⚡ Lightning hidden');
 }
 if(typeof window!=='undefined'){window.toggleLightning=toggleLightning;window._ltgShown=_ltgShown;}
-// v6.66: small data-source credit pinned to the map while observed strikes are
-// on it — WarPulse's EULA (Section 6) requires visible attribution wherever
-// their strikes display (this map has attributionControl:false, so it's a tiny
-// custom badge). The GLM source gets the equivalent NOAA credit.
+// v6.66: data-source credit shown while observed strikes are on the map —
+// WarPulse's EULA (Section 6) requires visible attribution wherever their
+// strikes display. The GLM source gets the equivalent NOAA credit.
+// v6.70: moved from a floating in-map badge to the status bar under the map
+// (where the refresh countdown used to sit — the countdown moved up into the
+// page title), so it no longer overlaps the dBZ legend.
 function _ltgMapAttrib(map,show){
   try{
-    const c=map.getContainer();
-    let el=c.querySelector('.ltg-attrib');
-    if(!show){if(el)el.remove();return}
-    if(!el){
-      el=document.createElement('div');
-      el.className='ltg-attrib';
-      el.style.cssText='position:absolute;bottom:2px;left:4px;z-index:900;font-size:9px;color:rgba(255,255,255,0.8);background:rgba(0,0,0,0.5);padding:1px 6px;border-radius:4px;line-height:1.5;pointer-events:auto';
-      c.appendChild(el);
-    }
+    // Remove any legacy floating badge from pre-v6.70 renders.
+    const old=map&&map.getContainer&&map.getContainer().querySelector('.ltg-attrib');
+    if(old)old.remove();
+    const el=document.getElementById('ltg-attrib-line');
+    if(!el)return;
+    if(!show){el.style.display='none';el.innerHTML='';return}
+    el.style.display='inline';
     el.innerHTML=(S._ltgStrikes&&S._ltgStrikes.src==='glm')
       ?'⚡ Lightning data: NOAA GOES GLM satellite'
       :'⚡ Lightning data: <a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';

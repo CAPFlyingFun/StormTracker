@@ -134,7 +134,7 @@ def main():
     keys = [k for k in list_keys(window_start, now)
             if (st := key_start_time(k)) is not None and st >= window_start]
     keys.sort()
-    print(f'[glm] {len(keys)} granules in last {WINDOW_MIN} min ({BUCKET})')
+    print(f'[glm] {len(keys)} granules in last {WINDOW_MIN} min ({BUCKET})', flush=True)
 
     def fetch(key):
         try:
@@ -168,7 +168,7 @@ def main():
         'flashes': flashes,
     }
     body = json.dumps(snapshot, separators=(',', ':')).encode()
-    print(f'[glm] {len(flashes)} flashes, snapshot {len(body) / 1024:.0f} KB')
+    print(f'[glm] {len(flashes)} flashes, snapshot {len(body) / 1024:.0f} KB', flush=True)
 
     if out_path:
         with open(out_path, 'wb') as f:
@@ -176,14 +176,42 @@ def main():
         print(f'[glm] wrote {out_path}')
         return
 
+    # User-Agent matters: without one, urllib sends "Python-urllib/3.x" and
+    # Cloudflare's browser-integrity check blocks it at the edge with
+    # HTTP 403 "error code: 1010" before the worker ever runs.
     req = urllib.request.Request(
         f'{worker_url}/glm-ingest', data=body, method='POST',
-        headers={'Content-Type': 'application/json', 'x-scanner-secret': secret})
+        headers={'Content-Type': 'application/json', 'x-scanner-secret': secret,
+                 'User-Agent': 'StormTracker-GLM/1.0'})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            print(f'[glm] ingest -> HTTP {r.status}: {r.read().decode()[:200]}')
+            text = r.read().decode()
+            # The worker answers unknown paths with HTTP 200 + a plain-text help
+            # page, so a 200 alone doesn't prove the route exists. Require the
+            # real JSON ack; anything else means the deployed worker predates
+            # /glm-ingest — a known, user-actionable state, not a red-run error.
+            try:
+                ack = json.loads(text)
+            except ValueError:
+                ack = None
+            if ack and ack.get('ok'):
+                print(f'[glm] ingest OK -> {ack}', flush=True)
+            else:
+                print('::warning::GLM snapshot NOT ingested — the deployed worker has no /glm-ingest route yet. '
+                      'Deploy it (Actions -> Deploy Worker, or `wrangler deploy` in worker/); this job will succeed on the next run.',
+                      flush=True)
+                print(f'[glm] worker answered HTTP {r.status} without a JSON ok-ack: {text[:160]!r}', flush=True)
     except urllib.error.HTTPError as e:
-        print(f'[glm] ingest FAILED -> HTTP {e.code}: {e.read().decode()[:300]}', file=sys.stderr)
+        detail = e.read().decode()[:300]
+        if e.code == 404:
+            # New worker not deployed yet (or a worker that 404s unknown paths).
+            print('::warning::GLM snapshot NOT ingested — /glm-ingest returned 404 (worker not deployed with the GLM routes yet). '
+                  'Deploy it (Actions -> Deploy Worker, or `wrangler deploy` in worker/).', flush=True)
+            print(f'[glm] ingest -> HTTP 404: {detail}', flush=True)
+            return
+        # 401 = wrong SCANNER_SECRET, 403 = edge block, 5xx = worker error —
+        # real failures that deserve a red run.
+        print(f'[glm] ingest FAILED -> HTTP {e.code}: {detail}', file=sys.stderr, flush=True)
         sys.exit(1)
 
 

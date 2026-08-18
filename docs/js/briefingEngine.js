@@ -121,6 +121,23 @@
       const ageMin=last&&last.time?Math.round((Date.now()/1000-last.time)/60):null;
       radarMeta={frames:S.radarFrames.length,ageMin,scanRadius:S.scanRadius||null};
     }
+    // v6.65: REAL observed lightning (WarPulse key or GOES GLM satellite —
+    // whatever refreshLightningStrikes' source chain currently holds). Same
+    // freshness gate (ltgLive) and per-flash precomputed polar coords the AI
+    // context uses, so briefing, AI, and sonar all describe one dataset.
+    let ltg=null;
+    try{
+      if(typeof ltgLive==='function'&&ltgLive()&&S._ltgStrikes&&S._ltgStrikes.flashes.length&&S.lat!=null){
+        const fl=S._ltgStrikes.flashes;
+        let nearest=Infinity,nBrg=0,w10=0,w25=0;
+        for(const f of fl){
+          const dd=(f.distMi!=null)?f.distMi:haversine(S.lat,S.lon,f.lat,f.lon);
+          if(dd<nearest){nearest=dd;nBrg=(f.bear!=null)?f.bear:bearingDeg(S.lat,S.lon,f.lat,f.lon);}
+          if(dd<=10)w10++;if(dd<=25)w25++;
+        }
+        ltg={count:fl.length,nearestMi:nearest,nearestBrg:nBrg,w10,w25,src:S._ltgStrikes.src||'warpulse',sat:S._ltgStrikes.sat||null};
+      }
+    }catch(e){}
     return{
       now:new Date(),
       locName:(typeof S!=='undefined'&&S.locName)?S.locName:null,
@@ -130,7 +147,7 @@
       alerts:(typeof S!=='undefined'&&S.alerts)?S.alerts:[],
       afd:(typeof S!=='undefined'&&S._afd)?S._afd:null,
       aloft:(typeof S!=='undefined'&&S._aloftData)?S._aloftData:null,
-      stab,shear,radarMeta,
+      stab,shear,radarMeta,ltg,
       classified
     };
   }
@@ -252,9 +269,19 @@
     const c=d.classified;
     const alerts=d.alerts||[];
     const lines=['⛈️ Active Threats & Storm Tracking'];
-    if(c.inbound.length===0&&c.background.length===0&&c.passing.length===0&&c.away.length===0&&!alerts.length){
+    if(c.inbound.length===0&&c.background.length===0&&c.passing.length===0&&c.away.length===0&&!alerts.length&&!d.ltg){
       lines.push('[!green]No active threats at this time[/!] — radar and NWS alert feeds are clear.');
       return lines.join('\n');
+    }
+    // v6.65: REAL observed strikes lead the threat list — lightning is the
+    // life-safety item, and observed beats radar-implied. Colour by proximity.
+    if(d.ltg){
+      const L=d.ltg;
+      const srcStr=L.src==='glm'?('GOES GLM satellite'+(L.sat?' ('+L.sat+')':'')+' — locations approximate, ~8–14 km'):'WarPulse ground network';
+      const near=`${L.src==='glm'?'~':''}${_fmtDist(L.nearestMi,d.metric)} ${_safeDeg(L.nearestBrg)}`;
+      const col=L.w10>0?'red':(L.w25>0?'orange':'yellow');
+      const within=L.w10>0?` · **${L.w10} within 10 mi**`:(L.w25>0?` · ${L.w25} within 25 mi`:'');
+      lines.push(`- ⚡ [!${col}]OBSERVED lightning[/!] — ${L.count} strike${L.count===1?'':'s'} in the last 15 min, nearest ${near}${within} (${srcStr}).`);
     }
     for(const a of alerts.slice(0,6)){
       const p=a.properties||a;
@@ -333,8 +360,14 @@
     const hasExtreme=alerts.some(a=>((a.properties||a).severity||'').toLowerCase()==='extreme');
     const hasSevere=alerts.some(a=>((a.properties||a).severity||'').toLowerCase()==='severe');
     const peak=c.inbound.length?Math.max(...c.inbound.map(x=>x.s.dbz)):0;
-    if(hasExtreme||peak>=60){
+    // v6.65: observed lightning within ~10 mi is a shelter-now condition on its
+    // own — even when radar looks tame (GLM often sees a cell's first flashes
+    // before reflectivity looks scary). Escalates the headline tier so a green
+    // "conditions are quiet" can never sit next to a real nearby strike.
+    const ltg10=!!(d.ltg&&d.ltg.w10>0);
+    if(hasExtreme||peak>=60||ltg10){
       lines.push('[!red]**Seek shelter now.**[/!] Severe weather is active or imminent. Stay away from windows, avoid travel, and monitor official alerts.');
+      if(ltg10)lines.push(`[!red]⚡ Real lightning observed within 10 mi[/!] (${d.ltg.src==='glm'?'satellite-detected, distances approximate':'ground-network detected'}). Get indoors and stay 30 min past the last strike — the 30/30 rule.`);
     }else if(hasSevere||peak>=52){
       lines.push('[!orange]Strong storms are active.[/!] Move indoors, secure outdoor items, avoid open areas, and delay outdoor activity until the cells pass.');
     }else if(c.inbound.length){

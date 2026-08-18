@@ -3,6 +3,30 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.65
+
+  **System Briefing consumes observed lightning (WarPulse or GLM).**
+
+  - `gatherBriefingData()` now builds a `ltg` block from `S._ltgStrikes`
+    (same `ltgLive()` freshness gate and precomputed per-flash polar coords
+    the AI chat context uses): strike count, nearest distance/bearing,
+    within-10-mi / within-25-mi counts, source (`warpulse`/`glm`) and
+    satellite id — so briefing, AI chat, map, and sonar all describe one
+    dataset regardless of which source the chain is on.
+  - `buildThreats()`: observed strikes lead the threat list (red within
+    10 mi, orange within 25, yellow beyond), source-labeled, with GLM
+    distances marked approximate. The "no active threats" green early-return
+    now also requires no observed lightning.
+  - `buildSafety()`: a real strike within 10 mi escalates the headline to
+    the red "Seek shelter now" tier on its own (GLM often observes a cell's
+    first flashes before reflectivity looks severe) and appends a 30/30-rule
+    line — a green "conditions are quiet" can no longer coexist with a
+    nearby observed strike.
+  - Note: the AI chat context was already source-aware since v6.64; this
+    closes the gap for the structured (non-AI) System Briefing. A shared
+    "provider registry" consumed by app/worker/scanner is planned separately.
+  - Cache: `?v=763`, SW `stormtracker-v763`.
+
   ## v6.64
 
   **GOES GLM satellite lightning — free, keyless observed strikes + source picker.**

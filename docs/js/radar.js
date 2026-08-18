@@ -940,12 +940,33 @@ function toggleLightning(){
   if(typeof toast==='function')toast(on?'⚡ Lightning shown':'⚡ Lightning hidden');
 }
 if(typeof window!=='undefined'){window.toggleLightning=toggleLightning;window._ltgShown=_ltgShown;}
+// v6.66: small data-source credit pinned to the map while observed strikes are
+// on it — WarPulse's EULA (Section 6) requires visible attribution wherever
+// their strikes display (this map has attributionControl:false, so it's a tiny
+// custom badge). The GLM source gets the equivalent NOAA credit.
+function _ltgMapAttrib(map,show){
+  try{
+    const c=map.getContainer();
+    let el=c.querySelector('.ltg-attrib');
+    if(!show){if(el)el.remove();return}
+    if(!el){
+      el=document.createElement('div');
+      el.className='ltg-attrib';
+      el.style.cssText='position:absolute;bottom:2px;left:4px;z-index:900;font-size:9px;color:rgba(255,255,255,0.8);background:rgba(0,0,0,0.5);padding:1px 6px;border-radius:4px;line-height:1.5;pointer-events:auto';
+      c.appendChild(el);
+    }
+    el.innerHTML=(S._ltgStrikes&&S._ltgStrikes.src==='glm')
+      ?'⚡ Lightning data: NOAA GOES GLM satellite'
+      :'⚡ Lightning data: <a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
+  }catch(e){}
+}
 function plotLightningStrikes(map){
   if(!S.ltgMarkers)S.ltgMarkers=[];
   S.ltgMarkers.forEach(m=>{try{map.removeLayer(m)}catch(e){}});
   S.ltgMarkers=[];
-  if(typeof _ltgShown==='function'&&!_ltgShown())return;
-  if(typeof ltgLive!=='function'||!ltgLive())return;
+  if(typeof _ltgShown==='function'&&!_ltgShown()){_ltgMapAttrib(map,false);return}
+  if(typeof ltgLive!=='function'||!ltgLive()){_ltgMapAttrib(map,false);return}
+  _ltgMapAttrib(map,true);
   // v5.70: draw on a dedicated top pane (z above the hex/zone overlay so strikes
   // are never buried), and make the dots bigger with a dark halo so they read
   // against bright radar returns — the old 2.5 px stroke-less dots vanished.

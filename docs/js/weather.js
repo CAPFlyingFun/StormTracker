@@ -1276,11 +1276,19 @@ function drawMiniSonar(){
   }else{_lightningFlashState=null}
   const infoEl=document.getElementById('mini-sonar-info');
   if(infoEl){
-    if(zoneCount>0){
-      infoEl.textContent=`${zoneCount} zone${zoneCount>1?'s':''} · Peak ${maxDbz} dBZ · ${S.radarMetric?Math.round(viewR*1.60934)+'km':viewR+'mi'} radius`;
-    }else{
-      infoEl.textContent=S.scanTime?`All clear · ${S.radarMetric?Math.round(viewR*1.60934)+'km':viewR+'mi'} radius`:`Waiting for radar scan...`;
+    const base=zoneCount>0
+      ?`${zoneCount} zone${zoneCount>1?'s':''} · Peak ${maxDbz} dBZ · ${S.radarMetric?Math.round(viewR*1.60934)+'km':viewR+'mi'} radius`
+      :(S.scanTime?`All clear · ${S.radarMetric?Math.round(viewR*1.60934)+'km':viewR+'mi'} radius`:`Waiting for radar scan...`);
+    // v6.66: data-source credit wherever observed strikes actually render —
+    // WarPulse's EULA (Section 6) requires visible attribution on display
+    // surfaces, and the GLM line keeps the same honesty for the satellite feed.
+    let attrib='';
+    if(_sonarCfg.showLightning&&(typeof _ltgShown!=='function'||_ltgShown())&&typeof ltgLive==='function'&&ltgLive()&&S._ltgStrikes){
+      attrib=S._ltgStrikes.src==='glm'
+        ?'<br>⚡ Lightning data: NOAA GOES GLM satellite'
+        :'<br>⚡ Lightning data: <a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
     }
+    infoEl.innerHTML=base+attrib;
   }
 }
 let _sonarAnimId=0;

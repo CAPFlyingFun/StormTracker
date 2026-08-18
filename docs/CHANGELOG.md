@@ -3,6 +3,28 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.66
+
+  **WarPulse Section 6 attribution on every strike-display surface.**
+
+  - WarPulse flagged (support email, Aug 2026) that "WarPulse" appeared only
+    in the Settings hint, not where strikes actually render. Now every
+    surface that displays observed strikes carries a visible source credit,
+    linked to warpulse.com when WarPulse is the source and crediting
+    "NOAA GOES GLM satellite" when the free feed is:
+    - Radar map: `_ltgMapAttrib()` pins a small badge inside the map
+      container while strikes are plotted (the map runs
+      `attributionControl:false`, so it's a custom element); removed when
+      the ⚡ layer is off or strikes age out.
+    - Sonar: the `#mini-sonar-info` caption gains a "⚡ Lightning data: …"
+      line whenever live strikes are drawn (same `_sonarCfg.showLightning`
+      + `_ltgShown()` + `ltgLive()` gates as the drawing itself).
+    - Storms tab: the existing footnote's "Observed via …" became
+      "Lightning data: …" with the WarPulse link.
+  - Credits only render while observed strikes are actually displayed — the
+    radar-derived estimate keeps its "Radar-derived, not observed" line.
+  - Cache: `?v=764`, SW `stormtracker-v764`.
+
   ## v6.65
 
   **System Briefing consumes observed lightning (WarPulse or GLM).**

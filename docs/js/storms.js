@@ -4953,7 +4953,7 @@ function _renderStormsCore(){
     </div>
     ${gridHtml}
     <div style="font-size:0.65em;color:var(--text-muted);text-align:center;padding:4px">
-      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Observed via ${S._ltgStrikes.src==='glm'?('GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')):'WarPulse'}<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
+      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Lightning data: ${S._ltgStrikes.src==='glm'?('NOAA GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')):'<a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>'}<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
       Impact % based on direction, distance, speed &amp; intensity via winds aloft
     </div>`;
   startEtaCountdowns();

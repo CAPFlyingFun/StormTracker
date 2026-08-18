@@ -233,6 +233,10 @@ async function _ltgZoneCreate(lat,lon,mode){
   if(typeof AbortSignal!=='undefined'&&AbortSignal.timeout)opts.signal=AbortSignal.timeout(12000);
   const r=await fetch(base+'/zones',opts);
   const j=await r.json().catch(()=>null);
+  // The pre-v6.68 worker answers unknown paths (incl. /zones) with HTTP 200 +
+  // a plain-text help page — non-JSON on a 200 means the worker deploy is
+  // pending, not that WarPulse misbehaved. Say so instead of "unexpected shape".
+  if(r.ok&&j===null)throw new Error('server update not deployed yet — try again after the next update');
   if(!r.ok)throw new Error((j&&(j.detail||j.error||j.message))||('HTTP '+r.status));
   const id=j&&(j.id!=null?j.id:j.zone_id);
   const secret=j&&j.webhook_secret;

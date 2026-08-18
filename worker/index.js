@@ -308,6 +308,59 @@ async function glmServe(url, env) {
   });
 }
 
+// ⚡ WarPulse Storm Proximity Alert webhook — real-time lightning tripwire.
+// A WarPulse "zone" (created from the account dashboard/API: center + radius,
+// webhook_url = this route) POSTs here the INSTANT a strike lands inside the
+// zone — seconds-level latency, quota-free, with WarPulse's own per-zone
+// cooldown. COMPLIANCE: the payload is WarPulse data under the account owner's
+// key, so it is used ONLY as a trigger — verify the signature, record a debug
+// breadcrumb, and dispatch the scanner immediately; the push alert itself is
+// built by the scanner from our own sources (GLM/radar) with its normal
+// dedupe/cooldowns. No WarPulse data is relayed to other users (see the EULA
+// note on proxyLightning above).
+// Setup: create the zone (see GLM_LIGHTNING_SETUP.md), then store its
+// webhook_secret as the WARPULSE_WEBHOOK_SECRET worker secret. Deliveries are
+// HMAC-signed (X-Lightning-Signature: sha256=<hex HMAC-SHA256 of the raw
+// body>) and rejected unless the signature verifies. WarPulse requires a <5 s
+// response, so the scan dispatch runs via ctx.waitUntil after answering.
+function _timingSafeEq(a, b) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+async function lightningWebhook(request, env, ctx) {
+  if (!env.WARPULSE_WEBHOOK_SECRET) return json({ error: 'webhook not configured' }, 503);
+  const body = await request.text();
+  const sig = request.headers.get('X-Lightning-Signature') || '';
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.WARPULSE_WEBHOOK_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  const expected = 'sha256=' + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, '0')).join('');
+  if (!_timingSafeEq(sig, expected)) return json({ error: 'bad signature' }, 401);
+  let p; try { p = JSON.parse(body); } catch { return json({ error: 'bad json' }, 400); }
+  ctx.waitUntil((async () => {
+    try {
+      if (env.DB) {
+        await metaSet(env, 'ltg_webhook_last', JSON.stringify({
+          at: Date.now(), delivery_id: p.delivery_id ?? null, zone: p.zone_name || null,
+          flash: p.flash || null, distance_km: p.distance_km ?? null,
+        }));
+        // Debounce: WarPulse's per-zone cooldown already limits firings, but
+        // several zones (or a retry) can land together — one scan covers all.
+        const last = parseInt((await metaGet(env, 'ltg_webhook_dispatch')) || '0', 10) || 0;
+        if (Date.now() - last < 60000) return;
+        await metaSet(env, 'ltg_webhook_dispatch', String(Date.now()));
+        // Pull the next scheduled tick forward too — the strike IS the schedule.
+        await metaSet(env, 'scan_last_dispatch', String(Date.now()));
+        await metaSet(env, 'scan_next_due', String(Date.now() + 5 * 60000 - CADENCE_GRACE_MS));
+      }
+      await triggerScan(env); // scanner alerts from its own sources (GLM/radar)
+    } catch (e) { console.log('webhook dispatch failed: ' + e.message); }
+  })());
+  return json({ ok: true, delivery_id: p.delivery_id ?? null });
+}
+
 // 📊 Anonymous usage counters — daily + current active users, no PII.
 // The app has no accounts/cookies and that stays true: each browser request to
 // a strike route records SHA-256(secret : day : ip) truncated to 12 bytes — a
@@ -372,6 +425,7 @@ export default {
     if (path === '/glm-ingest' && request.method === 'POST') return glmIngest(request, env);
     if (path === '/glm' && request.method === 'GET') { ctx.waitUntil(recordUsage(env, request)); return glmServe(url, env); }
     if (path === '/stats' && request.method === 'GET') return serveStats(env);
+    if (path === '/lightning-webhook' && request.method === 'POST') return lightningWebhook(request, env, ctx);
 
     // ---- Device Link relay: ephemeral, zero-knowledge settings hand-off ----
     // One device PUTs an already-encrypted blob under an opaque id, gets a short
@@ -892,7 +946,7 @@ Rules:
     }
 
     return new Response(
-      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nLightning:\n  GET  /lightning?since_minutes=15&limit=500&min_lat=... (X-API-Key header; WarPulse relay)\n  GET  /glm?since_minutes=15&limit=500&min_lat=...       (keyless; GOES GLM snapshot)\n  POST /glm-ingest    (scanner)\n  GET  /stats         (anonymous usage counts: daily/active users)\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
+      'StormTracker Worker\n\nProxy:\n  /metar?ids=KPNS&format=raw\n  /taf?ids=KPNS&format=raw\n\nLightning:\n  GET  /lightning?since_minutes=15&limit=500&min_lat=... (X-API-Key header; WarPulse relay)\n  GET  /glm?since_minutes=15&limit=500&min_lat=...       (keyless; GOES GLM snapshot)\n  POST /glm-ingest    (scanner)\n  POST /lightning-webhook  (WarPulse zone alerts; HMAC-verified)\n  GET  /stats         (anonymous usage counts: daily/active users)\n\nDevice Link (ephemeral, zero-knowledge):\n  POST /link-put  { id, blob, ttl? } -> { ok, ttl }\n  POST /link-get  { id }             -> { ok, blob }  (one-time read)\n\nPush API:\n  POST /subscribe\n  POST /unsubscribe\n  POST /feed-token    { endpoint } -> { token }\n  GET  /feed?token=...  (public RSS 2.0)\n  GET  /subscriptions (scanner)\n  POST /mark-alert    (scanner)\n  POST /feed-update   (scanner)\n  POST /scan-cadence  (scanner)\n  GET/POST /scan-due  (scanner)\n',
       { headers: { 'Content-Type': 'text/plain', ...CORS } }
     );
   },

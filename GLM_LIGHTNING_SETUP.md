@@ -81,6 +81,48 @@ retries every 10 minutes.
 - **Cost:** $0. NOAA open data is free to fetch; the Actions job runs in the
   free tier for public repos; the worker stores one ~400 KB blob in D1.
 
+## Real-time Storm Proximity webhook (WarPulse zones)
+
+WarPulse's zone feature POSTs to a webhook the instant a strike lands inside
+a zone you define — seconds-level latency, quota-free, with their own
+per-zone cooldown. The worker's `POST /lightning-webhook` receives it,
+verifies the HMAC signature, and immediately dispatches the push scanner
+(pulling the next scheduled scan forward too). The alert content itself is
+built by the scanner from our own sources (GLM/radar) — the webhook is a
+trigger only, so no WarPulse data is redistributed to other users.
+
+One-time setup (Free plan allows 1 zone — center it on your location):
+
+1. Create the zone with your personal key (or from the WarPulse dashboard):
+   ```
+   curl -X POST https://api.lightningapi.dev/developer/zones \
+     -H "X-API-Key: YOUR_PERSONAL_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Home",
+       "center_lat": <your lat>,
+       "center_lon": <your lon>,
+       "radius_km": 16,
+       "cooldown_minutes": 5,
+       "webhook_url": "https://stormtracker-proxy.joshua-622.workers.dev/lightning-webhook"
+     }'
+   ```
+   The response includes `webhook_secret` **once** — copy it now.
+2. Store the secret on the worker: Cloudflare dashboard → the
+   `stormtracker-proxy` Worker → Settings → Variables and Secrets → add
+   secret `WARPULSE_WEBHOOK_SECRET` (or `wrangler secret put
+   WARPULSE_WEBHOOK_SECRET` locally). Until it's set, the route answers 503
+   and WarPulse's 4-attempt retry/delivery-history will show failures.
+3. Verify: `GET /developer/zones/{id}/alerts` (their API) shows each
+   firing's `delivery_status`; the worker keeps its own last-delivery
+   breadcrumb in D1 meta (`ltg_webhook_last`).
+
+Behavior: deliveries are debounced to at most one scanner dispatch per
+60 s (several zones or a retry can land together), and the flash is the
+schedule — the next scan tick is pulled forward rather than waiting out
+the cadence. More zones (e.g. one per push subscriber location) need a
+bigger zone allowance — part of the WarPulse licensing conversation.
+
 ## Local testing
 
 ```

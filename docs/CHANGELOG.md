@@ -3,6 +3,239 @@
 This file tracks per-version changes for the static site under `docs/`.
 Newest first. Service-worker cache name follows the version (e.g., `stormtracker-v542` for v4.46).
 
+  ## v6.76
+
+  **Stuck in Settings after weather loaded (iOS) — fixed.**
+
+  - `#app-loading` (fullscreen loading screen) sat at `z-index:9999` — the
+    *same* level as `#settings-panel`, but later in the DOM, so it painted and
+    hit-tested **above** Settings whenever both were up. During its 420ms
+    `.fade-out` window it was invisible but still tap-blocking. It is now
+    `z-index:9998` (below Settings) and `.fade-out` adds
+    `pointer-events:none`.
+  - Removed `backdrop-filter` blur from the tap-critical fixed surfaces:
+    `.app-header` (blur(20px) — it blurred nothing anyway, since the header
+    is a flex sibling above the scroll container), the inline
+    `#settings-panel` (blur(8px) → backdrop darkened 0.88→0.94), and
+    `.settings-overlay` (blur(8px) → 0.92→0.95). Fixed overlays with
+    `backdrop-filter` are a known iOS Safari hit-test desync: when the DOM
+    behind them repaints heavily (exactly what happens when the weather
+    render lands), taps can land on stale layout. `#settings-panel` also
+    gets `transform:translateZ(0)` for its own compositing layer.
+  - Matches the field report: Settings opened fine while weather was still
+    loading, then became unresponsive the moment the weather render landed.
+
+  Cache `?v=774`, SW `stormtracker-v774`.
+
+  ## v6.75
+
+  **WarPulse links point at lightningapi.dev; Settings names the partnership.**
+  (Entry backfilled — shipped without a CHANGELOG.md section.) All WarPulse
+  attribution links now point to https://lightningapi.dev/ and Settings → ⚡
+  Lightning explains the shared-key arrangement. Cache `?v=773`, SW
+  `stormtracker-v773`.
+
+  ## v6.74
+
+  **Header buttons unresponsive on the Weather tab — fixed.**
+
+  - `.toast` had `pointer-events:auto` while the toast container sits at
+    `top:16px`/`z-index:99999` — directly over the header row. Toasts have no
+    tap action anywhere in the app, yet each one (including at opacity 0
+    during its fade-in/out) was an invisible tap-shield over the header
+    buttons. The Weather tab is where load-time toasts burst and queue
+    (staggered up to ~10s+ on slow connections), which is why only that tab
+    appeared broken. Toasts are now `pointer-events:none`.
+  - `.app-header` carried `position:sticky` from an older layout, but the
+    header is a flex sibling *above* the scrolling `.container` (body is
+    `overflow:hidden`), so sticky did nothing — while sticky +
+    `backdrop-filter` near a `-webkit-overflow-scrolling` region is a known
+    iOS Safari hit-test desync. Now `position:relative` +
+    `transform:translateZ(0)` (own compositing layer) and
+    `touch-action:manipulation` on the header and its buttons (kills the
+    350ms double-tap-zoom delay). Visually identical.
+  - Cache bust `?v=772`, SW cache `stormtracker-v772`.
+
+  ## v6.68
+
+  **In-app real-time strike zones — follow-me or pinned, per-user keys.**
+
+  - Worker: `/zones` (POST/GET) and `/zones/{id}` (DELETE) relay the WarPulse
+    zone-management API (`api.lightningapi.dev/developer/zones` — new
+    hostname per their docs; `api.warpulse.com` retires early 2027) with the
+    same dumb-relay contract as `/lightning`: user's key per-request in
+    X-API-Key, forwarded verbatim, never stored. New D1 `webhook_zones`
+    registry (`/zone-register`, `/zone-unregister`) holds each zone's
+    delivery-verification secret: registration is insert-only (conflicting
+    re-register must present the existing secret) and unregistration must
+    present the secret — zone ids are guessable, secrets are not, so a
+    stranger can neither hijack nor evict someone else's zone.
+  - Worker: `lightningWebhook()` now verifies per-zone — payload is parsed
+    ONLY to read zone_id for the registry lookup, nothing trusted until the
+    HMAC verifies against that zone's secret (env WARPULSE_WEBHOOK_SECRET
+    still covers a dashboard-created zone). Verify logic covered by a
+    5-case simulation (user zone good/bad sig, env fallback, unknown zone).
+  - App: Settings → Lightning "Real-time zone" select — off / follow / pin.
+    Create runs through `_ltgZoneCreate()` (zone via relay with the user's
+    key, then secret registration with rollback if registration fails, so a
+    zone never exists whose webhooks can't be verified). Follow mode
+    re-anchors via `ltgZoneSync()` riding the lightning refresh path
+    (>5 mi move, ≥10 min apart; delete + recreate since there's no update
+    API — each re-anchor mints a fresh secret). Zone id/secret live in
+    localStorage alongside the API key; status line under the select.
+  - Cache: `?v=766`, SW `stormtracker-v766`.
+
+  ## v6.67
+
+  **Anonymous usage counters — daily/active devices, zero PII.**
+
+  - Worker: `recordUsage()` runs via `ctx.waitUntil` on browser hits to
+    `/lightning` and `/glm` — stores `SHA-256(SCANNER_SECRET : day : ip)`
+    truncated to 12 bytes in a new D1 `usage_daily` table (day, iphash,
+    calls, last_seen). No raw IPs stored; the day in the hash input makes
+    identifiers rotate daily by construction. Non-browser UAs (scanner, CI,
+    curl) are excluded so counts approximate real app users. Rows older
+    than 60 days pruned. Counting failures are swallowed — they must never
+    break the data path.
+  - Worker: new public `GET /stats` — today's distinct devices + strike
+    calls, devices active in the last 10 min, 7-day history; aggregates
+    only, 60 s edge cache. Listed on the worker help page (which also now
+    documents the lightning routes).
+  - App: Settings bottom shows "🟢 N active now · M devices today" via
+    `_refreshLiveUsers()` (ai.js, fetched on settings-open, ≥60 s apart,
+    hidden when the worker doesn't answer — e.g. the /stats route isn't
+    deployed yet).
+  - Needs the worker redeploy to activate (same pending Deploy Worker run
+    as the GLM routes).
+  - Cache: `?v=765`, SW `stormtracker-v765`.
+
+  ## v6.66
+
+  **WarPulse Section 6 attribution on every strike-display surface.**
+
+  - WarPulse flagged (support email, Aug 2026) that "WarPulse" appeared only
+    in the Settings hint, not where strikes actually render. Now every
+    surface that displays observed strikes carries a visible source credit,
+    linked to warpulse.com when WarPulse is the source and crediting
+    "NOAA GOES GLM satellite" when the free feed is:
+    - Radar map: `_ltgMapAttrib()` pins a small badge inside the map
+      container while strikes are plotted (the map runs
+      `attributionControl:false`, so it's a custom element); removed when
+      the ⚡ layer is off or strikes age out.
+    - Sonar: the `#mini-sonar-info` caption gains a "⚡ Lightning data: …"
+      line whenever live strikes are drawn (same `_sonarCfg.showLightning`
+      + `_ltgShown()` + `ltgLive()` gates as the drawing itself).
+    - Storms tab: the existing footnote's "Observed via …" became
+      "Lightning data: …" with the WarPulse link.
+  - Credits only render while observed strikes are actually displayed — the
+    radar-derived estimate keeps its "Radar-derived, not observed" line.
+  - Cache: `?v=764`, SW `stormtracker-v764`.
+
+  ## v6.65
+
+  **System Briefing consumes observed lightning (WarPulse or GLM).**
+
+  - `gatherBriefingData()` now builds a `ltg` block from `S._ltgStrikes`
+    (same `ltgLive()` freshness gate and precomputed per-flash polar coords
+    the AI chat context uses): strike count, nearest distance/bearing,
+    within-10-mi / within-25-mi counts, source (`warpulse`/`glm`) and
+    satellite id — so briefing, AI chat, map, and sonar all describe one
+    dataset regardless of which source the chain is on.
+  - `buildThreats()`: observed strikes lead the threat list (red within
+    10 mi, orange within 25, yellow beyond), source-labeled, with GLM
+    distances marked approximate. The "no active threats" green early-return
+    now also requires no observed lightning.
+  - `buildSafety()`: a real strike within 10 mi escalates the headline to
+    the red "Seek shelter now" tier on its own (GLM often observes a cell's
+    first flashes before reflectivity looks severe) and appends a 30/30-rule
+    line — a green "conditions are quiet" can no longer coexist with a
+    nearby observed strike.
+  - Note: the AI chat context was already source-aware since v6.64; this
+    closes the gap for the structured (non-AI) System Briefing. A shared
+    "provider registry" consumed by app/worker/scanner is planned separately.
+  - Cache: `?v=763`, SW `stormtracker-v763`.
+
+  ## v6.64
+
+  **GOES GLM satellite lightning — free, keyless observed strikes + source picker.**
+
+  - **New pipeline: NOAA GOES GLM → worker → app.** `scanner/glm_fetch.py`
+    (new `glm-lightning` job in `storm-scan.yml`, riding the same ~5-min
+    workflow_dispatch heartbeat as the push scan) downloads the last
+    ~16 minutes of GLM L2 LCFA granules from the public `noaa-goes19` S3
+    bucket (public domain, keyless, quota-less), parses them with netCDF4
+    (downloads parallel, parsing sequential — the HDF5 C library is not
+    thread-safe), keeps `flash_quality_flag == 0` flashes inside a CONUS bbox
+    (env-tunable: `GOES_BUCKET`, `GLM_WINDOW_MIN`, `GLM_BBOX`), and POSTs a
+    compact snapshot (~8000-flash cap) to the worker's new `POST /glm-ingest`
+    (auth: existing `x-scanner-secret`; stored as one blob in D1 `meta`).
+    `GET /glm` serves it back with the same query params and response shape as
+    the WarPulse `/lightning` proxy (`flash_timestamp_utc` string included) so
+    the client parses both with one code path. Measured end-to-end: 46
+    granules fetched+parsed in ~4 s; newest flash 28 s old at ingest time.
+  - **Client source chain + picker.** `refreshLightningStrikes()` is now an
+    orchestrator over `_ltgFetchWarPulse()` / `_ltgFetchGLM()` with shared
+    `_ltgApplyFlashes()` (parse, plot, sonar, proximity alert). New setting
+    `st_ltgSource`: auto (key → satellite → estimate, default) / warpulse /
+    glm / radar, with a dropdown in Settings → ⚡ Lightning. GLM freshness is
+    anchored to the snapshot's build time, so a stalled pipeline ages out via
+    the existing `ltgLive()` 10-min window and the radar estimate takes over.
+    `S._ltgStrikes.src`/`sat` tag the active source; the Storms-tab footnote,
+    Settings status line, and AI context all name it (with the ~8–14 km GLM
+    geolocation caveat; satellite proximity alerts show "~" distances).
+    Clearing the WarPulse key now hands over to GLM instead of going dark.
+  - **Background push upgraded to observed lightning.** The scanner's
+    "⚡ Lightning Nearby" push could never use WarPulse (device-local key);
+    with GLM server-side it now fetches the snapshot per scan group
+    (`fetchGlmStrikes()`, one keyless worker GET, 30-mi pad) and a real
+    strike within 10 mi in the last 15 min leads the ⚡ item as
+    "Lightning OBSERVED ~N mi (satellite)" (`fmtLightningObserved()`,
+    `sig: 'ltg:obs'`, dedupe keys `ltg_o<sector45>_<5mi-bucket>` so
+    `keyKind()` still maps to the 30-min `ltg` cooldown and the severe
+    escalation path). The radar-derived estimate is never suppressed, only
+    outranked — GLM detection efficiency isn't 100% — and fires exactly as
+    before when there are no observed strikes. Observed strikes near the
+    group location also force the red (fastest) adaptive scan cadence.
+  - **Deploy notes:** worker redeploy required (`wrangler deploy` in
+    `worker/`); no new secrets (reuses `WORKER_URL`/`SCANNER_SECRET` already
+    set for the scanner). See `GLM_LIGHTNING_SETUP.md`.
+  - Cache: `?v=762`, SW `stormtracker-v762`.
+
+  ## v6.63
+
+  **Lightning quota vs bad-key diagnosis · Rain Clock refresh after late winds aloft.**
+
+  - **Lightning (WarPulse) errors are now diagnosed, not lumped together.** The
+    `/lightning` proxy passes WarPulse's status through verbatim, and WarPulse can
+    answer 403 both for an invalid key AND when the plan's monthly units run out —
+    the client treated any 401/403 as "key rejected". `refreshLightningStrikes()`
+    now reads the error BODY: any 429, or a detail mentioning quota/limit/usage,
+    is classified as quota exhaustion (distinct toast, 60-min backoff) instead of
+    a rejected key (30-min backoff). The last real outcome (live strike count /
+    quota reached / key rejected, with the provider's own error text and time) is
+    stored in `S._ltgLastErr` and rendered into a new status line under
+    Settings → ⚡ Lightning (`#lightning-key-status`, populated by
+    `_ltgSetStatus()` on settings-open and after every fetch). A later successful
+    call clears the verdict and re-arms the one-shot warnings.
+  - **Rain Clock no longer stays on "No rain expected" after winds aloft lands
+    late.** Every per-storm motion product (`_eta`, `_brief`, `_m`, cone stats) is
+    cached under `S._stormScanId`, which only a radar scan bumps. When winds aloft
+    arrived after the scan had rendered (slow link: the 30 s gate fell through),
+    `refreshStormViewsForWinds()` re-ran `renderStorms()` but every ETA call hit
+    its same-scan cache and returned the pre-winds `eta:null` — so the dial kept
+    "No rain expected" while its own footer showed live steering. The refresh now
+    calls `bumpStormScanId()` first so ETAs/tiers genuinely recompute. Also,
+    `_applyAloftData()` now queues that refresh itself (dedup'd, deferred one
+    tick) whenever steering first resolves while storms are already rendered —
+    previously only the 4-attempt background retry path refreshed, so winds
+    arriving via the next scan's own fetch (or any other route) left the dial
+    stale until a full new scan.
+  - **Honest dial when timing is unresolved.** If `S._inboundShown` has cells but
+    none produced a paintable arrival window (ETAs unresolved), the dial center
+    now reads "N inbound · timing pending" instead of "No rain expected",
+    which flatly contradicted the "N inbound" badge above it.
+  - Cache: `?v=761`, SW `stormtracker-v761`.
+
   ## v6.62
 
   **Briefing accuracy pass — real bulk shear, calibrated certainty, honest aviation/marine wording.**

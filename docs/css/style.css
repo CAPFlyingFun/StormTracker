@@ -31,13 +31,19 @@
 html{scroll-behavior:smooth;height:100%}
 body{font-family:var(--font-body);background:var(--bg-deep);color:var(--text-primary);height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;overscroll-behavior:none;-webkit-font-smoothing:antialiased}
 .container{max-width:520px;width:100%;margin:0 auto;padding:0 12px calc(var(--nav-height) + env(safe-area-inset-bottom,0px) + 16px);flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
-.app-header{display:flex;align-items:center;justify-content:space-between;padding:10px 10px 34px;background:linear-gradient(180deg,rgba(0,180,255,0.06) 0%,transparent 100%);border-bottom:1px solid var(--border-subtle);position:sticky;top:0;z-index:100;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);flex-wrap:nowrap;gap:6px;flex-shrink:0}
+/* v6.74: the header is a flex sibling ABOVE the scrolling .container (body is
+   overflow:hidden), so position:sticky never did anything — but sticky +
+   backdrop-filter over a -webkit-overflow-scrolling region is a known iOS
+   Safari hit-test desync (taps pass through until repaint). relative +
+   translateZ(0) pins the header to its own compositing layer so its tap
+   targets stay glued to where it's painted. Visually identical. */
+.app-header{display:flex;align-items:center;justify-content:space-between;padding:10px 10px 34px;background:linear-gradient(180deg,rgba(0,180,255,0.06) 0%,transparent 100%);border-bottom:1px solid var(--border-subtle);position:relative;z-index:100;flex-wrap:nowrap;gap:6px;flex-shrink:0;transform:translateZ(0);touch-action:manipulation}
 .app-header .header-left{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .app-header .header-center{text-align:center;flex:1;min-width:0}
 .app-header h1{font-size:1.2em;font-weight:800;background:linear-gradient(135deg,var(--accent-blue),var(--accent-cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:0;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app-header .version{font-size:0.6em;color:var(--text-muted);font-family:var(--font-mono)}
 .storm-count-badge{background:#6b7280;color:#fff;font-size:0.7em;font-weight:700;padding:2px 8px;border-radius:12px;cursor:pointer;white-space:nowrap}
-.header-loc-btn{width:34px;height:34px;border-radius:10px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);color:var(--accent-blue);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:1.05em;flex-shrink:0}
+.header-loc-btn{width:34px;height:34px;border-radius:10px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);color:var(--accent-blue);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:1.05em;flex-shrink:0;touch-action:manipulation}
 @media(max-width:380px){.app-header h1{font-size:1em}.header-loc-btn{width:30px;height:30px;font-size:0.95em;border-radius:8px}.app-header{padding:8px 8px 30px;gap:4px}}
 .loc-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10001;justify-content:center;align-items:flex-start;padding:60px 16px 0}
 .loc-overlay.open{display:flex}
@@ -303,7 +309,13 @@ details.card>summary{list-style:none}
 @keyframes hiresPopIn{0%{opacity:0;transform:translate(-50%,-50%) scale(0.85)}100%{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 .skel-line{height:16px;margin-bottom:8px}
 .toast-container{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:10px 18px;font-size:0.8em;color:var(--text-primary);box-shadow:var(--shadow-md);opacity:0;transform:translateY(-10px);animation:toast-in 0.25s ease forwards;pointer-events:auto}
+/* v6.74: toasts are informational only (no tap action anywhere in the app) yet
+   pointer-events:auto made each one an invisible tap-shield floating over the
+   header row (top:16px, z-index 99999) — during load bursts on the Weather tab
+   (winds/radar/lightning toasts, queued + staggered) the header buttons were
+   unreachable for many seconds, incl. while a toast is at opacity 0. Toasts
+   must never swallow taps. */
+.toast{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:10px 18px;font-size:0.8em;color:var(--text-primary);box-shadow:var(--shadow-md);opacity:0;transform:translateY(-10px);animation:toast-in 0.25s ease forwards;pointer-events:none}
 @keyframes toast-in{to{opacity:1;transform:translateY(0)}}
 .toast.out{animation:toast-out 0.2s ease forwards}
 /* v5.96: Notifications log (📢 header panel) */
@@ -559,7 +571,7 @@ canvas.offscreen{display:none}
 .small-btn{font-size:0.75em;padding:4px 8px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer}
 .small-btn-sm{font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer}
 .mini-btn{padding:3px 7px;font-size:0.6em;font-weight:600;border-radius:4px;cursor:pointer;border:1px solid var(--border-subtle);background:rgba(255,255,255,0.04);color:var(--text-muted);transition:all 0.2s}
-.settings-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:10001;background:rgba(5,8,15,0.92);backdrop-filter:blur(8px);overflow-y:auto;-webkit-overflow-scrolling:touch}
+.settings-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:10001;background:rgba(5,8,15,0.95);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .settings-panel{max-width:420px;width:92%;margin:40px auto 80px;padding:20px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:14px}
 .detail-summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center}
 .detail-summary::-webkit-details-marker{display:none}
@@ -618,7 +630,7 @@ canvas.offscreen{display:none}
 /* ==========================================
    LOADING SCREEN
    ========================================== */
-#app-loading{position:fixed;inset:0;z-index:9999;background:radial-gradient(ellipse at 40% 30%,rgba(0,40,70,0.98),rgba(5,8,15,0.99) 70%);display:flex;align-items:center;justify-content:center}
+#app-loading{position:fixed;inset:0;z-index:9998;background:radial-gradient(ellipse at 40% 30%,rgba(0,40,70,0.98),rgba(5,8,15,0.99) 70%);display:flex;align-items:center;justify-content:center}
 .loading-inner{text-align:center;padding:20px}
 .loading-rings{position:relative;width:130px;height:130px;margin:0 auto 24px}
 .lr{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(0,229,255,0.45);animation:lr-pulse 2.1s ease-out infinite}
@@ -630,7 +642,7 @@ canvas.offscreen{display:none}
 #loading-loc{font-size:0.88em;color:var(--text-secondary);margin-bottom:10px;min-height:1.2em}
 #loading-status-msg{font-size:0.72em;color:var(--text-muted);animation:msg-fade 1.6s ease-in-out infinite}
 @keyframes msg-fade{0%,100%{opacity:0.45}50%{opacity:1}}
-#app-loading.fade-out{opacity:0;transition:opacity 0.4s ease}
+#app-loading.fade-out{opacity:0;transition:opacity 0.4s ease;pointer-events:none}
 #boot-steps{margin-top:18px;display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;max-width:280px;margin-left:auto;margin-right:auto;font-family:'JetBrains Mono','Courier New',monospace}
 .boot-step{display:flex;gap:8px;align-items:center;font-size:0.62em;letter-spacing:0.02em;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);width:100%}
 .boot-step .bs-icon{display:inline-flex;justify-content:center;align-items:center;width:14px;height:14px;flex-shrink:0;font-weight:700}

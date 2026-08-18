@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v6.62</title>
+<title>StormTracker v6.76</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=760">
+<link rel="stylesheet" href="css/style.css?v=774">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.62</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.76</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -67,7 +67,7 @@
     <button onclick="closeTravelIntervalPopup()" style="padding:6px 16px;background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border-subtle);border-radius:8px;font-size:0.8em;cursor:pointer">Cancel</button>
   </div>
 </div>
-<div id="settings-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(5,8,15,0.88);backdrop-filter:blur(8px);align-items:center;justify-content:center;touch-action:none" ontouchmove="if(event.target===this)event.preventDefault()">
+<div id="settings-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(5,8,15,0.94);transform:translateZ(0);align-items:center;justify-content:center;touch-action:none" ontouchmove="if(event.target===this)event.preventDefault()">
   <div style="display:flex;flex-direction:column;max-width:360px;width:92%;max-height:80vh;margin:auto;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:linear-gradient(180deg,rgba(10,16,32,0.98),rgba(10,16,32,0.92));border-bottom:1px solid var(--border-subtle);flex-shrink:0" ontouchmove="event.preventDefault()">
       <span style="font-size:1.05em;font-weight:700;color:var(--text-primary)">⚙️ Settings</span>
@@ -419,7 +419,27 @@
             <button onclick="toggleLightningKeyVis()" style="font-size:0.7em;padding:3px 6px;background:rgba(255,255,255,0.05);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer;color:var(--text-muted)">👁</button>
           </div>
         </div>
-        <div class="setting-hint">Optional — real-time lightning strikes from <a href="https://lightning.warpulse.com" target="_blank" rel="noopener" style="color:#facc15">lightning.warpulse.com</a>. Stored locally on your device only — never sent anywhere except WarPulse (relayed through the StormTracker proxy, which doesn't store it). With a key, real observed strikes appear on the map and sonar; without one, lightning is estimated from radar (cells ≥ 48 dBZ).</div>
+        <div class="setting-row-6" style="margin-top:6px">
+          <span class="text-xxs-muted">Strike source</span>
+          <select id="settings-lightning-source" onchange="setLightningSource(this.value)" style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px">
+            <option value="auto">Auto (key → satellite → estimate)</option>
+            <option value="warpulse">WarPulse key only</option>
+            <option value="glm">GOES satellite only (free)</option>
+            <option value="radar">Radar estimate only</option>
+          </select>
+        </div>
+        <div class="setting-hint">Lightning powered by <a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15">WarPulse</a> — real observed strikes are <b>built in</b> via StormTracker's shared access to their ground network (~1 km precision), with the free <b>GOES GLM satellite feed</b> (NOAA, ~8–14 km) and the radar estimate (cells ≥ 48 dBZ) behind it. Want your own key? Get one free at <a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15">lightningapi.dev</a> and support them — a personal key uses your own quota, skips the shared cache (stored on your device only, relayed through the StormTracker proxy which doesn't store it), and powers real-time zones below.</div>
+        <div class="setting-row-6" style="margin-top:6px">
+          <span class="text-xxs-muted">Real-time zone</span>
+          <select id="settings-lightning-zone" onchange="setLightningZoneMode(this.value)" style="font-size:0.7em;padding:3px 6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);border-radius:6px">
+            <option value="off">Off</option>
+            <option value="follow">Follow my location</option>
+            <option value="pin">Pin current location</option>
+          </select>
+        </div>
+        <div class="setting-hint">Optional, needs your WarPulse key — sets a ~10 mi strike zone on your location via your own WarPulse account (free plan includes 1 zone). WarPulse then notifies StormTracker the instant a real strike lands inside it, triggering a background push alert within about a minute — <b>even with the app closed</b>, and without using any API quota. "Follow" re-anchors the zone when you move more than 5 mi.</div>
+        <div id="lightning-zone-status" class="setting-hint" style="display:none;margin-top:4px"></div>
+        <div id="lightning-key-status" class="setting-hint" style="display:none;margin-top:4px"></div>
       </div>
       <div class="setting-sep">
         <div style="font-size:0.8em;font-weight:600;color:var(--accent-orange);margin-bottom:8px">🔔 Weather Station Alerts</div>
@@ -494,6 +514,7 @@
           <button onclick="showChangelog()" style="flex:1;padding:10px;background:rgba(168,85,247,0.1);color:#a855f7;border:1px solid rgba(168,85,247,0.3);border-radius:8px;font-size:0.8em;font-weight:600;cursor:pointer">📋 What's New</button>
         </div>
         <div style="font-size:0.65em;color:var(--text-muted);margin-top:6px;text-align:center">Learn how to use StormTracker or see recent updates</div>
+        <div id="live-users-line" style="display:none;font-size:0.68em;color:var(--text-muted);margin-top:8px;text-align:center"></div>
       </div>
     </div>
   </div>
@@ -720,25 +741,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=760" defer></script>
-<script src="js/core.js?v=760" defer></script>
-<script src="js/gauges.js?v=760" defer></script>
-<script src="js/icons.js?v=760" defer></script>
-<script src="js/geo.js?v=760" defer></script>
-<script src="js/settings.js?v=760" defer></script>
-<script src="js/thresholds.js?v=760" defer></script>
-<script src="js/weather.js?v=760" defer></script>
-<script src="js/radar.js?v=760" defer></script>
-<script src="js/tropical-model.js?v=760" defer></script>
-<script src="js/storms.js?v=760" defer></script>
-<script src="js/station.js?v=760" defer></script>
-<script src="js/alerts.js?v=760" defer></script>
-<script src="js/briefingEngine.js?v=760" defer></script>
-<script src="js/ai.js?v=760" defer></script>
-<script src="js/push.js?v=760" defer></script>
-<script src="js/qrcode.js?v=760" defer></script>
-<script src="js/devicelink.js?v=760" defer></script>
-<script src="js/init.js?v=760" defer></script>
+<script src="js/radar-shared.js?v=774" defer></script>
+<script src="js/core.js?v=774" defer></script>
+<script src="js/gauges.js?v=774" defer></script>
+<script src="js/icons.js?v=774" defer></script>
+<script src="js/geo.js?v=774" defer></script>
+<script src="js/settings.js?v=774" defer></script>
+<script src="js/thresholds.js?v=774" defer></script>
+<script src="js/weather.js?v=774" defer></script>
+<script src="js/radar.js?v=774" defer></script>
+<script src="js/tropical-model.js?v=774" defer></script>
+<script src="js/storms.js?v=774" defer></script>
+<script src="js/station.js?v=774" defer></script>
+<script src="js/alerts.js?v=774" defer></script>
+<script src="js/briefingEngine.js?v=774" defer></script>
+<script src="js/ai.js?v=774" defer></script>
+<script src="js/push.js?v=774" defer></script>
+<script src="js/qrcode.js?v=774" defer></script>
+<script src="js/devicelink.js?v=774" defer></script>
+<script src="js/init.js?v=774" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -748,7 +769,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=760')
+    navigator.serviceWorker.register('sw.js?v=774')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

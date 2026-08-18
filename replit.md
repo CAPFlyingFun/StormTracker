@@ -2,7 +2,7 @@
 
 ## Overview
 
-StormTracker is a real-time storm detection web application providing live weather radar maps, storm tracking, and weather alerts. It uses GPS or manual location input to monitor storm activity within a customizable radius. The application is enhanced with AI-powered weather analysis, integrating National Weather Service Area Forecast Discussions for comprehensive meteorological assessments. The project aims to deliver a professional, reliable, and user-friendly tool for anticipating and reacting to severe weather, with a vision to become a leading platform for public safety and meteorological insight. Current version: **v6.62** (cache bust ?v=760, SW cache stormtracker-v760).
+StormTracker is a real-time storm detection web application providing live weather radar maps, storm tracking, and weather alerts. It uses GPS or manual location input to monitor storm activity within a customizable radius. The application is enhanced with AI-powered weather analysis, integrating National Weather Service Area Forecast Discussions for comprehensive meteorological assessments. The project aims to deliver a professional, reliable, and user-friendly tool for anticipating and reacting to severe weather, with a vision to become a leading platform for public safety and meteorological insight. Current version: **v6.76** (cache bust ?v=774, SW cache stormtracker-v774).
 
 For a full per-version changelog, see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
@@ -15,7 +15,7 @@ This repository contains the **live StormTracker app**: a static, vanilla-JavaSc
 - `windy-plugin-stormtracker/` — a separate, self-contained Windy.com plugin (own build).
 - `scripts/`, `.github/workflows/` — asset generation and automation.
 
-The older **React + Express + TypeScript** version (which rendered "v1.50") has been moved to its own private repository, `CAPFlyingFun/StormTracker-TS`, to keep the two projects from being confused. Nothing in this repo depends on it. The local Replit preview serves `docs/` directly (static file server on port 5000).
+The Windy plugin lives in its own repo (CAPFlyingFun/StormTracker-Windy-Plugin); the windy-plugin-stormtracker folder here is just a pointer README. The older **React + Express + TypeScript** version (which rendered "v1.50") has been moved to its own private repository, `CAPFlyingFun/StormTracker-TS`, to keep the two projects from being confused. Nothing in this repo depends on it. The local Replit preview serves `docs/` directly (static file server on port 5000).
 
 ## User Preferences
 

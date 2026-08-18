@@ -1,0 +1,48 @@
+name: Checks
+
+# Lightweight CI for every PR and push to main. The app is a no-build static
+# site, so "does it even parse" isn't verified by any compiler — a syntax
+# error in one docs/js file takes the whole app down at runtime. (A sibling
+# repo learned this the hard way: a refactor PR merged with a parse error
+# because nothing ran a build on PRs.) These checks catch that class of
+# mistake in review instead of in production.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax-check app, service worker, and worker JS
+        run: |
+          fail=0
+          for f in docs/js/*.js docs/sw.js worker/index.js scanner/*.js; do
+            node --check "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done
+          exit $fail
+
+      - name: Scanner parity test (shared radar/geo logic)
+        working-directory: scanner
+        run: |
+          npm install --no-audit --no-fund
+          node test-shared-parity.mjs
+
+      - name: Python + workflow-file sanity
+        run: |
+          python3 -m py_compile scanner/glm_fetch.py
+          pip install --quiet pyyaml
+          python3 -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('workflow yaml ok')"

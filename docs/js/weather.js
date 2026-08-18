@@ -1286,7 +1286,7 @@ function drawMiniSonar(){
     if(_sonarCfg.showLightning&&(typeof _ltgShown!=='function'||_ltgShown())&&typeof ltgLive==='function'&&ltgLive()&&S._ltgStrikes){
       attrib=S._ltgStrikes.src==='glm'
         ?'<br>⚡ Lightning data: NOAA GOES GLM satellite'
-        :'<br>⚡ Lightning data: <a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
+        :'<br>⚡ Lightning data: <a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
     }
     infoEl.innerHTML=base+attrib;
   }

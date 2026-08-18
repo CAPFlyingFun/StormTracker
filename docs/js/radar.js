@@ -989,7 +989,7 @@ function _ltgMapAttrib(map,show){
     el.style.display='inline';
     el.innerHTML=(S._ltgStrikes&&S._ltgStrikes.src==='glm')
       ?'⚡ Lightning data: NOAA GOES GLM satellite'
-      :'⚡ Lightning data: <a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
+      :'⚡ Lightning data: <a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
   }catch(e){}
 }
 function plotLightningStrikes(map){

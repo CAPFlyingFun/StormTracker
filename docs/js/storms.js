@@ -187,7 +187,7 @@ function toggleSkylinkKeyVis(){
   if(!inp)return;
   inp.type=inp.type==='password'?'text':'password';
 }
-// ⚡ Lightning (WarPulse) — user-supplied API key from lightning.warpulse.com,
+// ⚡ Lightning (WarPulse) — user-supplied API key from lightningapi.dev (WarPulse),
 // stored ONLY in localStorage ('st_lightningKey'). It is read locally and sent
 // only to the WarPulse lightning API (once the strike fetch is wired up); it is
 // never transmitted anywhere else and never leaves the device otherwise. Without
@@ -373,8 +373,8 @@ function _ltgSetStatus(){
   else if(err&&getLightningKey()&&src!=='glm'){
     const when=new Date(err.ts).toLocaleTimeString();
     const det=err.detail?' — “'+err.detail+'”':'';
-    if(err.quota){col='#facc15';msg='⚠️ WarPulse quota reached (HTTP '+err.status+' at '+when+det+'). The key looks valid but the plan\'s monthly units appear used up. Check usage at lightning.warpulse.com.'}
-    else{col='#ef4444';msg='❌ WarPulse key rejected (HTTP '+err.status+' at '+when+det+'). Re-paste the key, or check it at lightning.warpulse.com.'}
+    if(err.quota){col='#facc15';msg='⚠️ WarPulse quota reached (HTTP '+err.status+' at '+when+det+'). The key looks valid but the plan\'s monthly units appear used up. Check usage at lightningapi.dev.'}
+    else{col='#ef4444';msg='❌ WarPulse key rejected (HTTP '+err.status+' at '+when+det+'). Re-paste the key, or check it at lightningapi.dev.'}
     if(src==='auto')msg+=' Auto mode is using the free GOES satellite feed (or the radar estimate) meanwhile.';
   }else if(st&&st.flashes.length){
     col='#4ade80';
@@ -5153,7 +5153,7 @@ function _renderStormsCore(){
     </div>
     ${gridHtml}
     <div style="font-size:0.65em;color:var(--text-muted);text-align:center;padding:4px">
-      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Lightning data: ${S._ltgStrikes.src==='glm'?('NOAA GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')):'<a href="https://warpulse.com" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>'}<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
+      ${(typeof ltgLive==='function'&&ltgLive())?`⚡ ${S._ltgStrikes.flashes.length} live strike${S._ltgStrikes.flashes.length!==1?'s':''} (last 15 min) &middot; Lightning data: ${S._ltgStrikes.src==='glm'?('NOAA GOES GLM satellite'+(S._ltgStrikes.sat?' ('+S._ltgStrikes.sat+')':'')):'<a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>'}<br>`:`⚡ Lightning on storms ≥40 dBZ &middot; Radar-derived, not observed<br>`}
       Impact % based on direction, distance, speed &amp; intensity via winds aloft
     </div>`;
   startEtaCountdowns();

@@ -17,9 +17,7 @@ const TUTORIAL_SECTIONS=[
   {title:'💡 Tips',text:'• Storm intensity is measured in <b>dBZ</b> (decibels of reflectivity). Higher = stronger: 15-30 light rain, 30-45 moderate, 45-55 heavy, 55+ severe/hail.<br>• The <b>Impact %</b> shown on storms estimates the likelihood of affecting your exact location. NWS warning polygons and terrain effects are factored in.<br>• Scan circle on the radar shows your current detection range.<br>• The sonar mini-map on the Weather tab updates with every scan — use the +/− buttons to zoom in for detail or out for a wider view.<br>• Use the <b>sonar settings gear</b> to customize the sweep animation, dot glow, grid brightness, and more.<br>• The ⚡ lightning icon on storm cells indicates radar-derived lightning potential (≥40 dBZ).<br>• Install StormTracker as a <b>standalone app</b> on your phone — tap "Add to Home Screen" in your browser menu for the best experience.'}
 ];
 const CHANGELOG=[
-  {ver:'v6.78',date:'2026-08-18',items:['🕵️ <b>Frozen-buttons detective now reports on screen — no working buttons needed</b><br>The latest field report (everything scrolls, but no button responds anywhere, even in Settings) points to one specific iPhone behavior: Safari cancels a tap if the button you\'re touching gets rebuilt or the page stalls between finger-down and finger-up. The diagnostic now tests for exactly that and <b>announces what it catches as pop-up toasts</b> — which render even when every button is dead, so a screenshot of the toast is all we need. It watches for: your tapped element being rebuilt mid-tap (names it), something continuously mass-rebuilding the page (names the container), the main thread stalling (times it), and iOS itself cancelling touches. Everything is also written to the tap log, which survives force-closing the app — after a relaunch there\'s a short window before the weather loads where buttons work: Settings → 🕵️ Tap Diagnostic → Copy log grabs the evidence from the frozen session.'],},
-  {ver:'v6.77',date:'2026-08-18',items:['🕵️ <b>Tap Diagnostic — help us catch the frozen-buttons bug in the act</b><br>The "header buttons stop responding after the weather loads" iPhone bug has dodged every simulator, so the app now quietly records where each tap actually lands. If buttons ever freeze on you: tap them a few times anyway, then open Settings → 🕵️ Tap Diagnostic (switch tabs first if Settings itself is stuck) and press <b>Copy log</b> — the log tells us definitively whether your taps reached the buttons, got swallowed by an invisible overlay (which it names), or were never delivered at all. Zero impact otherwise: it stores only the last 80 taps, on your device only, nothing is sent anywhere. Also fixed: with a long saved address the header status line used to wrap to four lines, ballooning the header so the storm badge and connection chip piled on top of it — it now stays on one tidy line.'],},
-  {ver:'v6.76',date:'2026-08-18',items:['🔧 <b>Stuck in Settings after weather loaded — fixed (iPhone)</b><br>Two more invisible tap-thieves found and removed. First, the fullscreen loading screen ("Fetching weather data…") sat at the <i>same</i> stacking level as the Settings panel but painted on top of it — and during its half-second fade-out it was invisible yet still swallowing every tap, so if it overlapped the moment you were in Settings, the ✕ button went dead. The loading screen now sits below Settings and lets taps pass through while fading. Second, the header and the Settings panel used a background-blur effect that iPhone Safari is known to mis-handle: when the page behind them repaints heavily — exactly what happens the instant the weather finishes rendering — their tap targets can drift away from where the buttons are drawn. The blur is gone from both (the backdrop is imperceptibly darker instead), so taps land where they should even mid-load.'],},
+  {ver:'v6.79',date:'2026-08-19',items:['⏪ <b>Rollback to the last solid build</b><br>Versions 6.76–6.78 stacked up attempted fixes and diagnostics for the frozen-buttons bug, and things got worse instead of better — so this version is exactly the v6.75 app again (built-in WarPulse lightning, the new lightningapi.dev links, the toast tap-fix, everything up to that point), with nothing from the three experimental versions. If buttons still misbehave on this build, that tells us the problem predates the experiments; if they don\'t, one of those three versions caused it and we\'ll find which. Either way: solid ground first.'],},
   {ver:'v6.75',date:'2026-08-18',items:['🔗 <b>WarPulse links updated to their new home</b><br>WarPulse\'s lightning service now lives at <a href="https://lightningapi.dev/" target="_blank" rel="noopener">lightningapi.dev</a> (approved by their team), so every attribution link — on the radar map, the sonar, the storm panel, and in Settings — now points there. The Settings → ⚡ Lightning section also spells out the arrangement: lightning is powered by WarPulse and built in for everyone, and if you\'d like your own key (your own quota, no shared cache, and it powers real-time zones) you can grab one free at lightningapi.dev and support them.'],},
   {ver:'v6.74',date:'2026-08-18',items:['👆 <b>Header buttons unresponsive on the Weather tab — fixed</b><br>Two culprits, both squashed. First, toast pop-ups (the little "radar unreachable" / "winds aloft" pills) float directly over the header row and were silently catching taps — including while fading in or out at full transparency. On the Weather tab, where load-time toasts queue up one after another on a slow connection, the settings/location/notification buttons could be unreachable for many seconds at a time. Toasts are informational only, so they now let every tap pass straight through to whatever is underneath. Second, the header carried a leftover sticky-positioning style that on iOS Safari can make a blurred header\'s tap targets drift out of sync with where it\'s drawn; the header now renders on its own fixed layer so taps always land where the buttons are. Buttons also respond faster on iPhone — the 350ms double-tap-zoom delay no longer applies to them.'],},
   {ver:'v6.73',date:'2026-08-18',items:['⚡🤝 <b>Lightning is becoming built-in — official shared access from WarPulse</b><br>WarPulse approved a shared-key partnership for StormTracker (with a one-year free license and a raised 500k/month call limit): once their team delivers the key, every user gets real ground-network strikes (~1 km precision) with <b>no signup and no API key</b> — the Auto chain becomes built-in WarPulse → GOES satellite → radar estimate. The plumbing shipped now, WarPulse-approved guardrails included: responses are cached ~60 seconds per area so neighbors share one call, and per-IP rate limiting protects the shared quota. Background push alerts also switch from the satellite to the ground network for sharper distances. A personal key remains optional (own quota, no shared cache) and is still what powers real-time zones. Until the key is provisioned, everything behaves exactly as today.'],},
@@ -680,33 +678,4 @@ function rebootStartup(){
   // Force a fresh winds-aloft fetch through the gate.
   S._windCache=null;S._aloftData=null;
   Promise.resolve(setLoc(S.lat,S.lon,S.locName)).finally(()=>{S._rebooting=false});
-}
-// v6.77: Tap Diagnostic viewer (Settings → 🕵️). Renders the st_tapLog ring
-// recorded by core.js so unresponsive-button reports can be read off the
-// device itself. ts=touchstart te=touchend cl=click; "top:" names the element
-// elementFromPoint saw above the target (an overlay suspect); [hdr] marks
-// header taps, [set] taps while Settings was open.
-function renderTapLog(){
-  const el=document.getElementById('tap-log-view');if(!el)return;
-  const log=(typeof _tapLogGet==='function')?_tapLogGet():[];
-  if(!log.length){el.textContent='(no taps recorded yet — tap around the app, then reopen this)';return}
-  const now=Date.now();
-  el.textContent=log.slice(-40).reverse().map(e=>{
-    const ago=Math.round((now-e.ts)/1000);
-    const when=ago<120?ago+'s ago':Math.round(ago/60)+'m ago';
-    let line=`${when}  ${e.k}  ${e.t}`;
-    if(e.top)line+='  ⚠️top:'+e.top;
-    if(e.h)line+='  [hdr]';
-    if(e.st)line+='  [set]';
-    if(e.pg)line+='  ('+e.pg+')';
-    return line;
-  }).join('\n');
-}
-function copyTapLog(){
-  const log=(typeof _tapLogGet==='function')?_tapLogGet():[];
-  const txt='StormTracker tap log v'+(document.title.match(/v[\d.]+/)||[''])[0]+' '+new Date().toISOString()+'\n'
-    +log.map(e=>JSON.stringify(e)).join('\n');
-  const done=()=>{if(typeof toast==='function')toast('📋 Tap log copied — paste it to Claude/chat')};
-  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(()=>prompt('Copy the log:',txt))}
-  else prompt('Copy the log:',txt);
 }

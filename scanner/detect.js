@@ -78,6 +78,13 @@ async function scanTile(url, tx, ty, zoom, colorFn, minDbz, scanRadius, origin, 
         if (dist <= scanRadius) pts.push({ lat: ptLat, lng: ptLon, dbz, dist });
       }
     }
+    // v6.83: shared corrupted-tile screen (radar-shared.js radarTileCorrupt) —
+    // a garbled composite tile (wall of uniform extreme dBZ from a bad radar
+    // site) must never become storm cells, lightning estimates or push alerts.
+    if (shared.radarTileCorrupt(pts)) {
+      console.warn(`  ⚠ corrupt radar tile rejected (${pts.length} pts, extreme-dBZ wall) z${zoom} ${tx}/${ty}`);
+      return [];
+    }
     return pts;
   } catch {
     return [];

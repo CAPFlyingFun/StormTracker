@@ -112,6 +112,25 @@ for (const [deg] of DEGTODIR_EXPECTED) {
 assertEq('detect.lonToTileX === shared', detect.lonToTileX(-105, 7), shared.lonToTileX(-105, 7));
 assertEq('detect.latToTileY === shared', detect.latToTileY(40, 7), shared.latToTileY(40, 7));
 
+// v6.83: radarTileCorrupt behavioral cases — the corrupted-composite screen
+// must flag walls of uniform extreme dBZ and must NOT flag realistic storms.
+const mkPts = (spec) => spec.flatMap(([dbz, n]) => Array.from({ length: n }, () => ({ dbz })));
+// Garbled tile like the 2026-08-19 KEVX contamination: 2000 echo samples, 60%
+// of them a repeated 60-dBZ palette value.
+assertEq('radarTileCorrupt: extreme wall → true',
+  shared.radarTileCorrupt(mkPts([[60, 1200], [35, 500], [20, 300]])), true);
+// One repeated extreme value at 32% of echo, extreme total under the 40% wall.
+assertEq('radarTileCorrupt: repeated single value → true',
+  shared.radarTileCorrupt(mkPts([[60, 480], [45, 200], [30, 500], [20, 320]])), true);
+// Violent-but-real supercell tile: big echo, small extreme core (~4%).
+assertEq('radarTileCorrupt: real supercell → false',
+  shared.radarTileCorrupt(mkPts([[60, 40], [55, 120], [45, 300], [30, 540]])), false);
+// Small isolated cell — too little echo to judge, never flagged.
+assertEq('radarTileCorrupt: small cell → false',
+  shared.radarTileCorrupt(mkPts([[60, 100], [45, 80], [30, 60]])), false);
+// Dry / empty tile.
+assertEq('radarTileCorrupt: empty → false', shared.radarTileCorrupt([]), false);
+
 const total =
   NEXRAD_EXPECTED.length + RV_EXPECTED.length + HAVERSINE_EXPECTED.length +
   BEARING_EXPECTED.length + DEGTODIR_EXPECTED.length;

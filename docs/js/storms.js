@@ -126,6 +126,9 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
           if(dist<=scanRadius)pts.push({lat:ptLat,lng:ptLon,dbz,dist});
         }
       }
+      // v6.83: a garbled upstream tile (wall of uniform extreme dBZ) counts as
+      // FAILED, never as data — otherwise it becomes false storms and alerts.
+      if(typeof radarTileCorrupt==='function'&&radarTileCorrupt(pts)){S._corruptTiles=(S._corruptTiles||0)+1;return null}
       return pts;
     }catch(e){return null}   // timeout/network/decode — FAILED, not dry
   }
@@ -151,6 +154,9 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
       }
     }
   }
+  // v6.83: see the RainViewer branch — corrupted NEXRAD composite tiles (the
+  // common case: one bad site polluting nexrad-n0q) are failures, not data.
+  if(typeof radarTileCorrupt==='function'&&radarTileCorrupt(pts)){S._corruptTiles=(S._corruptTiles||0)+1;return null}
   return pts;
 }
 (function initAdaptiveScan(){

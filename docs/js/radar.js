@@ -775,6 +775,7 @@ async function runRadarScan(opts){
   }
   const colorFn=useNexrad?nexradToDbz:rvToDbz;
   const ts=Date.now();
+  S._corruptTiles=0;   // v6.83: scanTileForPoints bumps this per garbled tile
   const tilePromises=[];
   for(let tx=minTX;tx<=maxTX;tx++){
     for(let ty=minTY;ty<=maxTY;ty++){
@@ -795,6 +796,18 @@ async function runRadarScan(opts){
     for(const p of r)points.push(p);
   }
   if(failedTiles)console.warn('[SCAN] '+failedTiles+'/'+tileResults.length+' tiles failed to load');
+  // v6.83: corrupted tiles are counted inside failedTiles (they return null),
+  // but get their own message — this is a data-provider problem, not network,
+  // and the user staring at a garbled sector deserves to know the app saw it
+  // too and refused to alert on it. Throttled to one toast per 10 minutes.
+  if(S._corruptTiles){
+    console.warn('[SCAN] '+S._corruptTiles+' tile(s) rejected as corrupted (wall of uniform extreme dBZ)');
+    const nowMs=Date.now();
+    if(typeof toast==='function'&&(!S._corruptToastAt||nowMs-S._corruptToastAt>600000)){
+      S._corruptToastAt=nowMs;
+      toast('📡 '+S._corruptTiles+' garbled radar tile'+(S._corruptTiles>1?'s':'')+' ignored — '+(useNexrad?'NEXRAD composite':'RainViewer')+' is sending bad data in part of the area');
+    }
+  }
   const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
   return{points,frames,tilePath,radarAgeMs,zoom,failedTiles,totalTiles:tileResults.length};
 }

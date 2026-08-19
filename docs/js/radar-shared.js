@@ -211,6 +211,31 @@ const OVERHEAD_MI=1.5;
 // (storms.js mv.speed>=2). A 1-2 mph vector once stretched a clutter blob into
 // "rain now, ends in an hour".
 const MOTION_MIN_MPH=2;
+// v6.83: corrupted-tile detector. The IEM NEXRAD composite (and occasionally
+// RainViewer) sometimes serves a garbled scan — huge tile-aligned blocks of
+// uniform extreme dBZ, typically when one radar site feeds junk into the
+// composite (seen live 2026-08-19: KEVX contaminating the sector east of
+// Pensacola with solid 60+ dBZ while the real Level-II picture was scattered
+// storms). Physics is the tell: genuine extreme cores (giant hail, eyewalls)
+// are small fractions of a tile's echo area; corruption paints 60+ dBZ across
+// a large share of it, often as one repeated palette value. pts = one tile's
+// decoded sample points [{dbz},...]. Pure and shared so the app scan and the
+// push scanner reject the same garbage — a corrupt tile otherwise becomes
+// false storms, false ≥48 dBZ lightning estimates, and false push alerts.
+function radarTileCorrupt(pts){
+  if(!pts||pts.length<300)return false;              // too little echo to judge
+  let extreme=0;const valCounts=new Map();
+  for(const p of pts){
+    if(p.dbz>=60){
+      extreme++;
+      valCounts.set(p.dbz,(valCounts.get(p.dbz)||0)+1);
+    }
+  }
+  if(extreme<120)return false;                       // real cores stay far below this
+  if(extreme/pts.length>0.40)return true;            // a wall of extreme dBZ
+  let top=0;for(const n of valCounts.values())if(n>top)top=n;
+  return top>=150&&top/pts.length>0.30;              // one repeated extreme value
+}
 // Clutter screen, 3 branches — the client's isClutterOnly (radar.js) hoisted
 // here verbatim so the scanner can reject the same clutter scans the app hides.
 function isClutterCells(cells){
@@ -275,7 +300,7 @@ if (typeof module !== 'undefined' && module.exports) {
     DBZ_SCALE, pixelToDbz,
     NEXRAD_PAL, nexradToDbz,
     RV_UB, rvToDbz,
-    STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells,
+    STORM_MIN_DBZ, OVERHEAD_MI, MOTION_MIN_MPH, isClutterCells, radarTileCorrupt,
     ALERT_BAND_DEFS, BAND_CADENCE_OPTS, bandForDbz, XTRK_DIRECT_MI,
     dedupeNwsAlerts
   };

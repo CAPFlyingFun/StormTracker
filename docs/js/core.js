@@ -1172,9 +1172,69 @@ function updateStormBadges(){
       localStorage.setItem('st_tapLog',JSON.stringify(_log));
     }catch(err){}
   }
-  document.addEventListener('touchstart',e=>_push('ts',e),{capture:true,passive:true});
+  function _save(){try{localStorage.setItem('st_tapLog',JSON.stringify(_log))}catch(e){}}
+  // v6.78: the field report is now "scroll works, every tap dead, even in
+  // Settings" — on iOS that pattern means touches ARE delivered (scroll +
+  // these listeners run) but tap→click synthesis dies. Safari cancels a tap
+  // when the touched element is detached/rebuilt between finger-down and
+  // finger-up, so the logger now tests the theories directly and SPEAKS UP
+  // via toast (toasts render without any working button — screenshot them):
+  //   det:1  = the exact element you touched left the DOM mid-tap
+  //   mut    = something is mass-rebuilding DOM (top container named)
+  //   lag    = the main thread stalled (duration logged)
+  //   tc     = iOS itself cancelled the touch
+  let _diagToasts=0;
+  function _dtoast(msg){
+    if(_diagToasts>=3)return;_diagToasts++;
+    try{if(typeof toast==='function')toast('🕵️ '+msg,7000)}catch(e){}
+  }
+  document.addEventListener('touchstart',e=>{
+    _push('ts',e);
+    const t=e.target,entry=_log[_log.length-1];
+    if(t&&entry)setTimeout(()=>{
+      try{if(!t.isConnected){entry.det=1;_save();_dtoast('Tap cancelled: '+_desc(t)+' was rebuilt mid-tap')}}catch(err){}
+    },350);
+  },{capture:true,passive:true});
   document.addEventListener('touchend',e=>_push('te',e),{capture:true,passive:true});
+  document.addEventListener('touchcancel',e=>{_push('tc',e)},{capture:true,passive:true});
   document.addEventListener('click',e=>_push('cl',e),{capture:true,passive:true});
+  // DOM churn meter: who is mass-removing nodes? (rolling 5s window)
+  try{
+    let _rm=0,_who=new Map(),_lastMut=0;
+    new MutationObserver(muts=>{
+      for(const m of muts){
+        if(!m.removedNodes||!m.removedNodes.length)continue;
+        _rm+=m.removedNodes.length;
+        const p=_desc(m.target);
+        _who.set(p,(_who.get(p)||0)+m.removedNodes.length);
+      }
+    }).observe(document.documentElement,{childList:true,subtree:true});
+    let _prevRm=0;
+    setInterval(()=>{
+      // one 5s burst is a normal render; TWO consecutive busy windows means
+      // something is rebuilding continuously — that's the tap-killer pattern
+      if(_rm>150&&_prevRm>150&&Date.now()-_lastMut>10000){
+        _lastMut=Date.now();
+        const top=[..._who.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>k+'×'+v).join(', ');
+        _log.push({k:'mut',n:_rm,w:top,ts:Date.now()});
+        if(_log.length>MAX)_log.splice(0,_log.length-MAX);_save();
+        _dtoast('Heavy DOM rebuild: '+top);
+      }
+      _prevRm=_rm;_rm=0;_who.clear();
+    },5000);
+  }catch(e){}
+  // Main-thread stall meter: a 500ms heartbeat arriving >2s late = stall.
+  try{
+    let _hb=Date.now();
+    setInterval(()=>{
+      const now=Date.now(),gap=now-_hb;_hb=now;
+      if(gap>2500){
+        _log.push({k:'lag',d:gap,ts:now});
+        if(_log.length>MAX)_log.splice(0,_log.length-MAX);_save();
+        _dtoast('Main thread stalled '+(gap/1000).toFixed(1)+'s');
+      }
+    },500);
+  }catch(e){}
   window._tapLogGet=()=>_log.slice();
   window._tapLogClear=()=>{_log=[];try{localStorage.removeItem('st_tapLog')}catch(e){}};
 })();

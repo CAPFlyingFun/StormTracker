@@ -17,6 +17,7 @@ const TUTORIAL_SECTIONS=[
   {title:'💡 Tips',text:'• Storm intensity is measured in <b>dBZ</b> (decibels of reflectivity). Higher = stronger: 15-30 light rain, 30-45 moderate, 45-55 heavy, 55+ severe/hail.<br>• The <b>Impact %</b> shown on storms estimates the likelihood of affecting your exact location. NWS warning polygons and terrain effects are factored in.<br>• Scan circle on the radar shows your current detection range.<br>• The sonar mini-map on the Weather tab updates with every scan — use the +/− buttons to zoom in for detail or out for a wider view.<br>• Use the <b>sonar settings gear</b> to customize the sweep animation, dot glow, grid brightness, and more.<br>• The ⚡ lightning icon on storm cells indicates radar-derived lightning potential (≥40 dBZ).<br>• Install StormTracker as a <b>standalone app</b> on your phone — tap "Add to Home Screen" in your browser menu for the best experience.'}
 ];
 const CHANGELOG=[
+  {ver:'v6.81',date:'2026-08-19',items:['🔓 <b>Settings no longer wedges iPhone touch — the second half of the freeze</b><br>Sharp field experiment (thank you!): opening Settings from the Weather tab between the location loading and the radar finishing locked everything, while the identical move from the Radar or Storms tabs was fine. The difference turned out to be one line: opening Settings froze the app\'s main scroll area (to stop the page behind from scrolling), and on iPhone, freezing a momentum-scroll container tears down and rebuilds Safari\'s scroll machinery — which is only risky when that container is actually scrollable (the tall Weather tab) and downright dangerous while the weather content is still loading and changing height beneath it. Safari could wedge the entire page\'s touch handling in response. The freeze-line is gone; scroll-bleed behind Settings was already prevented two other ways, so nothing is lost. Combined with v6.80\'s gauge fix, both halves of the frozen-buttons mystery are now closed.'],},
   {ver:'v6.80',date:'2026-08-19',items:['🎯 <b>THE frozen-buttons bug — found and fixed</b><br>Root cause, at last: with any wind-gauge style other than Neon (Marine, Minimal, G1000, Speedometer), the gauge animation tore down and rebuilt its entire display every 150–300ms, forever, starting the moment weather data loaded. iPhone Safari cancels a tap whenever the page is being rebuilt between finger-down and finger-up — and at that rate a rebuild landed inside <i>every</i> tap — so with the gauge on screen (the Weather tab, or Settings floating over it) every button went dead while scrolling kept working. That is why it only hit the Weather tab, only after loading, only on iPhone, and why it "started" when the gauge style was changed rather than with any app version. The gauge now pauses its rebuild for the fraction of a second your finger is on the screen and catches up right after the tap lands — visually identical, and taps always go through. It also stops rebuilding pointlessly while hidden on other tabs, which saves a little battery too.'],},
   {ver:'v6.79',date:'2026-08-19',items:['⏪ <b>Rollback to the last solid build</b><br>Versions 6.76–6.78 stacked up attempted fixes and diagnostics for the frozen-buttons bug, and things got worse instead of better — so this version is exactly the v6.75 app again (built-in WarPulse lightning, the new lightningapi.dev links, the toast tap-fix, everything up to that point), with nothing from the three experimental versions. If buttons still misbehave on this build, that tells us the problem predates the experiments; if they don\'t, one of those three versions caused it and we\'ll find which. Either way: solid ground first.'],},
   {ver:'v6.75',date:'2026-08-18',items:['🔗 <b>WarPulse links updated to their new home</b><br>WarPulse\'s lightning service now lives at <a href="https://lightningapi.dev/" target="_blank" rel="noopener">lightningapi.dev</a> (approved by their team), so every attribution link — on the radar map, the sonar, the storm panel, and in Settings — now points there. The Settings → ⚡ Lightning section also spells out the arrangement: lightning is powered by WarPulse and built in for everyone, and if you\'d like your own key (your own quota, no shared cache, and it powers real-time zones) you can grab one free at lightningapi.dev and support them.'],},
@@ -457,13 +458,21 @@ function showTutorialDirect(){
 function toggleSettingsPanel(){
   const p=document.getElementById('settings-panel');
   if(!p)return;
-  const c=document.querySelector('.container');
   const vis=p.style.display==='flex';
   if(vis){
     p.style.display='none';
-    if(c)c.style.overflowY='';
   }else{
-    if(c)c.style.overflowY='hidden';
+    // v6.81: do NOT toggle .container's overflowY here. Flipping overflow on
+    // a -webkit-overflow-scrolling:touch scroller tears down and rebuilds the
+    // iOS scroll context, and Safari is known to wedge the page's entire
+    // touch handling when that happens — worst of all mid-load, while
+    // renderWeather passes are still changing the container's scrollHeight
+    // under the frozen overflow. That matched the field repro exactly:
+    // opening Settings from the WEATHER tab (container scrollable) before
+    // radar finished → total lock; from Radar/Storms (container not
+    // scrollable, toggle a no-op) → fine. Background scroll-bleed is already
+    // prevented twice: the overlay's ontouchmove preventDefault and the
+    // scroll area's edge-guard + overscroll-behavior:contain.
     p.style.display='flex';
     syncSettingsPanel();
   }

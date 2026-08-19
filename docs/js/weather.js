@@ -1288,7 +1288,18 @@ function drawMiniSonar(){
         ?'<br>⚡ Lightning data: NOAA GOES GLM satellite'
         :'<br>⚡ Lightning data: <a href="https://lightningapi.dev/" target="_blank" rel="noopener" style="color:#facc15;text-decoration:none">WarPulse Lightning API</a>';
     }
-    infoEl.innerHTML=base+attrib;
+    // v6.82: THE primary frozen-buttons regression. drawMiniSonar runs every
+    // animation frame (60 Hz), and v6.66 turned this line into an innerHTML
+    // write containing an <a> element — so the caption's DOM was destroyed,
+    // re-parsed and rebuilt 60×/second, forever, whenever the sonar was
+    // rendered (i.e. the Weather tab, from the moment weather loaded — the
+    // day-one correlation of the bug). iOS Safari cancels any tap whose
+    // gesture window overlaps DOM churn, so EVERY button on screen died —
+    // header, Settings above, bottom nav — while compositor scrolling kept
+    // working. Only write when the caption actually changed (≈ once per
+    // scan/zoom change instead of 60 Hz).
+    const _infoHtml=base+attrib;
+    if(infoEl._lastHtml!==_infoHtml){infoEl._lastHtml=_infoHtml;infoEl.innerHTML=_infoHtml}
   }
 }
 let _sonarAnimId=0;

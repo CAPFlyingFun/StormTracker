@@ -1489,7 +1489,18 @@ function startWindSim(){
       if(!S._gaugeTickLast||now-S._gaugeTickLast>(gyroActive?150:300)){
         S._gaugeTickLast=now;
         const wr=document.querySelector('.wind-rose,[data-gauge]');
-        if(wr&&S.weather){
+        // v6.80: THE Weather-tab frozen-buttons bug lived here. Non-neon gauge
+        // styles rebuilt the whole gauge via replaceChild every 150–300ms —
+        // and iOS Safari cancels tap→click when the DOM churns between
+        // finger-down and finger-up, so with the gauge visible (Weather tab,
+        // or Settings floating over it) a rebuild landed inside every tap
+        // window and EVERY button on screen went dead, while compositor
+        // scrolling kept working. Neon was immune (in-place text updates),
+        // which is why the bug tracked the gauge-style setting, not app
+        // versions. Fix: never swap while a finger is down (defer, flush
+        // ~180ms after release so the click dispatches first) and skip swaps
+        // entirely while the gauge isn't rendered (hidden tab).
+        if(wr&&S.weather&&wr.offsetParent){
           const c2=S.weather;
           const wn2=kmhTo(simSpd,S.windUnit);
           const wu2=WIND_UNITS[S.windUnit];
@@ -1498,12 +1509,8 @@ function startWindSim(){
           const bf2=beaufortFromKmh(simSpd);
           const d2={windSpd:simSpd,wd:simDir,windDisp:parseFloat(wn2),gustDisp:gd2,gustRaw:displayGust,windNum:wn2,windUnit:wu2,gustStr:gs2,bf:bf2,simActive:true,pressure:c2.pressure_msl};
           const newHtml=renderWindGauge(d2);
-          const parent=wr.parentElement;
-          if(parent){
-            const temp=document.createElement('div');
-            temp.innerHTML=newHtml;
-            parent.replaceChild(temp.firstElementChild,wr);
-          }
+          if(_gaugeTouchHeld)_gaugePendingHtml=newHtml;
+          else _gaugeSwap(newHtml);
         }
       }
     }
@@ -1513,6 +1520,34 @@ function startWindSim(){
     windSweepAnim();
   }
 }
+// v6.80: gauge-swap touch guard (see comment in the sim timer above). A swap
+// requested while a finger is on the screen is parked in _gaugePendingHtml and
+// flushed 180ms after the touch ends — after iOS has dispatched the tap's
+// click — so the gauge stays perfectly live to the eye but never yanks the
+// DOM out from under an in-progress tap.
+let _gaugeTouchHeld=false,_gaugePendingHtml=null,_gaugeFlushTimer=null;
+function _gaugeSwap(html){
+  const wr=document.querySelector('.wind-rose,[data-gauge]');
+  const parent=wr&&wr.parentElement;
+  if(!parent)return;
+  const temp=document.createElement('div');
+  temp.innerHTML=html;
+  if(temp.firstElementChild)parent.replaceChild(temp.firstElementChild,wr);
+}
+document.addEventListener('touchstart',()=>{_gaugeTouchHeld=true;if(_gaugeFlushTimer){clearTimeout(_gaugeFlushTimer);_gaugeFlushTimer=null}},{capture:true,passive:true});
+function _gaugeTouchRelease(){
+  _gaugeTouchHeld=false;
+  if(_gaugePendingHtml&&!_gaugeFlushTimer){
+    _gaugeFlushTimer=setTimeout(()=>{
+      _gaugeFlushTimer=null;
+      if(_gaugeTouchHeld)return; // a new touch started — keep deferring
+      const html=_gaugePendingHtml;_gaugePendingHtml=null;
+      if(html)_gaugeSwap(html);
+    },180);
+  }
+}
+document.addEventListener('touchend',_gaugeTouchRelease,{capture:true,passive:true});
+document.addEventListener('touchcancel',_gaugeTouchRelease,{capture:true,passive:true});
 function secBtns(key){return`<div class="sec-btns"><button onclick="moveSection('${key}',-1)" title="Move up">▲</button><button onclick="moveSection('${key}',1)" title="Move down">▼</button></div>`}
 // v4.46: Reorder system now also covers the Rain Clock and Rain Forecast Bars
 // cards at the top of the Weather tab (they render their own card wrapper so

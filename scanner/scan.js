@@ -218,6 +218,13 @@ const LTG_RADIUS = 80;
 // safety, even if it isn't approaching — a close strike shouldn't be hidden just
 // because it isn't heading straight at the user.
 const LTG_NEAR = 15;
+// v6.84: lightning pushes only fire for threats within 2 hours. A cell 5+
+// hours out is forecast material for the Rain Clock, not a phone buzz —
+// storms weaken, build and shift long before then (user request after an
+// "ETA 23:36" alert arrived at 17:46). Approaching cells with no computable
+// ETA still qualify when close (≤30 mi ≈ an hour at typical storm motion).
+const LTG_MAX_ETA_MIN = 120;
+const LTG_NOETA_MAX_MI = 30;
 // Awareness ("nearby strong storms not heading at you") thresholds. A cell counts
 // as STRONG at the Heavy band floor (>=45 dBZ, matching the lightning corridor).
 // The alert covers strong cells inside the user's radius that are NOT inbound and
@@ -355,7 +362,10 @@ function fmtArrivalClock(etaMin, tz, h24) {
       const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d);
       const hh = (p.find(x => x.type === 'hour') || {}).value || '';
       const mm = (p.find(x => x.type === 'minute') || {}).value || '';
-      return hh && mm ? `${hh}${mm}` : '';
+      // v6.84: colon is load-bearing — "ETA 2336" reads as miles at a glance
+      // on a lock screen; "ETA 23:36" reads as a time. (rainclock.js already
+      // formats with the colon; this now matches.)
+      return hh && mm ? `${hh}:${mm}` : '';
     }
     return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: true }).format(d);
   } catch (e) { return ''; }
@@ -437,15 +447,21 @@ function dirLong(deg) { const a = degToDir(deg); return DIR_LONG[a] || a; }
 // tier. AWARENESS RULE: always surface the NEAREST strong cell within 15 mi,
 // approaching or not, so a close strike is never hidden just because it isn't in
 // the user's cone. If nothing is within 15 mi, fall back to the nearest
-// approaching cell in the 80 mi corridor so distant inbound lightning still
+// approaching cell in the 80 mi corridor — v6.84: gated to ETA ≤ 2 h (or
+// ≤ 30 mi when ETA is unknown), so far-future inbound lightning still
 // warns. Cells arriving within 15 min are flagged as the urgent set to act on.
 function fmtLightning(personal, tz, h24) {
   const strong = personal.filter(c => c.dbz >= 45);
   if (!strong.length) return null;
   // Nearest strong cell within 15 mi (any direction) — pure awareness.
   const near = strong.filter(c => c.distance <= LTG_NEAR).sort((a, b) => a.distance - b.distance);
-  // Approaching strong cells bearing down out to the 80 mi corridor.
-  const corridor = strong.filter(c => c.approaching && c.distance <= LTG_RADIUS).sort((a, b) => a.distance - b.distance);
+  // Approaching strong cells bearing down out to the 80 mi corridor — but only
+  // ones that could actually matter soon (ETA ≤ 2 h, or ≤ 30 mi when ETA is
+  // unknown). Farther cells stay on the Rain Clock; they don't buzz the phone.
+  const corridor = strong
+    .filter(c => c.approaching && c.distance <= LTG_RADIUS)
+    .filter(c => (c.etaMin != null ? c.etaMin <= LTG_MAX_ETA_MIN : c.distance <= LTG_NOETA_MAX_MI))
+    .sort((a, b) => a.distance - b.distance);
   if (!near.length && !corridor.length) return null;
 
   // Lead with the closest cell overall: an in-range (≤15 mi) awareness cell if

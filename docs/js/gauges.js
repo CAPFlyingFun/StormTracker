@@ -13,7 +13,7 @@ const _SONAR_DBZ_BINS=DBZ_SCALE.filter(e=>e.min>=20);
 const _SONAR_DBZ_CLASSES=_SONAR_DBZ_BINS.map(e=>e.cls);
 const _SONAR_DBZ_LABELS=Object.fromEntries(_SONAR_DBZ_BINS.map((e,i,a)=>{const nx=a[i+1];const rng=nx?`${e.min}-${nx.min-1}`:`${e.min}+`;return[e.cls,`${e.label} (${rng})`]}));
 const _SONAR_DBZ_COLORS=Object.fromEntries(_SONAR_DBZ_BINS.map(e=>[e.cls,e.color]));
-const _SONAR_DEFAULTS={dbzScale:{},sweepSpeed:40,fadeDur:2,alwaysOn:false,dotOpacity:100,glowInt:1,gridBright:100,dbzFloor:0,showStormArrows:true,showAloft:true,showLightning:true,showRelMotion:true};
+const _SONAR_DEFAULTS={dbzScale:{},sweepSpeed:40,fadeDur:2,alwaysOn:false,dotOpacity:100,glowInt:1,gridBright:100,dbzFloor:0,showStormArrows:true,showAloft:true,showLightning:true,showRelMotion:true,showTimeRing:true,showWatchWedge:true};
 let _sonarCfg=(function(){try{const s=JSON.parse(localStorage.getItem('st_sonarCfg'));if(s&&typeof s==='object')return Object.assign({},_SONAR_DEFAULTS,s)}catch(e){}return Object.assign({},_SONAR_DEFAULTS)})();
 function _saveSonarCfg(){localStorage.setItem('st_sonarCfg',JSON.stringify(_sonarCfg))}
 function _getDbzScale(cls){return _sonarCfg.dbzScale[cls]!=null?_sonarCfg.dbzScale[cls]:1}
@@ -50,7 +50,7 @@ function _toggleSonarSettings(){
   html+='</div>';
   html+='<div class="sub-section-sep">';
   html+='<div style="'+tl+';margin-bottom:4px">Overlays</div>';
-  const togs=[['showStormArrows','Storm Arrows'],['showAloft','Aloft Wind'],['showRelMotion','Relative Motion (AI)'],['showLightning','⚡ Lightning (≥48 dBZ)']];
+  const togs=[['showStormArrows','Storm Arrows'],['showAloft','Aloft Wind'],['showRelMotion','Relative Motion (AI)'],['showLightning','⚡ Lightning (≥48 dBZ)'],['showTimeRing','🕐 Rain Clock Ring'],['showWatchWedge','👀 Watch Sector']];
   for(const[key,lbl]of togs){
     const on=sw[key];
     html+=`<div class="flex-between-mb3"><span style="${lb}">${lbl}</span><button onclick="_setSonarOpt('${key}',!_sonarCfg.${key})" id="ss-${key}" style="font-size:0.45em;padding:2px 8px;border-radius:3px;cursor:pointer;border:1px solid ${on?'#00ff88':'rgba(0,220,255,0.3)'};background:${on?'rgba(0,255,136,0.2)':'none'};color:${on?'#00ff88':'rgba(255,255,255,0.5)'}">${on?'ON':'OFF'}</button></div>`;

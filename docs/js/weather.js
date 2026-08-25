@@ -900,6 +900,67 @@ function _renderTropicalHazardSection(){
   html+=`</div>`;
   return html;
 }
+// v6.84: the Rain Clock time dial as a ring around the sonar. Reads the SAME
+// projection the Rain Clock card renders (S._rainClockData: dynamic span +
+// rain windows with peak dBZ), so the two instruments can never disagree.
+// Angles: top = now, clockwise = forward in time, full circle = the span.
+// Canvas-only + cached data → no DOM churn, negligible per-frame cost.
+function _fmtRingOffset(min){
+  if(min<60)return '+'+Math.round(min)+'m';
+  const h=min/60;
+  return '+'+(Number.isInteger(h)?h:h.toFixed(1))+'h';
+}
+function _ringDbzColor(dbz){
+  if(dbz>=55)return '#f87171';
+  if(dbz>=45)return '#fb923c';
+  if(dbz>=35)return '#facc15';
+  return '#4ade80';
+}
+function _drawSonarTimeRing(ctx,cx,cy,maxR,size){
+  const rcd=S._rainClockData;
+  const span=(rcd&&rcd.span)?rcd.span:720;
+  const rMid=maxR+26,bandW=12;
+  const angOf=(min)=>((min/span)*2*Math.PI-Math.PI/2);
+  ctx.save();
+  // band backing + separators
+  ctx.beginPath();ctx.arc(cx,cy,rMid,0,Math.PI*2);
+  ctx.strokeStyle='rgba(20,30,45,0.9)';ctx.lineWidth=bandW;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,rMid-bandW/2-1,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,220,255,0.16)';ctx.lineWidth=1;ctx.stroke();
+  // rain windows as colored arcs (same windows the Rain Clock paints)
+  if(rcd&&rcd.ready&&rcd.windows&&rcd.windows.length){
+    for(const w of rcd.windows){
+      const s=Math.max(0,w.startMin),e=Math.min(span,w.endMin);
+      if(e<=s)continue;
+      ctx.beginPath();ctx.arc(cx,cy,rMid,angOf(s),angOf(e));
+      ctx.strokeStyle=_ringDbzColor(w.peakDbz||30);ctx.lineWidth=bandW-3;
+      ctx.globalAlpha=0.9;ctx.stroke();ctx.globalAlpha=1;
+    }
+  }
+  // quarter ticks + offset labels (+span/4 steps); "now" gets the marker
+  ctx.font=`bold ${Math.max(7,size*0.022)}px Inter,sans-serif`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=4;
+  for(let q=0;q<4;q++){
+    const m=span*q/4,a=angOf(m);
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*(rMid-bandW/2),cy+Math.sin(a)*(rMid-bandW/2));
+    ctx.lineTo(cx+Math.cos(a)*(rMid+bandW/2),cy+Math.sin(a)*(rMid+bandW/2));
+    ctx.strokeStyle='rgba(160,180,200,0.5)';ctx.lineWidth=1;ctx.stroke();
+    if(q>0){
+      ctx.fillStyle='rgba(159,179,200,0.85)';
+      ctx.fillText(_fmtRingOffset(m),cx+Math.cos(a)*rMid,cy+Math.sin(a)*rMid);
+    }
+  }
+  // "now" marker at the top of the band (mirrors the Rain Clock's ▲)
+  ctx.fillStyle='#fbbf24';
+  ctx.beginPath();
+  ctx.moveTo(cx,cy-rMid+bandW/2+1);
+  ctx.lineTo(cx-4,cy-rMid-bandW/2-1);
+  ctx.lineTo(cx+4,cy-rMid-bandW/2-1);
+  ctx.closePath();ctx.fill();
+  ctx.restore();
+}
 function drawMiniSonar(){
   const canvas=document.getElementById('mini-sonar-canvas');
   if(!canvas||!S.lat)return;
@@ -912,11 +973,39 @@ function drawMiniSonar(){
   canvas.style.width=size+'px';canvas.style.height=size+'px';
   const ctx=canvas.getContext('2d');
   ctx.scale(dpr,dpr);
-  const cx=size/2,cy=size/2,maxR=size/2-20;
+  // v6.84: "Storm Scope" — the Rain Clock's time dial wraps AROUND the sonar
+  // rim (user idea: space in the center, time on the edge, one instrument).
+  // When the ring is on, the radar disc gives up 24px of radius for the band.
+  const _tr=_sonarCfg.showTimeRing!==false;
+  const cx=size/2,cy=size/2,maxR=size/2-(_tr?44:20);
   ctx.fillStyle='#0a0e14';
-  ctx.beginPath();ctx.arc(cx,cy,maxR+10,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(cx,cy,_tr?size/2:maxR+10,0,Math.PI*2);ctx.fill();
   const scanR=S.scanRadius||80;
   const viewR=_sonarZoomMi;
+  if(_tr)_drawSonarTimeRing(ctx,cx,cy,maxR,size);
+  // 👀 watch sector — the same steering-reciprocal hint the Rain Clock footer
+  // prints ("Keep an eye to the NNW"), drawn as an actual sector on the dial.
+  if(_sonarCfg.showWatchWedge!==false&&typeof watchDirHint==='function'){
+    const _wh=watchDirHint(S.stormMovement);
+    if(_wh){
+      const a0=(_wh.fromDeg-22.5-90)*Math.PI/180,a1=(_wh.fromDeg+22.5-90)*Math.PI/180;
+      ctx.save();
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,maxR,a0,a1);ctx.closePath();
+      ctx.fillStyle='rgba(255,196,0,0.07)';ctx.fill();
+      ctx.setLineDash([4,4]);ctx.strokeStyle='rgba(255,196,0,0.30)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a0)*maxR,cy+Math.sin(a0)*maxR);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a1)*maxR,cy+Math.sin(a1)*maxR);ctx.stroke();
+      ctx.setLineDash([]);
+      const am=(_wh.fromDeg-90)*Math.PI/180,er=maxR*0.82;
+      ctx.font=`${Math.max(10,size*0.032)}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
+      ctx.fillText('👀',cx+Math.cos(am)*er,cy+Math.sin(am)*er);
+      ctx.font=`bold ${Math.max(7,size*0.024)}px Inter,sans-serif`;
+      ctx.fillStyle='rgba(255,196,0,0.75)';
+      ctx.fillText(_wh.from,cx+Math.cos(am)*(er-Math.max(12,size*0.04)),cy+Math.sin(am)*(er-Math.max(12,size*0.04)));
+      ctx.restore();
+    }
+  }
   let zoneCount=0,maxDbz=0;
   let allLightningDots=[];
   if(S._rawScanPts&&S._rawScanPts.length){

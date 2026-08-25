@@ -865,7 +865,7 @@ function renderWeather(data){
         </div>
       </div>
       <div id="mini-sonar-wrap" style="width:100%;position:relative">
-        <canvas id="mini-sonar-canvas" style="width:100%;display:block;border-radius:8px"></canvas>
+        <canvas id="mini-sonar-canvas" onclick="_scopeToggleText()" style="width:100%;display:block;border-radius:8px;cursor:pointer"></canvas>
       </div>
       <div id="mini-sonar-info" style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px"></div>
       <div id="mini-sonar-rc-info" style="display:none;margin-top:6px"></div>
@@ -2936,6 +2936,8 @@ function renderRainClock(){
   }
   // v6.85: stash the center headline for the Storm Scope combined card
   S._rcCenterLines=Array.isArray(centerLines)?centerLines.slice():null;
+  // v6.86: and the plain-language arrival phrases for the tap-through text view
+  S._rcPhrases=Array.isArray(_phrases)?_phrases.slice():null;
   let foot='';
   if(data.motionUnknown&&data.radarReady&&!data.awaitingMotion){
     foot=`<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px;font-style:italic">Motion unknown — radar projection limited</div>`;
@@ -3056,11 +3058,28 @@ function _syncStormScope(){
       const cl=S._rcCenterLines;
       const head=(cl&&cl.length)?`<div style="font-size:0.78em;font-weight:700;color:var(--text-primary);text-align:center">${cl.join(' ')}</div>`:'';
       const fb=document.getElementById('rc-foot-block');
-      const html=head+(fb?fb.innerHTML:'');
+      // v6.86: tap-through text view. Tapping the radar flips between the
+      // compact summary and the Rain Clock's plain-language arrival details
+      // (the same phrases the RC's TEXT view shows) — no settings hunting.
+      let detail='';
+      const ph=S._rcPhrases;
+      if(S._scopeTextView&&ph&&ph.length){
+        detail=ph.map(p=>`<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:7px 10px;margin-top:6px;text-align:left"><div style="font-size:0.72em;font-weight:700;color:var(--text-primary)">${p.title}</div><div style="font-size:0.66em;color:var(--text-secondary);line-height:1.45;margin-top:2px">${p.body}</div></div>`).join('');
+      }
+      const hint=`<div style="font-size:0.56em;color:var(--text-muted);text-align:center;margin-top:5px;font-style:italic">⇄ tap the radar ${S._scopeTextView?'to hide':'for'} arrival details</div>`;
+      const html=head+(fb?fb.innerHTML:'')+detail+hint;
       if(info._last!==html){info._last=html;info.innerHTML=html}
       info.style.display='';
     }
   }else if(info){info.style.display='none';if(info._last!==''){info._last='';info.innerHTML=''}}
+}
+// v6.86: sonar tap → toggle the arrival-details text view (session-only, like
+// the Rain Clock's own dial↔text toggle). Falls back to the RC's toggle when
+// the combined layout is off (ring disabled → the RC card is visible instead).
+function _scopeToggleText(){
+  if(_sonarCfg.showTimeRing===false){try{_rainClockToggleView()}catch(e){}return}
+  S._scopeTextView=!S._scopeTextView;
+  _syncStormScope();
 }
 
 // v4.49: dial ↔ text view toggle. Tapping the dial center (or the TEXT/DIAL

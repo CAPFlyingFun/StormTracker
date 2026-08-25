@@ -868,6 +868,7 @@ function renderWeather(data){
         <canvas id="mini-sonar-canvas" style="width:100%;display:block;border-radius:8px"></canvas>
       </div>
       <div id="mini-sonar-info" style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px"></div>
+      <div id="mini-sonar-rc-info" style="display:none;margin-top:6px"></div>
     </div>
     ${order.map(k=>sections[k]||'').join('')}
     <div id="wx-tropical-section"></div>`;
@@ -988,7 +989,7 @@ function drawMiniSonar(){
   if(_sonarCfg.showWatchWedge!==false&&typeof watchDirHint==='function'){
     const _wh=watchDirHint(S.stormMovement);
     if(_wh){
-      const a0=(_wh.fromDeg-22.5-90)*Math.PI/180,a1=(_wh.fromDeg+22.5-90)*Math.PI/180;
+      const a0=(_wh.fromDeg-15-90)*Math.PI/180,a1=(_wh.fromDeg+15-90)*Math.PI/180;
       ctx.save();
       ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,maxR,a0,a1);ctx.closePath();
       ctx.fillStyle='rgba(255,196,0,0.07)';ctx.fill();
@@ -2933,6 +2934,8 @@ function renderRainClock(){
     }
     sub=`<div style="font-size:0.7em;color:var(--text-secondary);text-align:center;margin-top:6px"><span style="color:var(--text-muted)">Nearest Precipitation:</span> <strong>${dStr}</strong> to the ${data.nearest.dir}${etaTxt}</div>`;
   }
+  // v6.85: stash the center headline for the Storm Scope combined card
+  S._rcCenterLines=Array.isArray(centerLines)?centerLines.slice():null;
   let foot='';
   if(data.motionUnknown&&data.radarReady&&!data.awaitingMotion){
     foot=`<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px;font-style:italic">Motion unknown — radar projection limited</div>`;
@@ -3016,12 +3019,48 @@ function renderRainClock(){
       </div>
       ${viewBody}
       ${fcLegend}
-      ${sub}${foot}${hint}${accNote}${radarAgeNote}
+      <div id="rc-foot-block">${sub}${foot}${hint}${accNote}${radarAgeNote}</div>
       <div id="rain-clock-detail" style="margin-top:8px"></div>
     </div>`;
   if(S._rainClockSelectedIdx!=null&&data.ready&&data.windows[S._rainClockSelectedIdx]){
     _rainClockRenderDetail(S._rainClockSelectedIdx);
   }
+  _syncStormScope();
+}
+
+// v6.85: Storm Scope combined layout. When the sonar's time ring is on, the
+// Rain Clock card is HIDDEN (not removed — it still renders every refresh,
+// because its projection drives the ring and its footer text is mirrored
+// below), the sonar card takes the Rain Clock's slot at the top of the
+// Weather tab, and the Rain Clock's headline + footer lines appear under the
+// sonar. Turning the ring off in the sonar ⚙️ restores the classic two-card
+// layout. Runs only on renderRainClock (data refreshes), never per frame.
+function _syncStormScope(){
+  const rc=document.getElementById('rain-clock');
+  const ms=document.getElementById('mini-sonar-card');
+  if(!rc||!ms)return;
+  const combined=_sonarCfg.showTimeRing!==false;
+  rc.style.display=combined?'none':'';
+  const info=document.getElementById('mini-sonar-rc-info');
+  if(combined){
+    // hoist the sonar card into the Rain Clock's slot (both are top-level
+    // children of #page-weather; walk up defensively in case of wrappers)
+    try{
+      let rcTop=rc;while(rcTop.parentElement&&rcTop.parentElement.id!=='page-weather')rcTop=rcTop.parentElement;
+      let msTop=ms;while(msTop.parentElement&&msTop.parentElement.id!=='page-weather')msTop=msTop.parentElement;
+      if(rcTop.parentElement&&rcTop.parentElement===msTop.parentElement&&msTop!==rcTop.nextElementSibling&&msTop!==rcTop){
+        rcTop.parentElement.insertBefore(msTop,rcTop);
+      }
+    }catch(e){}
+    if(info){
+      const cl=S._rcCenterLines;
+      const head=(cl&&cl.length)?`<div style="font-size:0.78em;font-weight:700;color:var(--text-primary);text-align:center">${cl.join(' ')}</div>`:'';
+      const fb=document.getElementById('rc-foot-block');
+      const html=head+(fb?fb.innerHTML:'');
+      if(info._last!==html){info._last=html;info.innerHTML=html}
+      info.style.display='';
+    }
+  }else if(info){info.style.display='none';if(info._last!==''){info._last='';info.innerHTML=''}}
 }
 
 // v4.49: dial ↔ text view toggle. Tapping the dial center (or the TEXT/DIAL

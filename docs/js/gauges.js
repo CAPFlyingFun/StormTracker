@@ -68,7 +68,7 @@ function _toggleSonarSettings(){
   p.innerHTML=html;
   wrap.style.position='relative';wrap.appendChild(p);
 }
-function _setSonarOpt(key,val){_sonarCfg[key]=val;_saveSonarCfg();const p=document.getElementById('sonar-settings-panel');if(p)p.remove();drawMiniSonar();setTimeout(()=>_toggleSonarSettings(),50)}
+function _setSonarOpt(key,val){_sonarCfg[key]=val;_saveSonarCfg();const p=document.getElementById('sonar-settings-panel');if(p)p.remove();drawMiniSonar();if(key==='showTimeRing'&&typeof _syncStormScope==='function'){try{_syncStormScope()}catch(e){}}setTimeout(()=>_toggleSonarSettings(),50)}
 function _setSonarSlider(key,val,elId,suffix){_sonarCfg[key]=Number(val);_saveSonarCfg();const el=document.getElementById(elId);if(el)el.textContent=val+suffix;drawMiniSonar()}
 function _onDbzSlider(cls,val){
   _setDbzScale(cls,val/100);

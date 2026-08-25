@@ -733,6 +733,10 @@ async function _fetchRvScanFrames(forceRefresh){
   }catch(e){return null}
 }
 async function runRadarScan(opts){
+  // v6.87: tell the net monitor our tile burst is in flight so its speed
+  // probe doesn't measure OUR traffic and cry "🐢 slow". Refreshed to a
+  // short grace window when the scan finishes (below).
+  S._netBusyUntil=Date.now()+120000;
   const lat=opts.lat,lon=opts.lon;
   const radiusMi=opts.radiusMi!=null?opts.radiusMi:80;
   const source=opts.source||'nexrad';
@@ -809,6 +813,7 @@ async function runRadarScan(opts){
     }
   }
   const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
+  S._netBusyUntil=Date.now()+8000; // v6.87: short grace so a queued probe still waits out the tail
   return{points,frames,tilePath,radarAgeMs,zoom,failedTiles,totalTiles:tileResults.length};
 }
 

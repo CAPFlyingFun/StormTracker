@@ -252,7 +252,32 @@ function _applyNetAdaptations(){
   }
   _netPrevTier=t;
 }
-function _recheckNet(){ return _runConnectionSpeedTest().then(()=>{_applyNetAdaptations();}); }
+// v6.87: two guards against the false "🐢 slow → ⚡ normal" cycle that hit
+// most loads. (1) Never measure while the app's own radar scan is saturating
+// the link (runRadarScan stamps S._netBusyUntil) — the probe just queues
+// behind our tiles and blames the network for our own traffic; defer and
+// retry once the burst is done. (2) A downgrade to slow/verySlow from a good
+// tier needs TWO consecutive bad samples ~8s apart before it's believed (and
+// toasted); recovery upgrades apply immediately.
+let _netConfirming=false;
+function _recheckNet(){
+  if(typeof S!=='undefined'&&(S._netBusyUntil||0)>Date.now()){
+    setTimeout(()=>{if(!document.hidden)_recheckNet();},12000);
+    return Promise.resolve();
+  }
+  return _runConnectionSpeedTest().then(()=>{
+    const t=netTier();
+    const wasGood=!(_netPrevTier==='slow'||_netPrevTier==='verySlow'||_netPrevTier==='offline');
+    if((t==='slow'||t==='verySlow')&&wasGood&&_netPrevTier!==null&&!_netConfirming){
+      _netConfirming=true;
+      S._netSpeed=_netPrevTier;              // hold the good tier until confirmed
+      setTimeout(()=>{if(!document.hidden)_recheckNet();},8000);
+      return;
+    }
+    _netConfirming=false;
+    _applyNetAdaptations();
+  });
+}
 function _netMonitorStart(){
   if(_netMonitorTimer)return;
   _applyNetAdaptations();                                   // reflect the boot reading immediately

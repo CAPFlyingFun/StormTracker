@@ -1135,6 +1135,11 @@ function drawMiniSonar(){
   }
   // 👀 watch sector — the same steering-reciprocal hint the Rain Clock footer
   // prints ("Keep an eye to the NNW"), drawn as an actual sector on the dial.
+  // v6.90: only the SHADING lands here. On a busy dial the echoes were painting
+  // straight over the eyes — the cone peeking out from behind the storms is the
+  // charm, the eyes being buried is not — so the label is deferred to the very
+  // end of the frame (see _watchLbl below) and drawn on top of everything.
+  let _watchLbl=null;
   if(_sonarCfg.showWatchWedge!==false&&typeof watchDirHint==='function'){
     const _wh=watchDirHint(S.stormMovement);
     if(_wh){
@@ -1146,14 +1151,8 @@ function drawMiniSonar(){
       ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a0)*maxR,cy+Math.sin(a0)*maxR);ctx.stroke();
       ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a1)*maxR,cy+Math.sin(a1)*maxR);ctx.stroke();
       ctx.setLineDash([]);
-      const am=(_wh.fromDeg-90)*Math.PI/180,er=maxR*0.82;
-      ctx.font=`${Math.max(10,size*0.032)}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
-      ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
-      ctx.fillText('👀',cx+Math.cos(am)*er,cy+Math.sin(am)*er);
-      ctx.font=`bold ${Math.max(7,size*0.024)}px Inter,sans-serif`;
-      ctx.fillStyle='rgba(255,196,0,0.75)';
-      ctx.fillText(_wh.from,cx+Math.cos(am)*(er-Math.max(12,size*0.04)),cy+Math.sin(am)*(er-Math.max(12,size*0.04)));
       ctx.restore();
+      _watchLbl={am:(_wh.fromDeg-90)*Math.PI/180,er:maxR*0.82,from:_wh.from};
     }
   }
   let zoneCount=0,maxDbz=0;
@@ -1533,6 +1532,26 @@ function drawMiniSonar(){
     }
     ctx.restore();
   }else{_lightningFlashState=null}
+  // v6.90: the deferred watch label, painted over everything so the eyes stay
+  // readable no matter how much precip is stacked in the cone.
+  if(_watchLbl){
+    const {am,er,from}=_watchLbl;
+    const ex=cx+Math.cos(am)*er,ey=cy+Math.sin(am)*er;
+    const lx=cx+Math.cos(am)*(er-Math.max(12,size*0.04)),ly=cy+Math.sin(am)*(er-Math.max(12,size*0.04));
+    ctx.save();
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=8;
+    ctx.font=`${Math.max(10,size*0.032)}px sans-serif`;
+    ctx.fillStyle='#fff';
+    ctx.fillText('👀',ex,ey);ctx.fillText('👀',ex,ey);   // twice: deepens the drop shadow
+    ctx.font=`bold ${Math.max(7,size*0.024)}px Inter,sans-serif`;
+    ctx.shadowBlur=0;
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(6,10,18,0.9)';
+    ctx.strokeText(from,lx,ly);
+    ctx.fillStyle='rgba(255,196,0,0.95)';
+    ctx.fillText(from,lx,ly);
+    ctx.restore();
+  }
   const infoEl=document.getElementById('mini-sonar-info');
   if(infoEl){
     const base=zoneCount>0

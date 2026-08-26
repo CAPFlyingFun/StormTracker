@@ -867,8 +867,8 @@ function renderWeather(data){
       <div id="mini-sonar-wrap" style="width:100%;position:relative">
         <canvas id="mini-sonar-canvas" onclick="_scopeToggleText()" style="width:100%;display:block;border-radius:8px;cursor:pointer"></canvas>
       </div>
-      <div id="mini-sonar-info" style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px"></div>
       <div id="mini-sonar-rc-info" style="display:none;margin-top:6px"></div>
+      <div id="mini-sonar-info" style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:4px"></div>
     </div>
     ${order.map(k=>sections[k]||'').join('')}
     <div id="wx-tropical-section"></div>`;
@@ -901,15 +901,27 @@ function _renderTropicalHazardSection(){
   html+=`</div>`;
   return html;
 }
-// v6.84: the Rain Clock time dial as a ring around the sonar. Reads the SAME
-// projection the Rain Clock card renders (S._rainClockData: dynamic span +
-// rain windows with peak dBZ), so the two instruments can never disagree.
+// v6.84 → v6.88 "Storm Scope v2": the dial is THREE concentric instruments
+// instead of one circle asked to speak clock, compass, radar range, storm
+// motion and lightning all at once —
+//     radar disc  →  compass bezel (N/E/S/W)  →  time bezel (the Rain Clock).
+// Separating them kills the old ambiguity where a geographic label (E) sat at
+// the same radius as a time label (+3h). The time bezel gets its own annulus,
+// cyan inner/outer edges, a 60-tick minute ring, four applied markers carrying
+// the LOCAL CLOCK TIME (offset secondary), the observed radar rain windows in
+// its outer lane, and the hourly FORECAST as a dashed hairline on its inner
+// edge — the same outer=observed / inner=forecast split the classic Rain Clock
+// card has always used.
+// Everything reads the SAME projection the Rain Clock card renders
+// (S._rainClockData: dynamic span, rain windows with peak dBZ, per-minute
+// forecast dBZ), so the two instruments can never disagree.
 // Angles: top = now, clockwise = forward in time, full circle = the span.
 // Canvas-only + cached data → no DOM churn, negligible per-frame cost.
 function _fmtRingOffset(min){
-  if(min<60)return '+'+Math.round(min)+'m';
-  const h=min/60;
-  return '+'+(Number.isInteger(h)?h:h.toFixed(1))+'h';
+  min=Math.round(min);
+  if(min<60)return '+'+min+'m';
+  const h=Math.floor(min/60),r=min%60;
+  return '+'+h+'h'+(r?String(r).padStart(2,'0'):'');
 }
 function _ringDbzColor(dbz){
   if(dbz>=55)return '#f87171';
@@ -917,49 +929,179 @@ function _ringDbzColor(dbz){
   if(dbz>=35)return '#facc15';
   return '#4ade80';
 }
-function _drawSonarTimeRing(ctx,cx,cy,maxR,size){
+// v6.88: one place that decides where every ring lives, so the bezels, the
+// compass and the radar disc can never drift apart. Ring off → the classic
+// plain sonar disc with its compass letters just outside the rim.
+function _scopeGeom(size,ring){
+  const R=size/2;
+  if(!ring){const maxR=R-20;return{ring:false,maxR:maxR,cmpR:maxR+12}}
+  const BEZ_OUT=R-3;
+  const BEZ_W=Math.max(20,Math.min(30,size*0.088));
+  const BEZ_IN=BEZ_OUT-BEZ_W;
+  const ARC_W=Math.max(7,BEZ_W*0.37);
+  const ARC_R=BEZ_OUT-ARC_W/2-1.5;
+  const TICK_OUT=BEZ_OUT-ARC_W-3;
+  const LAB_R=BEZ_IN+Math.max(9,BEZ_W*0.33);
+  const GAP=Math.max(6,size*0.021);
+  const FC_R=BEZ_IN-GAP/2;
+  const CMP_OUT=BEZ_IN-GAP;
+  const CMP_W=Math.max(12,size*0.044);
+  const CMP_IN=CMP_OUT-CMP_W;
+  return{ring:true,maxR:CMP_IN-2,BEZ_OUT:BEZ_OUT,BEZ_IN:BEZ_IN,BEZ_W:BEZ_W,
+    ARC_R:ARC_R,ARC_W:ARC_W,TICK_OUT:TICK_OUT,LAB_R:LAB_R,FC_R:FC_R,
+    CMP_OUT:CMP_OUT,CMP_IN:CMP_IN,cmpR:(CMP_OUT+CMP_IN)/2};
+}
+// An "applied marker" on the time bezel: a small plate with the wall-clock time
+// on top and its offset (or NOW / 💧 RAIN) underneath. Width is measured, not
+// assumed, so 12-hour strings like "1:38 PM" don't overflow the plate.
+function _scopeMarker(ctx,x,y,txt,sub,kind,size){
+  const f1=Math.max(9,size*0.029),f2=Math.max(7,size*0.022);
+  ctx.save();
+  ctx.font=`bold ${f1}px Inter,sans-serif`;
+  const w1=ctx.measureText(txt).width;
+  ctx.font=`${f2}px Inter,sans-serif`;
+  const w2=ctx.measureText(sub).width;
+  const pw=Math.max(w1,w2)+10,ph=f1+f2+7,rr=4;
+  const px=x-pw/2,py=y-ph/2;
+  ctx.shadowBlur=0;
+  ctx.beginPath();
+  ctx.moveTo(px+rr,py);ctx.arcTo(px+pw,py,px+pw,py+ph,rr);ctx.arcTo(px+pw,py+ph,px,py+ph,rr);
+  ctx.arcTo(px,py+ph,px,py,rr);ctx.arcTo(px,py,px+pw,py,rr);ctx.closePath();
+  ctx.fillStyle='rgba(10,16,26,0.94)';ctx.fill();
+  ctx.strokeStyle=kind==='now'?'rgba(251,191,36,0.5)':kind==='rain'?'rgba(255,255,255,0.55)':'rgba(0,220,255,0.16)';
+  ctx.lineWidth=kind==='rain'?1.2:1;ctx.stroke();
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font=`bold ${f1}px Inter,sans-serif`;
+  ctx.fillStyle=kind==='now'?'#fbbf24':kind==='rain'?'#ffffff':'rgba(226,240,255,0.94)';
+  ctx.fillText(txt,x,y-f2*0.55);
+  ctx.font=`${f2}px Inter,sans-serif`;
+  ctx.fillStyle=kind==='now'?'rgba(251,191,36,0.85)':kind==='rain'?'rgba(226,240,255,0.85)':'rgba(125,150,175,0.95)';
+  ctx.fillText(sub,x,y+f1*0.55);
+  ctx.restore();
+}
+function _drawScopeBezel(ctx,cx,cy,G,size){
   const rcd=S._rainClockData;
   const span=(rcd&&rcd.span)?rcd.span:720;
-  const rMid=maxR+26,bandW=12;
-  const angOf=(min)=>((min/span)*2*Math.PI-Math.PI/2);
+  const angOf=(m)=>((m/span)*2*Math.PI-Math.PI/2);
+  const now=Date.now();
+  const _clock=(off)=>(typeof fmtClock==='function')?fmtClock(new Date(now+off*60000)):_fmtRingOffset(off);
   ctx.save();
-  // band backing + separators
-  ctx.beginPath();ctx.arc(cx,cy,rMid,0,Math.PI*2);
-  ctx.strokeStyle='rgba(20,30,45,0.9)';ctx.lineWidth=bandW;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,rMid-bandW/2-1,0,Math.PI*2);
-  ctx.strokeStyle='rgba(0,220,255,0.16)';ctx.lineWidth=1;ctx.stroke();
-  // rain windows as colored arcs (same windows the Rain Clock paints)
+  // the annulus itself + its cyan edges — this is what makes the eye read the
+  // bezel as a separate instrument layer rather than a decorative rim
+  ctx.beginPath();ctx.arc(cx,cy,(G.BEZ_OUT+G.BEZ_IN)/2,0,Math.PI*2);
+  ctx.strokeStyle='#111a28';ctx.lineWidth=G.BEZ_W;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,G.BEZ_OUT,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,220,255,0.30)';ctx.lineWidth=1.2;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,G.BEZ_IN,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,220,255,0.22)';ctx.lineWidth=1;ctx.stroke();
+  // 60-tick minute ring, major every 5th — the classic Rain Clock's tick language
+  const minL=Math.max(3,size*0.012),majL=Math.max(6,size*0.026);
+  for(let i=0;i<60;i++){
+    const a=(i/60)*2*Math.PI-Math.PI/2,major=(i%5===0);
+    const r1=G.TICK_OUT-(major?majL:minL);
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);
+    ctx.lineTo(cx+Math.cos(a)*G.TICK_OUT,cy+Math.sin(a)*G.TICK_OUT);
+    ctx.strokeStyle=major?'rgba(159,179,200,0.75)':'rgba(120,140,165,0.34)';
+    ctx.lineWidth=major?1.7:1;ctx.stroke();
+  }
+  const floor=(typeof getRainFloorDbz==='function')?getRainFloorDbz():25;
+  // INNER hairline: the hourly FORECAST, dashed, coloured by peak dBZ — the same
+  // data (and the same outer=observed / inner=forecast split) as the Rain Clock
+  // card's inner ring, so forecast rain shows on the scope too instead of only
+  // whatever live radar can already see.
+  if(rcd&&rcd.ready&&rcd.fcReady&&rcd.fcMinutes){
+    const fm=rcd.fcMinutes;
+    ctx.save();
+    ctx.setLineDash([4,3]);ctx.lineWidth=Math.max(2.5,size*0.009);ctx.globalAlpha=0.55;
+    const flush=(a,b)=>{
+      let peak=0;for(let t=a;t<=b;t++)if(fm[t]>peak)peak=fm[t];
+      ctx.beginPath();ctx.arc(cx,cy,G.FC_R,angOf(a),angOf(Math.min(span,b+1)));
+      ctx.strokeStyle=_ringDbzColor(peak);ctx.stroke();
+    };
+    let run=null;
+    for(let m=0;m<=span;m++){
+      if(fm[m]>=floor){if(run==null)run=m}
+      else if(run!=null){flush(run,m-1);run=null}
+    }
+    if(run!=null)flush(run,span);
+    ctx.restore();
+  }
+  // OUTER lane: observed radar rain windows
   if(rcd&&rcd.ready&&rcd.windows&&rcd.windows.length){
+    ctx.save();ctx.lineCap='round';
     for(const w of rcd.windows){
       const s=Math.max(0,w.startMin),e=Math.min(span,w.endMin);
       if(e<=s)continue;
-      ctx.beginPath();ctx.arc(cx,cy,rMid,angOf(s),angOf(e));
-      ctx.strokeStyle=_ringDbzColor(w.peakDbz||30);ctx.lineWidth=bandW-3;
-      ctx.globalAlpha=0.9;ctx.stroke();ctx.globalAlpha=1;
+      const col=_ringDbzColor(w.peakDbz||30);
+      ctx.shadowColor=col;ctx.shadowBlur=8;
+      ctx.beginPath();ctx.arc(cx,cy,G.ARC_R,angOf(s),angOf(e));
+      ctx.strokeStyle=col;ctx.lineWidth=G.ARC_W;ctx.stroke();
     }
+    ctx.restore();
   }
-  // quarter ticks + offset labels (+span/4 steps); "now" gets the marker
-  ctx.font=`bold ${Math.max(7,size*0.022)}px Inter,sans-serif`;
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=4;
+  // four applied markers — wall-clock time primary, offset secondary
   for(let q=0;q<4;q++){
     const m=span*q/4,a=angOf(m);
-    ctx.beginPath();
-    ctx.moveTo(cx+Math.cos(a)*(rMid-bandW/2),cy+Math.sin(a)*(rMid-bandW/2));
-    ctx.lineTo(cx+Math.cos(a)*(rMid+bandW/2),cy+Math.sin(a)*(rMid+bandW/2));
-    ctx.strokeStyle='rgba(160,180,200,0.5)';ctx.lineWidth=1;ctx.stroke();
-    if(q>0){
-      ctx.fillStyle='rgba(159,179,200,0.85)';
-      ctx.fillText(_fmtRingOffset(m),cx+Math.cos(a)*rMid,cy+Math.sin(a)*rMid);
-    }
+    _scopeMarker(ctx,cx+Math.cos(a)*G.LAB_R,cy+Math.sin(a)*G.LAB_R,
+      _clock(m),q===0?'NOW':_fmtRingOffset(m),q===0?'now':null,size);
   }
-  // "now" marker at the top of the band (mirrors the Rain Clock's ▲)
+  // NOW hand
   ctx.fillStyle='#fbbf24';
   ctx.beginPath();
-  ctx.moveTo(cx,cy-rMid+bandW/2+1);
-  ctx.lineTo(cx-4,cy-rMid-bandW/2-1);
-  ctx.lineTo(cx+4,cy-rMid-bandW/2-1);
+  ctx.moveTo(cx,cy-G.BEZ_OUT+9);
+  ctx.lineTo(cx-6,cy-G.BEZ_OUT-2);
+  ctx.lineTo(cx+6,cy-G.BEZ_OUT-2);
   ctx.closePath();ctx.fill();
+  // first-rain marker — the one mark that makes the whole bezel legible at a
+  // glance. Nudged inward when it would land on top of a quarter marker.
+  const w0=(rcd&&rcd.ready&&rcd.windows&&rcd.windows.length)?rcd.windows[0]:null;
+  if(w0&&w0.startMin>0.5){
+    const a=angOf(w0.startMin);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*(G.ARC_R-G.ARC_W/2-4),cy+Math.sin(a)*(G.ARC_R-G.ARC_W/2-4));
+    ctx.lineTo(cx+Math.cos(a)*(G.ARC_R+G.ARC_W/2+4),cy+Math.sin(a)*(G.ARC_R+G.ARC_W/2+4));
+    ctx.strokeStyle='#fff';ctx.lineWidth=2.4;ctx.stroke();
+    let near=false;
+    for(let q=0;q<4;q++){
+      let d=Math.abs(((w0.startMin-span*q/4)/span)*360)%360;
+      d=Math.min(d,360-d);
+      if(d<15)near=true;
+    }
+    const mr=near?G.LAB_R-Math.max(18,size*0.06):G.LAB_R;
+    _scopeMarker(ctx,cx+Math.cos(a)*mr,cy+Math.sin(a)*mr,_clock(w0.startMin),'💧 RAIN','rain',size);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+// v6.88: the compass gets its own thin bezel immediately outside the radar
+// disc, so geographic labels and time labels never share a radius again.
+function _drawScopeCompass(ctx,cx,cy,G,size){
+  ctx.save();
+  ctx.beginPath();ctx.arc(cx,cy,G.cmpR,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,150,190,0.10)';ctx.lineWidth=G.CMP_OUT-G.CMP_IN;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,G.CMP_OUT,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,220,255,0.16)';ctx.lineWidth=1;ctx.stroke();
+  for(let d=0;d<360;d+=15){
+    if(d%90===0)continue;
+    const a=(d-90)*Math.PI/180,inter=(d%45===0);
+    const r1=G.CMP_IN+(inter?2:5);
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);
+    ctx.lineTo(cx+Math.cos(a)*G.CMP_OUT,cy+Math.sin(a)*G.CMP_OUT);
+    ctx.strokeStyle=inter?'rgba(0,220,255,0.32)':'rgba(0,220,255,0.16)';
+    ctx.lineWidth=1;ctx.stroke();
+  }
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font=`bold ${Math.max(9,size*0.032)}px Inter,sans-serif`;
+  ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
+  const lr=G.CMP_IN-Math.max(8,size*0.028);
+  for(const [l,deg] of [['N',0],['E',90],['S',180],['W',270]]){
+    const a=(deg-90)*Math.PI/180;
+    ctx.fillStyle=l==='N'?'rgba(0,240,255,0.95)':'rgba(0,220,255,0.62)';
+    ctx.fillText(l,cx+Math.cos(a)*lr,cy+Math.sin(a)*lr);
+  }
   ctx.restore();
 }
 function drawMiniSonar(){
@@ -978,12 +1120,20 @@ function drawMiniSonar(){
   // rim (user idea: space in the center, time on the edge, one instrument).
   // When the ring is on, the radar disc gives up 24px of radius for the band.
   const _tr=_sonarCfg.showTimeRing!==false;
-  const cx=size/2,cy=size/2,maxR=size/2-(_tr?44:20);
+  const cx=size/2,cy=size/2;
+  const _G=_scopeGeom(size,_tr);
+  const maxR=_G.maxR;
   ctx.fillStyle='#0a0e14';
   ctx.beginPath();ctx.arc(cx,cy,_tr?size/2:maxR+10,0,Math.PI*2);ctx.fill();
   const scanR=S.scanRadius||80;
   const viewR=_sonarZoomMi;
-  if(_tr)_drawSonarTimeRing(ctx,cx,cy,maxR,size);
+  if(_tr){
+    // radar disc sits a shade darker than the bezels so the three layers read
+    // as three instruments rather than one flat circle
+    ctx.beginPath();ctx.arc(cx,cy,maxR,0,Math.PI*2);ctx.fillStyle='#070b12';ctx.fill();
+    _drawScopeBezel(ctx,cx,cy,_G,size);
+    _drawScopeCompass(ctx,cx,cy,_G,size);
+  }
   // 👀 watch sector — the same steering-reciprocal hint the Rain Clock footer
   // prints ("Keep an eye to the NNW"), drawn as an actual sector on the dial.
   if(_sonarCfg.showWatchWedge!==false&&typeof watchDirHint==='function'){
@@ -1123,19 +1273,33 @@ function drawMiniSonar(){
       const label=S.radarMetric?Math.round(dist*1.60934)+'km':dist+'mi';
       ctx.save();ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=6;
       ctx.fillStyle=`rgba(0,220,255,${0.5*gB})`;ctx.font=`${Math.max(8,size*0.028)}px Inter,sans-serif`;
-      ctx.textAlign='center';ctx.fillText(label,cx,cy-r+10);ctx.restore();
+      ctx.textAlign='center';
+      if(_tr){
+        // v6.88: tilted off the vertical so the range labels stop colliding with
+        // the compass N (which now rides the disc rim) and the NOW marker above it
+        const _la=(-72)*Math.PI/180;
+        ctx.fillText(label,cx+Math.cos(_la)*(r-10),cy+Math.sin(_la)*(r-10)+4);
+      }else{
+        ctx.fillText(label,cx,cy-r+10);
+      }
+      ctx.restore();
     }
     ctx.beginPath();ctx.moveTo(cx,cy-maxR);ctx.lineTo(cx,cy+maxR);ctx.strokeStyle=`rgba(0,220,255,${0.1*gB})`;ctx.lineWidth=0.5;ctx.stroke();
     ctx.beginPath();ctx.moveTo(cx-maxR,cy);ctx.lineTo(cx+maxR,cy);ctx.stroke();
-    const dirs=[['N',0],['S',180],['E',90],['W',270]];
-    ctx.save();ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=6;
-    ctx.fillStyle=`rgba(0,220,255,${0.6*gB})`;ctx.font=`bold ${Math.max(9,size*0.035)}px Inter,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
-    for(const[l,deg]of dirs){
-      const a=(deg-90)*Math.PI/180;
-      const lx=cx+Math.cos(a)*(maxR+12),ly=cy+Math.sin(a)*(maxR+12);
-      ctx.fillText(l,lx,ly);
+    // v6.88: with the Storm Scope bezels on, N/E/S/W live on their own compass
+    // ring (_drawScopeCompass) — drawing them here too would put a geographic
+    // label back at the time bezel's radius, the exact confusion v2 removes.
+    if(!_tr){
+      const dirs=[['N',0],['S',180],['E',90],['W',270]];
+      ctx.save();ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=6;
+      ctx.fillStyle=`rgba(0,220,255,${0.6*gB})`;ctx.font=`bold ${Math.max(9,size*0.035)}px Inter,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+      for(const[l,deg]of dirs){
+        const a=(deg-90)*Math.PI/180;
+        const lx=cx+Math.cos(a)*(maxR+12),ly=cy+Math.sin(a)*(maxR+12);
+        ctx.fillText(l,lx,ly);
+      }
+      ctx.restore();
     }
-    ctx.restore();
   }
   try{
     const topInbound=(S._topStorms||[]).filter(s=>s.distance<=viewR);
@@ -1189,9 +1353,15 @@ function drawMiniSonar(){
       const _pctTxt=(!isAir&&mv.confidence)?` ${Math.round(mv.confidence*100)}%`:'';
       const chipTxt=`${_srcLbl.toLowerCase()} → ${degToDir(mv.direction)} ${spdUnit}${_pctTxt}`;
       ctx.save();ctx.font=`${Math.max(8,size*0.022)}px Inter,sans-serif`;
-      ctx.textAlign='left';ctx.textBaseline='top';
       ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=4;
-      ctx.fillStyle=hexToRgba(neonC,0.85);ctx.fillText(chipTxt,8,8);
+      ctx.fillStyle=hexToRgba(neonC,0.85);
+      if(_tr){
+        ctx.textAlign='center';ctx.textBaseline='bottom';
+        ctx.fillText(chipTxt,cx,cy+maxR*0.9);
+      }else{
+        ctx.textAlign='left';ctx.textBaseline='top';
+        ctx.fillText(chipTxt,8,8);
+      }
       ctx.restore();
     }
     if(_sonarCfg.showRelMotion&&typeof calcStormETAForBriefing==='function'&&topInbound.length){
@@ -1258,7 +1428,7 @@ function drawMiniSonar(){
     if(_sonarCfg.showAloft&&aloftDir!=null){
       const toDir=(aloftDir+180)%360;
       const aloftRad=(toDir-90)*Math.PI/180;
-      const aLen=maxR*0.55;
+      const aLen=maxR*0.44;
       const aStart=15;
       const ax1=cx+Math.cos(aloftRad)*aStart,ay1=cy+Math.sin(aloftRad)*aStart;
       const ax2=cx+Math.cos(aloftRad)*aLen,ay2=cy+Math.sin(aloftRad)*aLen;
@@ -1388,7 +1558,10 @@ function drawMiniSonar(){
     // header, Settings above, bottom nav — while compositor scrolling kept
     // working. Only write when the caption actually changed (≈ once per
     // scan/zoom change instead of 60 Hz).
-    const _infoHtml=base+attrib;
+    const _hint=(_tr&&S._rainClockData&&S._rainClockData.ready)
+      ?`<br><span style="font-style:italic">⇄ tap the radar ${S._scopeTextView?'to hide':'for'} arrival details</span>`
+      :'';
+    const _infoHtml=base+attrib+_hint;
     if(infoEl._lastHtml!==_infoHtml){infoEl._lastHtml=_infoHtml;infoEl.innerHTML=_infoHtml}
   }
 }
@@ -2949,6 +3122,9 @@ function renderRainClock(){
   // Only shown on a quiet dial — with arcs painted, the dial itself already
   // shows where rain is coming from.
   const hasArcs=data.ready&&data.windows.some(w=>w.cells&&w.cells.length);
+  // v6.88: kept out of `foot` so the Storm Scope can place it under its own
+  // summary cells instead of inheriting it twice.
+  let _footMotion=foot;
   if(!hasArcs&&typeof watchDirHint==='function'){
     const _wd=watchDirHint((typeof getSteeringMv==='function')?getSteeringMv():null);
     if(_wd)foot+=`<div style="font-size:0.62em;color:var(--text-secondary);text-align:center;margin-top:5px;line-height:1.4">\uD83D\uDC40 ${_wd.text}</div>`;
@@ -2967,6 +3143,10 @@ function renderRainClock(){
   // radar latency, using the same canonical age every ETA consumer subtracts.
   const _ageMin=Math.round(radarAgeMin());
   const radarAgeNote=(data.radarReady&&_ageMin>0)?`<div style="font-size:0.56em;color:var(--text-muted);text-align:center;margin-top:3px;font-style:italic;line-height:1.4">Arrival times shifted ~${_ageMin}&nbsp;min earlier to account for radar age</div>`:'';
+  // v6.88: the Storm Scope's own summary cells already carry "nearest precip"
+  // and the watch direction, so it mirrors only the notes below them (motion,
+  // accuracy, radar age) instead of the whole footer block.
+  S._rcFootRest=_footMotion+accNote+radarAgeNote;
   // v4.58: dial is radar-only now, so drop the "+ FORECAST" tag. Forecast is
   // still consulted for the 3h amount when radar isn't ready, but it doesn't
   // paint anything on the dial — labelling it would be misleading.
@@ -3037,6 +3217,104 @@ function renderRainClock(){
 // Weather tab, and the Rain Clock's headline + footer lines appear under the
 // sonar. Turning the ring off in the sonar ⚙️ restores the classic two-card
 // layout. Runs only on renderRainClock (data refreshes), never per frame.
+// v6.88: the "answer" line, promoted out of the mirrored Rain Clock headline
+// into a compact dashboard strip directly under the dial — the thing people
+// actually came to the card for, in one glance.
+function _scopeStatusStrip(){
+  const d=S._rainClockData;
+  if(!d||!d.ready)return '';
+  const now=Date.now();
+  const _clock=(off)=>(typeof fmtClock==='function')?fmtClock(new Date(now+off*60000)):'';
+  const nearTxt=d.nearest
+    ?((S.radarMetric?Math.round(d.nearest.mi*1.609)+' KM':Math.round(d.nearest.mi)+' MI')+' '+d.nearest.dir)
+    :'';
+  let icon,main,rest,warm;
+  if(d.awaitingMotion){
+    icon='📡';main='DETERMINING STORM MOTION';rest='';warm=false;
+  }else if(d.rainingNow){
+    icon='🌧';main='RAINING NOW';rest=nearTxt?'· NEAREST '+nearTxt:'';warm=true;
+  }else if(d.windows&&d.windows.length){
+    const w0=d.windows[0];
+    const mins=Math.max(1,Math.round(w0.startMin));
+    icon=d.forecast?'🌦':'🌧';
+    main='RAIN '+_clock(w0.startMin);
+    rest='· IN '+(mins<60?mins+' MIN':_fmtRingOffset(mins).replace('+','').toUpperCase())
+        +(nearTxt?' · '+nearTxt:'');
+    warm=true;
+  }else{
+    icon='☀️';
+    main='NO RAIN '+((typeof _rcSpanLabel==='function')?_rcSpanLabel(d.span||720).toUpperCase():'');
+    rest=nearTxt?'· NEAREST '+nearTxt:'';warm=false;
+  }
+  const bg=warm?'rgba(250,204,21,0.07)':'rgba(0,229,255,0.06)';
+  const bd=warm?'rgba(250,204,21,0.28)':'rgba(0,229,255,0.22)';
+  const fg=warm?'#facc15':'var(--accent-cyan)';
+  return `<div style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;background:${bg};border:1px solid ${bd};border-radius:10px;padding:7px 10px">`
+    +`<span style="font-size:0.9em">${icon}</span>`
+    +`<span style="font-family:var(--font-mono);font-weight:800;font-size:0.8em;color:${fg};white-space:nowrap">${main}</span>`
+    +(rest?`<span style="font-size:0.55em;color:var(--text-secondary);font-weight:600;letter-spacing:0.04em">${rest}</span>`:'')
+    +`</div>`;
+}
+// v6.88: three columns of the numbers people ask for — nearest precip, the
+// arrival window, and which way to watch — read from the same projection the
+// bezel draws, so a cell can never disagree with its own dial.
+function _scopeSummaryCells(){
+  const d=S._rainClockData;
+  if(!d||!d.ready)return '';
+  const now=Date.now();
+  const _clock=(off)=>(typeof fmtClock==='function')?fmtClock(new Date(now+off*60000)):'';
+  const cell=(lab,val,sub,col)=>`<div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:10px;padding:7px 6px;text-align:center;min-width:0">`
+    +`<div style="font-size:0.5em;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-muted);font-weight:700;line-height:1.3">${lab}</div>`
+    +`<div style="font-size:${val.length>11?'0.68em':'0.84em'};font-weight:800;line-height:1.25;margin-top:3px;font-family:var(--font-mono);color:${col}">${val}</div>`
+    +`<div style="font-size:0.52em;color:var(--text-secondary);line-height:1.3;margin-top:2px">${sub||'&nbsp;'}</div></div>`;
+  const nearVal=d.nearest?(S.radarMetric?Math.round(d.nearest.mi*1.609)+' km':Math.round(d.nearest.mi)+' mi'):'—';
+  const nearSub=d.nearest?('to the '+d.nearest.dir):'nothing in range';
+  const nearCol=d.nearest?(d.nearest.mi<=15?'#fb923c':'#4ade80'):'var(--text-muted)';
+  let arrVal='none',arrSub='nothing on the dial',arrCol='var(--text-muted)';
+  if(d.rainingNow){arrVal='now';arrSub='rain overhead';arrCol='#facc15'}
+  else if(d.windows&&d.windows.length){
+    const w0=d.windows[0];
+    const _a=_clock(w0.startMin),_b=_clock(w0.endMin);
+    const _ap=_a.slice(-3),_bp=_b.slice(-3);
+    // drop the redundant meridiem on the start when both ends share it
+    arrVal=((_ap===' AM'||_ap===' PM')&&_ap===_bp)?(_a.slice(0,-3)+'–'+_b):(_a+'–'+_b);
+    const dur=Math.max(1,Math.round(w0.endMin-w0.startMin));
+    arrSub=(dur<60?dur+' min':_fmtRingOffset(dur).replace('+',''))+(d.forecast?' · forecast':' · of rain');
+    arrCol='#facc15';
+  }
+  let wVal='—',wSub='steering unknown',wCol='var(--text-muted)';
+  if(typeof watchDirHint==='function'){
+    const wd=watchDirHint((typeof getSteeringMv==='function')?getSteeringMv():null);
+    if(wd){
+      wVal=wd.from;
+      wSub=Math.round((wd.fromDeg-15+360)%360)+'°–'+Math.round((wd.fromDeg+15)%360)+'°';
+      wCol='#fbbf24';
+    }
+  }
+  return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:7px">`
+    +cell('Nearest precip',nearVal,nearSub,nearCol)
+    +cell('Arrival window',arrVal,arrSub,arrCol)
+    +cell('Watch',wVal,wSub,wCol)
+    +`</div>`;
+}
+// v6.88: dBZ ramp for the bezel arcs, plus the dashed key for the inner
+// forecast hairline whenever that ring is actually drawn.
+function _scopeLegend(){
+  const d=S._rainClockData;
+  const fc=!!(d&&d.ready&&d.fcReady);
+  return `<div style="display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:8px;margin-top:7px;font-size:0.5em;letter-spacing:0.08em;color:var(--text-muted);font-weight:700">`
+    +`<span style="color:var(--text-secondary)">dBZ</span><span>LIGHT</span>`
+    +`<span style="display:inline-block;width:84px;height:6px;border-radius:3px;border:1px solid rgba(255,255,255,0.14);background:linear-gradient(90deg,#4ade80 0%,#facc15 45%,#fb923c 75%,#f87171 100%)"></span>`
+    +`<span>HEAVY</span>`
+    +(fc?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:16px;border-top:2px dashed #7fb0e0"></span>FORECAST</span>`:'')
+    +`</div>`;
+}
+function _scopeWatchLine(){
+  if(typeof watchDirHint!=='function')return '';
+  const wd=watchDirHint((typeof getSteeringMv==='function')?getSteeringMv():null);
+  if(!wd)return '';
+  return `<div style="font-size:0.62em;color:var(--text-secondary);text-align:center;margin-top:7px;line-height:1.45">\uD83D\uDC40 ${wd.text}</div>`;
+}
 function _syncStormScope(){
   const rc=document.getElementById('rain-clock');
   const ms=document.getElementById('mini-sonar-card');
@@ -3055,8 +3333,10 @@ function _syncStormScope(){
       }
     }catch(e){}
     if(info){
-      const cl=S._rcCenterLines;
-      const head=(cl&&cl.length)?`<div style="font-size:0.78em;font-weight:700;color:var(--text-primary);text-align:center">${cl.join(' ')}</div>`:'';
+      // v6.88: the headline is now the status strip; the summary cells carry
+      // nearest precip / arrival window / watch, and only the notes below them
+      // are mirrored from the Rain Clock's footer.
+      const head=_scopeStatusStrip()+_scopeSummaryCells()+_scopeLegend()+_scopeWatchLine();
       const fb=document.getElementById('rc-foot-block');
       // v6.86: tap-through text view. Tapping the radar flips between the
       // compact summary and the Rain Clock's plain-language arrival details
@@ -3066,8 +3346,10 @@ function _syncStormScope(){
       if(S._scopeTextView&&ph&&ph.length){
         detail=ph.map(p=>`<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:7px 10px;margin-top:6px;text-align:left"><div style="font-size:0.72em;font-weight:700;color:var(--text-primary)">${p.title}</div><div style="font-size:0.66em;color:var(--text-secondary);line-height:1.45;margin-top:2px">${p.body}</div></div>`).join('');
       }
-      const hint=`<div style="font-size:0.56em;color:var(--text-muted);text-align:center;margin-top:5px;font-style:italic">⇄ tap the radar ${S._scopeTextView?'to hide':'for'} arrival details</div>`;
-      const html=head+(fb?fb.innerHTML:'')+detail+hint;
+      // the ⇄ hint lives on the caption below (drawMiniSonar), so it stays the
+      // last line on the card now that the caption sits under this block
+      const rest=(S._rcFootRest!=null)?S._rcFootRest:(fb?fb.innerHTML:'');
+      const html=head+rest+detail;
       if(info._last!==html){info._last=html;info.innerHTML=html}
       info.style.display='';
     }

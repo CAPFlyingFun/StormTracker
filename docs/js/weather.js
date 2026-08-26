@@ -1005,7 +1005,6 @@ function _drawScopeBezel(ctx,cx,cy,G,size){
     ctx.strokeStyle=major?'rgba(159,179,200,0.75)':'rgba(120,140,165,0.34)';
     ctx.lineWidth=major?1.7:1;ctx.stroke();
   }
-  const floor=(typeof getRainFloorDbz==='function')?getRainFloorDbz():25;
   // INNER hairline: the hourly FORECAST, dashed, coloured by peak dBZ — the same
   // data (and the same outer=observed / inner=forecast split) as the Rain Clock
   // card's inner ring, so forecast rain shows on the scope too instead of only
@@ -1021,7 +1020,7 @@ function _drawScopeBezel(ctx,cx,cy,G,size){
     };
     let run=null;
     for(let m=0;m<=span;m++){
-      if(fm[m]>=floor){if(run==null)run=m}
+      if(fm[m]>0){if(run==null)run=m}
       else if(run!=null){flush(run,m-1);run=null}
     }
     if(run!=null)flush(run,span);
@@ -2436,7 +2435,19 @@ function _rcSpanLabel(min){
 // forecast ring (renderRainClock) and the radar-empty fallback below. Each rainy
 // hour -> {start,end} minutes-from-now + an intensity dBZ (mm/hr via Marshall-
 // Palmer). Light-moderate+ only, 12 h horizon, current hour included.
-function _rcForecastHours(){
+// v6.89: `strict` keeps the old radar-strength gate (used by the radar-empty
+// FALLBACK, which promotes forecast hours into real dial windows). The inner
+// forecast RING passes strict=false, because gating it on getRainFloorDbz()
+// was silently deleting most forecast rain:
+//   getRainFloorDbz() defaults to 25 dBZ, and Marshall-Palmer puts 1 mm/h at
+//   23 dBZ — so an hour needed >1.1 mm to survive. Worse, the two numbers
+//   aren't comparable: radar dBZ is an INSTANTANEOUS rate while Open-Meteo's
+//   hourly precipitation is an hour's ACCUMULATION, whose peak rate typically
+//   runs several times the hourly mean. A 0.8 mm hour is real rain that the
+//   ring was throwing away. The ring now shows every hour above the
+//   measurable-precip floor and still colours it by its true converted dBZ,
+//   so a drizzle hour reads green rather than being promoted or hidden.
+function _rcForecastHours(strict){
   const h=S._hourlyData;
   if(!h||!h.time||!h.precipitation||!h.time.length)return [];
   const nowMs=Date.now();
@@ -2450,7 +2461,7 @@ function _rcForecastHours(){
     const mm=h.precipitation[i]||0;
     if(mm<FC_FLOOR_MM)continue;
     const dbz=Math.round(_precipMmToDbz(mm));
-    if(dbz<getRainFloorDbz())continue;
+    if(strict!==false&&dbz<getRainFloorDbz())continue;
     out.push({start:Math.max(0,offMin),end:offMin+60,dbz,mm});
   }
   return out;
@@ -2517,9 +2528,10 @@ function _rainClockProject(){
   // v5.x: the dial now carries a second (inner) FORECAST ring that must stay
   // visible, so grow the span to also cover the furthest rainy forecast hour
   // (capped at the same 12 h horizon as radar). Computed once and reused below.
-  const _fcHrs=_rcForecastHours();
+  const _fcHrs=_rcForecastHours();          // strict — feeds the radar-empty fallback
+  const _fcRing=_rcForecastHours(false);    // every measurable hour — feeds the ring
   let _maxFcMin=0;
-  for(const f of _fcHrs){if(f.end>_maxFcMin)_maxFcMin=f.end}
+  for(const f of _fcRing){if(f.end>_maxFcMin)_maxFcMin=f.end}
   const _spanMode=(typeof _rcSpanMode==='function')?_rcSpanMode():'forecast';
   const span=_rcPickSpan(Math.min(720,_spanMode==='radar'?_maxEta:Math.max(_maxEta,_maxFcMin)));
   out.span=span;
@@ -2790,12 +2802,12 @@ function _rainClockProject(){
   // dial itself already fell back to forecast (out.forecast) — one ring is enough.
   const _fcSpan=out.span||_RC_TOTAL_MIN;
   out.fcMinutes=new Array(_fcSpan+1).fill(0);
-  const _fcH=_fcHrs;
+  const _fcH=_fcRing;
   out.fcReady=_fcH.length>0;   // inner forecast ring shows whenever forecast rain exists (radar present OR fallback)
   for(const f of _fcH){
     const tIn=Math.max(0,Math.floor(f.start));
     const tOut=Math.min(_fcSpan,Math.ceil(f.end));
-    for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}
+    for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}  // v6.89: any value >0 draws
   }
   // === v5.82: hold the dial blank until storm MOTION is known. On first load a
   // quick pre-winds-aloft scan can drop a transient echo inside the user's ~1.5 mi
@@ -2948,7 +2960,7 @@ function renderRainClock(){
     };
     let a=null;
     for(let m=0;m<=TOTAL;m++){
-      if(fm[m]>=getRainFloorDbz()){if(a==null)a=m}
+      if(fm[m]>0){if(a==null)a=m}
       else if(a!=null){flush(a,m-1);a=null}
     }
     if(a!=null)flush(a,TOTAL);
@@ -3217,6 +3229,11 @@ function renderRainClock(){
 // Weather tab, and the Rain Clock's headline + footer lines appear under the
 // sonar. Turning the ring off in the sonar ⚙️ restores the classic two-card
 // layout. Runs only on renderRainClock (data refreshes), never per frame.
+// v6.89: the window that covers minute 0 — the rain currently overhead.
+function _scopeNowWindow(d){
+  if(!d||!d.windows)return null;
+  return d.windows.find(w=>w.startMin<=0&&w.endMin>=0)||null;
+}
 // v6.88: the "answer" line, promoted out of the mirrored Rain Clock headline
 // into a compact dashboard strip directly under the dial — the thing people
 // actually came to the card for, in one glance.
@@ -3232,7 +3249,20 @@ function _scopeStatusStrip(){
   if(d.awaitingMotion){
     icon='📡';main='DETERMINING STORM MOTION';rest='';warm=false;
   }else if(d.rainingNow){
-    icon='🌧';main='RAINING NOW';rest=nearTxt?'· NEAREST '+nearTxt:'';warm=true;
+    // v6.89: "0 mi N" tells you nothing you can't see out the window — what you
+    // want mid-storm is when it lets up. The projection already anchors a window
+    // at minute 0 whenever rain is overhead (rainOverUserNow), so its endMin IS
+    // the let-up time.
+    const nw=_scopeNowWindow(d);
+    icon='🌧';main='RAINING NOW';warm=true;
+    if(nw&&nw.endMin<(d.span||720)-1){
+      const left=Math.max(1,Math.round(nw.endMin));
+      rest='· UNTIL '+_clock(nw.endMin)+' · '+(left<60?left+' MIN LEFT':_fmtRingOffset(left).replace('+','').toUpperCase()+' LEFT');
+    }else if(nw){
+      rest='· NO LET-UP ON THE DIAL';
+    }else{
+      rest=nearTxt?'· NEAREST '+nearTxt:'';
+    }
   }else if(d.windows&&d.windows.length){
     const w0=d.windows[0];
     const mins=Math.max(1,Math.round(w0.startMin));
@@ -3270,8 +3300,16 @@ function _scopeSummaryCells(){
   const nearVal=d.nearest?(S.radarMetric?Math.round(d.nearest.mi*1.609)+' km':Math.round(d.nearest.mi)+' mi'):'—';
   const nearSub=d.nearest?('to the '+d.nearest.dir):'nothing in range';
   const nearCol=d.nearest?(d.nearest.mi<=15?'#fb923c':'#4ade80'):'var(--text-muted)';
-  let arrVal='none',arrSub='nothing on the dial',arrCol='var(--text-muted)';
-  if(d.rainingNow){arrVal='now';arrSub='rain overhead';arrCol='#facc15'}
+  let arrLab='Arrival window',arrVal='none',arrSub='nothing on the dial',arrCol='var(--text-muted)';
+  if(d.rainingNow){
+    const nw=_scopeNowWindow(d);
+    arrLab='Rain ends';arrCol='#facc15';
+    if(nw&&nw.endMin<(d.span||720)-1){
+      const left=Math.max(1,Math.round(nw.endMin));
+      arrVal=_clock(nw.endMin);
+      arrSub=(left<60?left+' min':_fmtRingOffset(left).replace('+',''))+' left';
+    }else{arrVal='—';arrSub=nw?'no let-up on the dial':'rain overhead'}
+  }
   else if(d.windows&&d.windows.length){
     const w0=d.windows[0];
     const _a=_clock(w0.startMin),_b=_clock(w0.endMin);
@@ -3293,7 +3331,7 @@ function _scopeSummaryCells(){
   }
   return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:7px">`
     +cell('Nearest precip',nearVal,nearSub,nearCol)
-    +cell('Arrival window',arrVal,arrSub,arrCol)
+    +cell(arrLab,arrVal,arrSub,arrCol)
     +cell('Watch',wVal,wSub,wCol)
     +`</div>`;
 }
@@ -3306,7 +3344,11 @@ function _scopeLegend(){
     +`<span style="color:var(--text-secondary)">dBZ</span><span>LIGHT</span>`
     +`<span style="display:inline-block;width:84px;height:6px;border-radius:3px;border:1px solid rgba(255,255,255,0.14);background:linear-gradient(90deg,#4ade80 0%,#facc15 45%,#fb923c 75%,#f87171 100%)"></span>`
     +`<span>HEAVY</span>`
-    +(fc?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:16px;border-top:2px dashed #7fb0e0"></span>FORECAST</span>`:'')
+    +(fc
+      ?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:16px;border-top:2px dashed #7fb0e0"></span>FORECAST</span>`
+      :(d&&d.ready
+        ?`<span style="display:inline-flex;align-items:center;gap:4px;opacity:0.6"><span style="display:inline-block;width:16px;border-top:2px dashed var(--text-muted)"></span>FORECAST · NONE IN ${(typeof _rcSpanLabel==='function')?_rcSpanLabel(d.span||720).toUpperCase():''}</span>`
+        :''))
     +`</div>`;
 }
 function _scopeWatchLine(){

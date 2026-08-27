@@ -603,8 +603,8 @@ async function buildMapGround3D(lat, lon) {
         var rawTx = cx + ddx, rawTy = cy + ddy;
         var tx = ((rawTx % n) + n) % n, ty = Math.max(0, Math.min(n - 1, rawTy));
         var drawX = rawTx * tsz - originGPx, drawY = rawTy * tsz - originGPy;
-        var srv = ['a', 'b', 'c'][(Math.abs(tx) + Math.abs(ty)) % 3];
-        var url = 'https://' + srv + '.basemaps.cartocdn.com/dark_all/' + z + '/' + tx + '/' + ty + '.png';
+        var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(z, tx, ty) : '';
+        if (!url) return;               // basemap off — the plane keeps its flat fill
         jobs.push(loadImgCors3D(url).then(function (img) {
           if (!img) return;
           ctx2.drawImage(img, drawX, drawY, tsz, tsz);

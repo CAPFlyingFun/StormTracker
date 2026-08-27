@@ -70,13 +70,14 @@ function initRadar(){
       <span id="scan-dot3" style="display:none"><span class="scan-dot" id="scan-dot3-c">⚫</span> <span id="scan-dot3-t">Storms</span></span>
       <span id="ltg-attrib-line" style="display:none"></span>
     </div>
-    <div id="radar-source-label" style="font-size:0.7em;color:var(--text-muted);text-align:left;padding:0 84px 0 12px"></div>`;
+    <div id="radar-source-label" style="font-size:0.7em;color:var(--text-muted);text-align:left;padding:0 84px 0 12px"></div>
+    <div id="basemap-attrib" style="font-size:0.6em;color:var(--text-muted);text-align:left;padding:2px 84px 0 12px;opacity:0.75"></div>`;
   setTimeout(async()=>{
     S._radarAnimPlaying=false;S._radarAnimPaused=false;
     clearInterval(S._radarAnimTimer);S._radarAnimFrames=[];
     if(S.map){S.map.remove();S.map=null}
     const map=L.map('radar-map',{zoomControl:false,attributionControl:false,maxZoom:11,maxBoundsViscosity:1.0,bounceAtZoomLimits:false,zoomSnap:0.5,zoomDelta:0.5}).setView([S.lat,S.lon],8);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:11}).addTo(map);
+    applyBasemap(map,{maxZoom:11});
     S._rangeCircle=L.circle([S.lat,S.lon],{radius:S.scanRadius*1609.34,color:'#3b82f6',fill:false,weight:1,dashArray:'6 4'}).addTo(map);
     S._userMarker=L.circleMarker([S.lat,S.lon],{radius:5,color:'#3b82f6',fillColor:'#3b82f6',fillOpacity:1}).addTo(map);
     S.map=map;
@@ -2956,6 +2957,26 @@ function _lpHurrOpts(){
     +_lpSeg('Flow particles','flow',[{v:'on',l:'On'},{v:'off',l:'Off'}])
     +_lpSeg('History dots','dots',[{v:'on',l:'On'},{v:'off',l:'Off'}]);
 }
+// v6.91: basemap picker. Auto + four styles on the first row; keyed providers
+// appear on the second row only once a key exists, so the common case stays a
+// five-button choice instead of a settings maze.
+function _lpBasemap(){
+  const cur=basemapChoice(),act=basemapResolve();
+  const chip=(v,l,on)=>`<span onclick="setBasemapChoice('${v}')" style="flex:1;text-align:center;font-size:0.6em;padding:4px 2px;border-radius:6px;cursor:pointer;border:1px solid ${on?'var(--accent-cyan)':'var(--border-subtle)'};background:${on?'rgba(0,229,255,0.15)':'transparent'};color:${on?'var(--accent-cyan)':'var(--text-muted)'};font-weight:600">${l}</span>`;
+  let h='<div style="padding:3px 2px"><div style="display:flex;gap:3px">'
+    +[['auto','Auto'],['dark','Dark'],['terrain','Terrain'],['satellite','Sat'],['none','Off']]
+      .map(o=>chip(o[0],o[1],cur===o[0])).join('')
+    +'</div>';
+  const keyed=['carto','stadia'].filter(id=>_bmKey(id));
+  if(keyed.length){
+    h+='<div style="display:flex;gap:3px;margin-top:3px">'
+      +keyed.map(id=>chip(id,BASEMAPS[id].label,cur===id)).join('')+'</div>';
+  }
+  h+=`<div style="font-size:0.55em;color:var(--text-muted);margin-top:4px;line-height:1.5">Showing: <b style="color:var(--text-secondary)">${(BASEMAPS[act]||{}).label||act}</b>${cur==='auto'?' · auto-selected':''}`
+    +`<br><span onclick="setBasemapKey('carto')" style="cursor:pointer;text-decoration:underline">CARTO key</span> · `
+    +`<span onclick="setBasemapKey('stadia')" style="cursor:pointer;text-decoration:underline">Stadia key</span></div></div>`;
+  return h;
+}
 function _layersPanelHTML(){
   const sec=(title,open,body)=>`<details ${open?'open':''} style="margin-bottom:4px"><summary style="font-size:0.7em;font-weight:700;color:var(--text-primary);cursor:pointer;padding:4px 2px">${title}</summary>${body}</details>`;
   const storms=
@@ -2972,7 +2993,8 @@ function _layersPanelHTML(){
     _lpLegacyRow('btn-nhc-tracks','🌀','All 🌀 overlays','_lpToggleNHC','font-size:15px;display:flex;align-items:center;justify-content:center;opacity:'+(S._showNHCTracks?1:0.4))+
     `<div id="lp-hurr-opts">${_lpHurrOpts()}</div>`;
   return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px 6px"><span style="font-size:0.7em;font-weight:800;letter-spacing:0.06em;color:var(--accent-cyan)">MAP LAYERS</span><span onclick="toggleLayersPanel()" style="cursor:pointer;color:var(--text-muted);padding:0 4px;font-size:0.85em">✕</span></div>`
-    +sec('⛈️ Storms',true,storms)+sec('📡 Radar',false,radar)+sec('🌀 Hurricane',true,hurr);
+    +sec('⛈️ Storms',true,storms)+sec('📡 Radar',false,radar)+sec('🌀 Hurricane',true,hurr)
+    +sec('🗺️ Basemap',false,_lpBasemap());
 }
 function _lpToggleNHC(){toggleNHCTracks(!S._showNHCTracks)}
 function _lpDo(fn){try{if(typeof window[fn]==='function')window[fn]()}catch(e){console.warn('[layers]',fn,e&&e.message)}_syncLayersPanel()}

@@ -1125,3 +1125,162 @@ function updateStormBadges(){
   const hdrLightning=document.getElementById('header-lightning');
   if(hdrLightning)hdrLightning.className=inbound>0?'lightning-active':'';
 }
+// ═══ v6.91: BASEMAP PROVIDERS ═══════════════════════════════════════════════
+// CARTO began requiring an API key on basemaps.cartocdn.com — unauthenticated
+// tiles now come back stamped "API KEY REQUIRED" — and their docs say the
+// raster basemaps are being retired outright. So the map background stops being
+// one hard-coded URL pasted into three files and becomes a pluggable choice:
+// Auto picks the best provider available and benches one that starts failing,
+// or you pin a style by hand from the layers panel.
+//
+// Auto deliberately defaults to a KEYLESS provider. A watermarked CARTO tile is
+// a 200 OK carrying a picture, not an HTTP error, so no amount of tile-error
+// handling can detect it — the only robust answer is not to depend on a key we
+// don't have. Esri's legacy tiled services need no key; they are also no longer
+// updated and could be withdrawn, which is exactly what the fallback chain and
+// the manual override are for.
+const BASEMAPS={
+  auto:{label:'Auto'},
+  dark:{label:'Dark',maxNative:16,
+    tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+    attrib:'Esri, HERE, Garmin, © OpenStreetMap contributors'},
+  terrain:{label:'Terrain',maxNative:16,
+    tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+           'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'],
+    attrib:'Esri, USGS, NOAA, © OpenStreetMap contributors'},
+  satellite:{label:'Satellite',maxNative:17,
+    tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+           'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
+    attrib:'Esri, Maxar, Earthstar Geographics'},
+  stadia:{label:'Stadia',maxNative:20,keyStore:'st_stadiaKey',keyOptional:true,
+    tiles:['https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png'],
+    attrib:'© Stadia Maps, © OpenMapTiles, © OpenStreetMap contributors'},
+  carto:{label:'CARTO',maxNative:19,keyStore:'st_cartoKey',
+    tiles:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+    attrib:'© CARTO, © OpenStreetMap contributors'},
+  none:{label:'Off',tiles:[],attrib:''}
+};
+function basemapChoice(){try{return localStorage.getItem('st_basemap')||'auto'}catch(e){return 'auto'}}
+function _bmKey(id){
+  const d=BASEMAPS[id];
+  if(!d||!d.keyStore)return '';
+  try{return (localStorage.getItem(d.keyStore)||'').trim()}catch(e){return ''}
+}
+// Providers that started erroring are benched for 12 h rather than forever — a
+// CDN hiccup shouldn't permanently demote a provider the user chose.
+function _bmBad(){try{return JSON.parse(localStorage.getItem('st_bmBad')||'{}')}catch(e){return {}}}
+function _bmMarkBad(id){
+  const m=_bmBad();m[id]=Date.now()+12*3600000;
+  try{localStorage.setItem('st_bmBad',JSON.stringify(m))}catch(e){}
+}
+function _bmIsBad(id){const m=_bmBad();return !!(m[id]&&m[id]>Date.now())}
+function basemapResolve(){
+  const c=basemapChoice();
+  if(c!=='auto'&&BASEMAPS[c]){
+    // a pinned keyed provider with no key would just render watermarks
+    if(BASEMAPS[c].keyStore&&!BASEMAPS[c].keyOptional&&!_bmKey(c))return 'dark';
+    return c;
+  }
+  const order=[];
+  if(_bmKey('carto'))order.push('carto');
+  if(_bmKey('stadia'))order.push('stadia');
+  order.push('dark');
+  for(const id of order){if(!_bmIsBad(id))return id}
+  return 'none';
+}
+function _bmUrl(tpl,keyStr){
+  let u=tpl.replace('{r}',(window.devicePixelRatio>1)?'@2x':'');
+  if(keyStr){
+    // a pasted full URL wins outright, so a provider whose key parameter we get
+    // wrong is still usable without a code change
+    if(/^https?:/i.test(keyStr))return keyStr;
+    const k=encodeURIComponent(keyStr);
+    u+=(u.indexOf('?')<0?'?':'&')+'api_key='+k+'&key='+k;
+  }
+  return u;
+}
+function applyBasemap(map,opts){
+  if(!map||typeof L==='undefined')return null;
+  opts=opts||{};
+  const id=basemapResolve();
+  const def=BASEMAPS[id]||BASEMAPS.dark;
+  if(map._bmLayers){for(const l of map._bmLayers){try{map.removeLayer(l)}catch(e){}}}
+  map._bmLayers=[];map._bmId=id;map._bmOpts=opts;
+  const keyStr=_bmKey(id);
+  const maxZoom=opts.maxZoom||19;
+  (def.tiles||[]).forEach((tpl,i)=>{
+    const layer=L.tileLayer(_bmUrl(tpl,keyStr),{
+      maxZoom:maxZoom,
+      maxNativeZoom:Math.min(maxZoom,def.maxNative||maxZoom),
+      subdomains:'abc',
+      opacity:(id==='terrain'&&i===0)?0.9:1,
+      attribution:def.attrib||''
+    });
+    let errs=0;
+    layer.on('tileerror',()=>{
+      if(basemapChoice()!=='auto')return;      // a manual pick is the user's call
+      if(++errs<3)return;                       // one bad tile isn't an outage
+      layer.off('tileerror');
+      _bmMarkBad(id);
+      try{applyBasemap(map,opts)}catch(e){}
+    });
+    layer.addTo(map);
+    try{layer.bringToBack()}catch(e){}
+    map._bmLayers.push(layer);
+  });
+  _bmSyncAttrib();
+  return id;
+}
+// Attribution is a licence condition for every provider here, and the radar map
+// runs with Leaflet's own attribution control disabled, so it gets its own line
+// under the map instead.
+function _bmSyncAttrib(){
+  const el=document.getElementById('basemap-attrib');
+  if(!el)return;
+  const def=BASEMAPS[basemapResolve()]||{};
+  el.textContent=def.attrib?('Map: '+def.attrib):'';
+}
+function setBasemapChoice(id){
+  if(!BASEMAPS[id])return;
+  try{localStorage.setItem('st_basemap',id)}catch(e){}
+  try{localStorage.removeItem('st_bmBad')}catch(e){}   // a manual pick clears the bench
+  try{if(S.map)applyBasemap(S.map,S.map._bmOpts||{maxZoom:11})}catch(e){}
+  try{if(S._pickMap)applyBasemap(S._pickMap,{maxZoom:19})}catch(e){}
+  try{if(typeof _syncLayersPanel==='function')_syncLayersPanel()}catch(e){}
+  // the 3D view paints its ground plane once per open, so only rebuild it when
+  // it is actually on screen
+  try{
+    if(typeof buildMapGround3D==='function'&&S.lat!=null){
+      const c=document.getElementById('view3d-container');
+      if(c&&c.offsetParent!==null)buildMapGround3D(S.lat,S.lon);
+    }
+  }catch(e){}
+}
+function setBasemapKey(id){
+  const d=BASEMAPS[id];
+  if(!d||!d.keyStore)return;
+  const cur=_bmKey(id);
+  const v=window.prompt(d.label+' key — paste the key, or a full tile URL template if your key uses a different parameter. Leave blank to remove.',cur||'');
+  if(v==null)return;
+  try{
+    if(v.trim())localStorage.setItem(d.keyStore,v.trim());
+    else localStorage.removeItem(d.keyStore);
+  }catch(e){}
+  setBasemapChoice(v.trim()?id:basemapChoice());
+}
+// The 3D view paints its ground plane by hand from raw tile images, so it needs
+// the resolved URL rather than a Leaflet layer.
+function basemapTileUrl(z,x,y){
+  const id=basemapResolve(),def=BASEMAPS[id]||BASEMAPS.dark;
+  const tpl=(def.tiles&&def.tiles[0])||'';
+  if(!tpl)return '';
+  const srv=['a','b','c'][(Math.abs(x)+Math.abs(y))%3];
+  return _bmUrl(tpl,_bmKey(id))
+    .replace('{s}',srv).replace('{z}',z).replace('{x}',x).replace('{y}',y);
+}
+if(typeof window!=='undefined'){
+  window.BASEMAPS=BASEMAPS;window.basemapChoice=basemapChoice;
+  window.basemapResolve=basemapResolve;window.applyBasemap=applyBasemap;
+  window.setBasemapChoice=setBasemapChoice;window.setBasemapKey=setBasemapKey;
+  window.basemapTileUrl=basemapTileUrl;
+}

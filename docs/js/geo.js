@@ -844,8 +844,8 @@ function startMapPick(){
   document.body.appendChild(overlay);
   const initLat=S.lat||39.8,initLon=S.lon||-98.5;
   const pickMap=L.map('map-pick-map',{center:[initLat,initLon],zoom:9,zoomControl:true});
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© CartoDB'}).addTo(pickMap);
   S._pickMap=pickMap;
+  applyBasemap(pickMap,{maxZoom:19});
   let resolveTimer=null;
   const addrEl=document.getElementById('map-pick-addr');
   async function resolveAddr(lat,lon){

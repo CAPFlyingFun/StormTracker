@@ -811,3 +811,7 @@ canvas.offscreen{display:none}
    they read as live and are distinct from the solid radar-derived estimate. */
 @keyframes ltgStrikePulse{0%,100%{opacity:1}50%{opacity:0.5}}
 .ltg-strike-real{animation:ltgStrikePulse 2.6s ease-in-out infinite}
+/* v6.92: light-styled fallback basemaps (USGS) rendered to match the app's dark
+   theme. Inversion alone flips the hue wheel, so hue-rotate puts blues back to
+   blue; saturate pulls the result down to a calm backdrop for radar colour. */
+.bm-dim{filter:invert(1) hue-rotate(180deg) brightness(0.88) saturate(0.55)}

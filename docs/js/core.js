@@ -1158,6 +1158,14 @@ const BASEMAPS={
   carto:{label:'CARTO',maxNative:19,keyStore:'st_cartoKey',
     tiles:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
     attrib:'© CARTO, © OpenStreetMap contributors'},
+  // Auto-only backstop, and a deliberately DIFFERENT vendor: if Esri's legacy
+  // tiled services are ever withdrawn they all go together, so the fallback has
+  // to come from somewhere else entirely. USGS National Map is free, keyless and
+  // public domain; it is US-only, which is fine for a NEXRAD app, and it is a
+  // light-styled map so it renders through the dim filter to match the app.
+  usgs:{label:'USGS',maxNative:16,dim:true,autoOnly:true,
+    tiles:['https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}'],
+    attrib:'USGS The National Map (US coverage)'},
   none:{label:'Off',tiles:[],attrib:''}
 };
 function basemapChoice(){try{return localStorage.getItem('st_basemap')||'auto'}catch(e){return 'auto'}}
@@ -1184,7 +1192,10 @@ function basemapResolve(){
   const order=[];
   if(_bmKey('carto'))order.push('carto');
   if(_bmKey('stadia'))order.push('stadia');
-  order.push('dark');
+  // keyless chain: preferred dark style, then a different vendor entirely.
+  // Someone opening a shared link has set nothing up, so Auto has to land on a
+  // working map by itself — 'none' is the last resort, not the second step.
+  order.push('dark','usgs');
   for(const id of order){if(!_bmIsBad(id))return id}
   return 'none';
 }
@@ -1214,6 +1225,7 @@ function applyBasemap(map,opts){
       maxNativeZoom:Math.min(maxZoom,def.maxNative||maxZoom),
       subdomains:'abc',
       opacity:(id==='terrain'&&i===0)?0.9:1,
+      className:def.dim?'bm-dim':'',
       attribution:def.attrib||''
     });
     let errs=0;

@@ -786,7 +786,7 @@ function renderWeather(data){
         <div class="wind-stat-cell"><div class="wind-stat-label">Gusts</div><div class="wind-stat-val">${hasGust?kmhTo(c.wind_gusts_10m,S.windUnit)+' '+windUnit:'--'}</div></div>
         <div class="wind-stat-cell"><div class="wind-stat-label">Beaufort</div><div class="wind-stat-val" style="color:${_BFT_CLR[bf]}">F${bf} ${_BFT_NAME[bf]}</div></div>
       </div></div>`,
-    trends:`<div class="weather-section" data-sec="trends"><div class="sec-header"><span class="card-title m-0"><span class="icon">📈</span> 48h Trends</span>${secBtns('trends')}</div>
+    trends:`<div class="weather-section" data-sec="trends"><div class="sec-header"><span class="card-title m-0"><span class="icon">📈</span> 48h Trends</span><div style="display:flex;gap:4px;align-items:center"><button onclick="openTrendZoom()" title="Enlarge chart" style="background:none;border:1px solid var(--accent-cyan);color:var(--accent-cyan);font-size:0.7em;width:24px;height:24px;border-radius:4px;cursor:pointer;line-height:1">⛶</button>${secBtns('trends')}</div></div>
       ${renderTrendCharts(hourly)}</div>`,
     hourly:`<div class="weather-section" data-sec="hourly"><div class="sec-header"><span class="card-title m-0"><span class="icon">🕐</span> 72h Hourly Forecast</span>${secBtns('hourly')}</div>
       ${renderHourlyForecast(hourly,daily)}</div>`,
@@ -1903,6 +1903,62 @@ function toggleTrendSeries(id){
   if(idx>=0)S._trendSel.splice(idx,1);
   else{if(S._trendSel.length>=4)S._trendSel.shift();S._trendSel.push(id)}
   if(S.forecast)renderTrendChartUpdate(S.forecast.hourly);
+  if(document.getElementById('trend-zoom'))_trendZoomRender();
+}
+
+// v6.93: trend chart zoom. The inline card has to fit a phone's width, which
+// caps how much of a 48-hour series can be legible at once — so the enlarged
+// view renders the same SVG at a fixed 1180px and lets it scroll sideways,
+// which is real magnification rather than just bigger type. Series pills come
+// along so you can change what's plotted without closing it, and the whole
+// thing re-lays out on rotate (landscape is the good way to read this).
+function openTrendZoom(){
+  if(!S.forecast||!S.forecast.hourly)return;
+  closeTrendZoom();
+  const ov=document.createElement('div');
+  ov.id='trend-zoom';
+  ov.style.cssText='position:fixed;inset:0;z-index:10050;background:rgba(5,8,15,0.97);display:flex;flex-direction:column;padding:10px 8px calc(10px + env(safe-area-inset-bottom,0px));-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)';
+  ov.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-shrink:0">'
+    +'<span class="card-title m-0"><span class="icon">📈</span> 48h Trends</span>'
+    +'<button onclick="closeTrendZoom()" style="background:none;border:1px solid var(--text-muted);color:var(--text-secondary);font-size:0.8em;padding:4px 12px;border-radius:6px;cursor:pointer">✕ Close</button></div>'
+    +'<div id="trend-zoom-pills" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;flex-shrink:0"></div>'
+    +'<div id="trend-zoom-scroll" style="flex:1;min-height:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;display:flex;align-items:center">'
+    +'<div id="trend-zoom-chart" style="height:100%;display:inline-block"></div></div>'
+    +'<div style="font-size:0.6em;color:var(--text-muted);text-align:center;margin-top:6px;font-style:italic;flex-shrink:0">swipe sideways to pan · rotate to landscape for the widest view</div>';
+  document.body.appendChild(ov);
+  _trendZoomRender();
+  S._trendZoomRot=()=>_trendZoomRender();
+  window.addEventListener('orientationchange',S._trendZoomRot);
+}
+function _trendZoomRender(){
+  const h=S.forecast&&S.forecast.hourly;if(!h)return;
+  const info=get48hData(h);if(!info)return;
+  const pills=document.getElementById('trend-zoom-pills');
+  if(pills){
+    pills.innerHTML=TREND_SERIES.map(s=>{
+      const on=S._trendSel.includes(s.id);
+      return`<button onclick="toggleTrendSeries('${s.id}')" style="padding:4px 10px;border-radius:12px;border:1px solid ${on?s.color:'#334155'};background:${on?s.color+'22':'transparent'};color:${on?s.color:'#94a3b8'};font-size:0.7em;font-weight:600;cursor:pointer;white-space:nowrap">${s.icon} ${s.label}</button>`;
+    }).join('');
+  }
+  const sc=document.getElementById('trend-zoom-scroll');
+  const availW=sc?sc.clientWidth:360,availH=sc?sc.clientHeight:320;
+  // Portrait gets a squarer box (3:1) so the chart isn't forced flat, landscape a
+  // wide one (5.3:1). Height is capped at 340 regardless: the SVG scales by
+  // height, so letting it fill a tall portrait screen would magnify every label
+  // along with the plot.
+  const vbw=(availW<availH)?900:1600;
+  const hpx=Math.max(180,Math.min(availH-4,340));
+  const c=document.getElementById('trend-zoom-chart');
+  if(c){c.style.height=hpx+'px';c.innerHTML=buildTrendSVG(h,info,vbw)}
+}
+function closeTrendZoom(){
+  const ov=document.getElementById('trend-zoom');
+  if(ov)ov.remove();
+  if(S._trendZoomRot){window.removeEventListener('orientationchange',S._trendZoomRot);S._trendZoomRot=null}
+}
+if(typeof window!=='undefined'){
+  window.openTrendZoom=openTrendZoom;window.closeTrendZoom=closeTrendZoom;
 }
 function renderTrendCharts(h){
   if(!h||!h.time)return'';
@@ -1924,17 +1980,29 @@ function renderTrendChartUpdate(h){
   const card=document.getElementById('trend-card');
   if(card)card.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">${pills}</div><div id="trend-chart-area">${buildTrendSVG(h,info)}</div>`;
 }
-function buildTrendSVG(h,info){
+// v6.93: the chart's text was authored in viewBox units against a 600-wide
+// viewBox that renders into ~366 CSS px on a phone — a 0.61x squeeze, so a
+// font-size of 5 landed at about 3 CSS px. Every label is now scaled through
+// fs(), and the side padding actually reserves room for the axis labels, which
+// were being drawn outside the viewBox and clipped.
+// `big` is the zoom viewBox WIDTH (falsy = the inline card). A 48 h series needs
+// a wide, short box in landscape and a squarer one in portrait — a single aspect
+// ratio either shrinks the type to nothing or blows it up into billboards.
+function buildTrendSVG(h,info,big){
   const sel=S._trendSel.map(id=>TREND_SERIES.find(s=>s.id===id)).filter(Boolean);
   if(!sel.length)return'<div style="text-align:center;color:var(--text-muted);font-size:0.8em;padding:20px">Select data series above</div>';
-  const W=600,H=180,PAD_L=6,PAD_R=6,PAD_T=18,PAD_B=22;
+  const FSC=big?2.3:1.95;
+  const fs=n=>+(n*FSC).toFixed(1);
+  const W=big||600,H=big?300:190,PAD_L=big?46:26,PAD_R=big?52:30,PAD_T=big?30:22,PAD_B=big?34:26;
   const cW=W-PAD_L-PAD_R,cH=H-PAD_T-PAD_B;
   const {start,end,nowIdx,count}=info;
   if(count<4)return'';
   const hasBars=sel.some(s=>s.bar);
   const lineData=sel.filter(s=>!s.bar);
   const barData=sel.filter(s=>s.bar);
-  let svg=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">`;
+  // big mode is sized by HEIGHT and overflows sideways into a scroll container;
+  // scaling by width would just magnify the labels along with the plot
+  let svg=`<svg viewBox="0 0 ${W} ${H}" style="${big?'height:100%;width:auto;max-width:none':'width:100%;height:auto'};display:block">`;
   svg+=`<defs><linearGradient id="tg-now" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,229,255,0.15)"/><stop offset="100%" stop-color="rgba(0,229,255,0)"/></linearGradient></defs>`;
   for(let g=0;g<=4;g++){
     const y=PAD_T+cH*(g/4);
@@ -1943,7 +2011,7 @@ function buildTrendSVG(h,info){
   const nowX=PAD_L+(nowIdx/(count-1))*cW;
   svg+=`<rect x="${PAD_L}" y="${PAD_T}" width="${nowX-PAD_L}" height="${cH}" fill="rgba(148,163,184,0.03)"/>`;
   svg+=`<line x1="${nowX}" y1="${PAD_T-4}" x2="${nowX}" y2="${H-PAD_B}" stroke="rgba(0,229,255,0.5)" stroke-width="1" stroke-dasharray="3,2"/>`;
-  svg+=`<text x="${nowX}" y="${PAD_T-6}" fill="#00e5ff" font-size="7" font-weight="700" text-anchor="middle">NOW</text>`;
+  svg+=`<text x="${nowX}" y="${PAD_T-6}" fill="#00e5ff" font-size="${fs(7)}" font-weight="700" text-anchor="middle">NOW</text>`;
   // v5.84: day-boundary lines — a faint vertical rule + weekday label at each local
   // midnight across the window, so you can tell which day each part of the trend is.
   {
@@ -1954,7 +2022,7 @@ function buildTrendSVG(h,info){
       if(_pd!==null&&_dk!==_pd){
         const dx=PAD_L+(i/(count-1))*cW;
         svg+=`<line x1="${dx.toFixed(1)}" y1="${PAD_T}" x2="${dx.toFixed(1)}" y2="${H-PAD_B}" stroke="rgba(148,163,184,0.22)" stroke-width="0.75" stroke-dasharray="2,2"/>`;
-        svg+=`<text x="${(dx+2).toFixed(1)}" y="${(PAD_T+7).toFixed(1)}" fill="#7c8aa0" font-size="6" font-weight="700">${_d.toLocaleDateString(undefined,{weekday:'short'})}</text>`;
+        svg+=`<text x="${(dx+2).toFixed(1)}" y="${(PAD_T+7).toFixed(1)}" fill="#7c8aa0" font-size="${fs(6)}" font-weight="700">${_d.toLocaleDateString(undefined,{weekday:'short'})}</text>`;
       }
       _pd=_dk;
     }
@@ -2028,13 +2096,13 @@ function buildTrendSVG(h,info){
         usedPts.add(hiK);
         const tx=b.hi.x+5>W-PAD_R-30?b.hi.x-30:b.hi.x+5;
         svg+=`<circle cx="${b.hi.x.toFixed(1)}" cy="${b.hi.y.toFixed(1)}" r="3" fill="${s.color}" stroke="#0f172a" stroke-width="1"/>`;
-        svg+=`<text x="${tx.toFixed(1)}" y="${(b.hi.y-5).toFixed(1)}" fill="${s.color}" font-size="6.5" font-weight="700">▲${s.fmt(b.hi.v)}</text>`;
+        svg+=`<text x="${tx.toFixed(1)}" y="${(b.hi.y-5).toFixed(1)}" fill="${s.color}" font-size="${fs(6.5)}" font-weight="700">▲${s.fmt(b.hi.v)}</text>`;
       }
       if(Math.abs(b.lo.i-b.hi.i)>2&&!usedPts.has(loK)){
         usedPts.add(loK);
         const tx=b.lo.x+5>W-PAD_R-30?b.lo.x-30:b.lo.x+5;
         svg+=`<circle cx="${b.lo.x.toFixed(1)}" cy="${b.lo.y.toFixed(1)}" r="3" fill="${s.color}" stroke="#0f172a" stroke-width="1"/>`;
-        svg+=`<text x="${tx.toFixed(1)}" y="${(b.lo.y+10).toFixed(1)}" fill="${s.color}" font-size="6.5" font-weight="700" opacity="0.7">▼${s.fmt(b.lo.v)}</text>`;
+        svg+=`<text x="${tx.toFixed(1)}" y="${(b.lo.y+10).toFixed(1)}" fill="${s.color}" font-size="${fs(6.5)}" font-weight="700" opacity="0.7">▼${s.fmt(b.lo.v)}</text>`;
       }
     });
   });
@@ -2069,15 +2137,17 @@ function buildTrendSVG(h,info){
       placed.push(py);
       const tx=nowX+5;
       svg+=`<circle cx="${nowX.toFixed(1)}" cy="${nl.y.toFixed(1)}" r="2.5" fill="${nl.color}" stroke="#0f172a" stroke-width="0.8"/>`;
-      svg+=`<text x="${tx.toFixed(1)}" y="${(py+2.5).toFixed(1)}" fill="${nl.color}" font-size="7" font-weight="700" text-shadow="0 0 3px #000">${nl.label}</text>`;
+      svg+=`<text x="${tx.toFixed(1)}" y="${(py+2.5).toFixed(1)}" fill="${nl.color}" font-size="${fs(7)}" font-weight="700" text-shadow="0 0 3px #000">${nl.label}</text>`;
     });
   }
   if(groupKeys.length>1||(lineData.length>0&&barData.length>0)){
-    let lx=PAD_L+4,ly=PAD_T+10;
+    // v6.93: pushed clear of the top gridline and the ".10 in" axis label it used
+    // to overprint, and spaced for the larger type
+    let lx=PAD_L+6,ly=PAD_T+fs(6)+6;
     sel.forEach(s=>{
-      svg+=`<rect x="${lx}" y="${ly-5}" width="8" height="3" rx="1" fill="${s.color}"/>`;
-      svg+=`<text x="${lx+11}" y="${ly-2}" fill="${s.color}" font-size="6" font-weight="600">${s.label}</text>`;
-      ly+=10;
+      svg+=`<rect x="${lx}" y="${(ly-fs(6)*0.75).toFixed(1)}" width="10" height="3" rx="1" fill="${s.color}"/>`;
+      svg+=`<text x="${lx+14}" y="${ly.toFixed(1)}" fill="${s.color}" font-size="${fs(6)}" font-weight="600">${s.label}</text>`;
+      ly+=fs(6)+4;
     });
   }
   const fmtHr=d=>fmtHrLabel(d);
@@ -2086,7 +2156,7 @@ function buildTrendSVG(h,info){
     const idx=Math.round(li*(count-1)/(labelCount-1));
     const t=new Date(h.time[start+idx]);
     const x=PAD_L+(idx/(count-1))*cW;
-    svg+=`<text x="${x}" y="${H-4}" fill="#64748b" font-size="6" text-anchor="middle">${idx===nowIdx?'Now':fmtHr(t)}</text>`;
+    svg+=`<text x="${x}" y="${H-PAD_B/3}" fill="#64748b" font-size="${fs(6)}" text-anchor="middle">${idx===nowIdx?'Now':fmtHr(t)}</text>`;
   }
   const yLabels=groupKeys.length<=2?groupKeys:[groupKeys[0]];
   yLabels.forEach((g,gi)=>{
@@ -2097,8 +2167,8 @@ function buildTrendSVG(h,info){
       const y=PAD_T+cH-f*cH;
       const s=groups.get(g)[0];
       const label=s.fmt(v);
-      if(isRight)svg+=`<text x="${W-PAD_R+2}" y="${y+2}" fill="#475569" font-size="5" text-anchor="start">${label}</text>`;
-      else svg+=`<text x="${PAD_L-2}" y="${y+2}" fill="#475569" font-size="5" text-anchor="end">${label}</text>`;
+      if(isRight)svg+=`<text x="${W-PAD_R+2}" y="${y+2}" fill="#475569" font-size="${fs(5)}" text-anchor="start">${label}</text>`;
+      else svg+=`<text x="${PAD_L-2}" y="${y+2}" fill="#475569" font-size="${fs(5)}" text-anchor="end">${label}</text>`;
     });
   });
   svg+=`</svg>`;
@@ -3569,6 +3639,10 @@ function toggleGraphGrid(key){const cur=_graphGridOn(key);try{localStorage.setIt
   if(key==='rainbars')try{renderRainForecastBars()}catch(e){}
   if(key==='trends'&&S.forecast)try{renderWeather(S.forecast)}catch(e){}
 }
+// v6.93: the measurable-precipitation floor for FORECAST surfaces, matching the
+// FC_FLOOR_MM the Rain Clock's forecast hours already use. Anything at or above
+// this is real rain worth drawing; below it is model noise.
+const FC_MIN_MM=0.1;
 function renderRainForecastBars(){
   const el=document.getElementById('rain-forecast-bars');
   if(!el)return;
@@ -3604,12 +3678,18 @@ function renderRainForecastBars(){
     // separate from the Rain Clock's 0-3 h radar nowcast, so it shows all forecast
     // precip; the Rain Clock keeps its own 25 dBZ nowcast floor.
     let mm=h.precipitation[idx]||0;
-    // v6.56: filter below the USER rain floor (st_rainFloorDbz, default 25) so
-    // this chart, the Rain Clock rings and the hero line all honor the SAME
-    // setting. v5.83 had removed the old FIXED 25 floor entirely, which left
-    // this the one rain surface the setting couldn't reach. Lower the setting
-    // to 5 to see all forecast precip again.
-    if(mm>0&&typeof _precipMmToDbz==='function'&&typeof getRainFloorDbz==='function'&&_precipMmToDbz(mm)<getRainFloorDbz())mm=0;
+    // v6.93: gate on MEASURABLE PRECIP, not on a radar reflectivity floor.
+    // v6.56 filtered these hours with getRainFloorDbz() (default 25 dBZ), and
+    // Marshall-Palmer puts 1 mm/h at 23 dBZ — so an hour needed >1.1 mm just to
+    // appear, and this card read "No measurable rain forecast" while the 48h
+    // Trends "Precip" series, drawing the SAME h.precipitation raw, showed bars
+    // (0.03 in / 0.76 mm → 21 dBZ → deleted here). That is exactly the disagreement
+    // the v5.83 comment above says this chart must never have.
+    // The two numbers aren't comparable: radar dBZ is an INSTANTANEOUS rate,
+    // Open-Meteo's hourly precipitation is an hour's ACCUMULATION. Same fix as
+    // v6.89 made for the Rain Clock's forecast ring — colour still comes from the
+    // converted dBZ, so a drizzle hour reads green instead of vanishing.
+    if(mm>0&&mm<FC_MIN_MM)mm=0;
     slots.push({t:new Date(h.time[idx]).getTime(),mm});
   }
   // v4.69: this 36-hour chart is now FULLY INDEPENDENT of the Rain Clock. It

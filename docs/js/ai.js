@@ -375,6 +375,88 @@ function _tropicalQuadrant(sys){
   return {quadrant,confidence,userDir,rel:Math.round(rel),note};
 }
 
+
+// v6.94: DERIVED FACTS. Everything here is a CLASSIFICATION the app already
+// computes and the model previously had to infer from prose + raw numbers —
+// which is where the briefing's mistakes came from: it read a high
+// "stability" rating as high stability, called a VFR station MVFR-ish from an
+// estimated cloud base, described 1.8 mph of vector difference as a shear
+// type, and turned a "20 to 60 NM" marine ZONE into a "20-60 kt" wind range.
+// Handing over the finished classifications leaves the model free to explain
+// the weather without re-deriving (and re-mixing) the units.
+function _aiDerivedFacts(){
+  const L=[];
+  // --- flight category: the METAR-based classification is authoritative ---
+  try{
+    if(S.station&&typeof getFltCatDetail==='function'){
+      const st=S.station;
+      const visSM=st.visMeter!=null?(st.visMeter/1609.34):null;
+      const f=getFltCatDetail(visSM,st);
+      let ceilFt=null;
+      if(st.clouds&&st.clouds.length){
+        for(const c of st.clouds){
+          const amt=(c.amount||c.cover||'').toUpperCase();
+          const b=(c.base&&c.base.value!=null)?c.base.value*3.281:(typeof c.base==='number'?c.base:null);
+          if((amt==='BKN'||amt==='OVC'||amt==='VV')&&b!=null){ceilFt=Math.round(b);break}
+        }
+      }
+      if(f)L.push(`  flight_category: ${f.cat} (${f.reason||'—'}) — station ${S.stationId||'?'}`);
+      L.push(`  observed_ceiling_ft: ${ceilFt!=null?ceilFt:'none (no BKN/OVC/VV layer reported — there is NO ceiling)'}`);
+      L.push(`  ceiling_rule: VFR >3000 ft & >5 sm · MVFR 1000-3000 ft or 3-5 sm · IFR 500-999 ft or 1-3 sm · LIFR <500 ft or <1 sm`);
+      // an estimated base is not a ceiling; flag the conflict rather than
+      // leaving the model to reconcile two numbers that disagree
+      const _t=st.temp!=null?st.temp:(S.weather&&S.weather.temperature_2m);
+      const _d=st.dewp!=null?st.dewp:(S.weather&&S.weather.dew_point_2m);
+      if(_t!=null&&_d!=null){
+        const estFt=Math.round(Math.max(0,(_t-_d))*400);
+        L.push(`  estimated_cloud_base_ft: ~${estFt} (spread x 400 — a MODEL ESTIMATE, NOT a ceiling and NOT a flight-category input)`);
+        if(ceilFt==null&&estFt<3000){
+          L.push(`  CAUTION: the estimate above is low but the station reports no ceiling. State the flight_category above; do NOT downgrade it from the estimate, and do NOT quote the estimate as a ceiling.`);
+        }
+      }
+    }else{
+      L.push(`  flight_category: unavailable (no METAR station data) — do NOT infer one from model cloud cover`);
+    }
+  }catch(e){}
+  // --- instability ---
+  try{
+    if(typeof getStabilityData==='function'){
+      const st=getStabilityData();
+      if(st){
+        const cape=st.cape||0,li=st.li;
+        let cls='stable';
+        if((li!=null&&li<=-6)||cape>=2500)cls='strongly unstable';
+        else if((li!=null&&li<=-3)||cape>=1500)cls='moderately to strongly unstable';
+        else if((li!=null&&li<=-1)||cape>=500)cls='marginally unstable';
+        else if(li!=null&&li<2)cls='near-neutral';
+        L.push(`  instability_class: ${cls} (CAPE ${cape} J/kg, LI ${li!=null?li.toFixed(1):'?'}). Negative LI = UNSTABLE. Describe this as INSTABILITY, never as "stability is high".`);
+      }
+    }
+  }catch(e){}
+  // --- deep-layer shear ---
+  try{
+    if(S._windShear&&S._windShear.speedDiff!=null){
+      const ms=S._windShear.speedDiff/3.6,dd=S._windShear.dirDiff||0;
+      const cls=ms<4?'negligible':ms<10?'weak':ms<18?'moderate':'strong';
+      L.push(`  shear_class: ${cls} (vector ${ms.toFixed(1)} m/s / ${Math.round(ms*1.94384)} kt, ${dd}° directional change)`
+        +(cls==='negligible'?`. Too small to have a "type" — do NOT call it speed shear or directional shear; say there is essentially none.`:''));
+    }
+  }catch(e){}
+  // --- the top storm's two different dBZ numbers, spelled out ---
+  try{
+    const top=(S._topStorms||[])[0];
+    if(top&&typeof calcStormETAForBriefing==='function'){
+      const b=calcStormETAForBriefing(top);
+      if(b){
+        L.push(`  storm_peak_dbz: ${top.dbz} (intensity of the cell itself, where it is now)`);
+        if(b.estDbzAtUser!=null)L.push(`  storm_impact_dbz: ${b.estDbzAtUser} (intensity expected AT YOUR LOCATION — this is the number that describes what you will experience)`);
+        if(b.closenessPct!=null)L.push(`  track_closeness_pct: ${b.closenessPct} (how centred the track is on you — a GEOMETRY figure, never an intensity or a probability)`);
+      }
+    }
+  }catch(e){}
+  if(!L.length)return[];
+  return ['\n=== DERIVED FACTS (authoritative — use these classifications verbatim; do NOT recompute or re-derive them from the raw numbers elsewhere in this context) ==='].concat(L);
+}
 function buildWeatherContext(){
   const parts=[];
   const now=new Date();
@@ -382,6 +464,7 @@ function buildWeatherContext(){
   if(S.locName)parts.push(`Location: ${S.locName} (${S.lat?.toFixed(4)}, ${S.lon?.toFixed(4)})`);
   parts.push(`Scan radius: ${S.radarMetric?(S.scanRadius*1.60934).toFixed(0)+' km':S.scanRadius+' miles'}`);
   parts.push(`USER UNITS: temperature=${TEMP_UNITS[S.tempUnit]}, wind=${WIND_UNITS[S.windUnit]}, pressure=${PRES_UNITS[S.presUnit]}, visibility=${VIS_UNITS[S.visUnit]}, precipitation=${PRECIP_UNITS[S.precipUnit]}, distance=${S.radarMetric?'km':'mi'}`);
+  try{const _df=_aiDerivedFacts();if(_df.length)parts.push(..._df)}catch(e){}
 
   try{
   if(S.weather){
@@ -717,8 +800,12 @@ function buildWeatherContext(){
           eta=`, part of a broader rain band — no fixed ETA (cores may merge/weaken/regenerate before reaching you)`;
           miss='';
         }
-        const pct=b.closenessPct!=null?` (${b.closenessPct}% max intensity at user)`:'';
-        const estDbz=b.estDbzAtUser!=null?`, ~${b.estDbzAtUser} dBZ expected at user`:'';
+        // v6.94: this is TRACK CLOSENESS, not intensity. Mislabelling it
+        // "% max intensity at user" put an unresolvable contradiction in the
+        // context — 92% "intensity" beside "~15 dBZ expected" from a 45 dBZ
+        // cell — and the model repeated it verbatim, correctly.
+        const pct=b.closenessPct!=null?` (track closeness ${b.closenessPct}% — how centred the projected track is on you: 100% = dead-on, 50% = ~1.5 mi off. NOT an intensity figure)`:'';
+        const estDbz=b.estDbzAtUser!=null?`, expected intensity AT YOUR LOCATION ~${b.estDbzAtUser} dBZ (the cell's own peak is ${s.dbz} dBZ)`:'';
         const mov=(b.movSpdMph&&b.movDirDeg!=null)?` (motion ${degToDir(b.movDirDeg)} @ ${b.movSpdMph} mph)`:'';
         const _shm=(typeof stormMaster==='function')?(stormMaster(s).shear):null; // v6.1: convective shear/inflow read
         const shear=_shm?` [0–6km shear ${Math.round(_shm.bulkShearMs*2.237)} mph, ${_shm.tier} — ${_shm.trend}: ${_shm.note}]`:'';
@@ -980,7 +1067,7 @@ function buildWeatherContext(){
     if(stab.humid!=null)parts.push(`  Relative Humidity: ${stab.humid}%`);
     if(stab.dewp!=null)parts.push(`  Dew Point: ${fmtTemp(stab.dewp)}`);
     if(stab.temp!=null&&stab.dewp!=null)parts.push(`  Temp-Dewpoint Spread: ${fmtTempDiff(stab.temp-stab.dewp)}`);
-    parts.push(`\n2. ATMOSPHERIC STABILITY (${stab.stabRat}/10):`);
+    parts.push(`\n2. ATMOSPHERIC INSTABILITY (${stab.stabRat}/10 — HIGHER = MORE UNSTABLE, i.e. more favourable for storms. Never describe a high number here as "high stability"):`);
     parts.push(`  CAPE: ${stab.cape||0} J/kg`);
     parts.push(`  Lifted Index: ${stab.li!=null?stab.li.toFixed(1)+'°C ('+cToF(stab.li)+'°F)':'?'} (negative = unstable)`);
     if(stab.cin!=null)parts.push(`  Convective Inhibition (CIN): ${stab.cin} J/kg`);
@@ -990,7 +1077,13 @@ function buildWeatherContext(){
       const _shMs=(S._windShear.speedDiff!=null)?(S._windShear.speedDiff/3.6):null; // km/h → m/s
       const _shBand=_shMs==null?'':(_shMs<10?'weak (single-pulse cells)':_shMs<18?'moderate (organized multicell)':'strong (supercell-capable)');
       const _dirDiff=S._windShear.dirDiff||0;
-      const _mostly=_dirDiff<30?' — almost pure SPEED shear (winds nearly aligned; limited storm rotation)':_dirDiff<60?' — mixed speed + directional shear':' — strong DIRECTIONAL shear (favors rotating storms)';
+      // v6.94: only describe the KIND of shear once there is enough of it to
+      // have a kind. Below ~4 m/s the vector difference is noise, and calling
+      // that "almost pure speed shear" reads as a finding rather than an
+      // absence — the briefing said exactly that over a 1.8 mph difference.
+      const _mostly=(_shMs!=null&&_shMs<4)
+        ? ' — NEGLIGIBLE shear overall: neither speed nor directional shear is meaningful at this magnitude. Do not characterise the shear type; say there is essentially no deep-layer shear.'
+        : (_dirDiff<30?' — mostly SPEED shear (winds nearly aligned; limited storm rotation)':_dirDiff<60?' — mixed speed + directional shear':' — strong DIRECTIONAL shear (favors rotating storms)');
       parts.push(`  0–6 km bulk wind shear (vector): ${fmtWind(S._windShear.speedDiff)}${_shMs!=null?` (${_shMs.toFixed(1)} m/s / ${Math.round(_shMs*1.94384)} kt)`:''}, ${_dirDiff}° directional change`);
       if(_shBand)parts.push(`  Convective classification: ${_shBand}${_mostly}. Bands: <10 m/s weak · 10–18 moderate · ≥18 strong.`);
     }
@@ -1138,6 +1231,11 @@ How you communicate:
 - HEAT INDEX TIMING: heat-index / "feels-like" values apply to the AFTERNOON PEAK (see TODAY'S PEAK HEAT). Never derive a 100°+ heat index from the current or overnight temperature — state the peak value with its approximate time of day (e.g. "heat index near 103°F this afternoon, around 3 PM"), and keep the current/overnight temperature separate.
 - Rip Current Statements: if an alert with event "Rip Current Statement" appears in ACTIVE NWS ALERTS, include the exact expiration time from the alert's Ends/Expires field. Do not paraphrase to "later today".
 - Aviation section: when storms within ~30 mi are APPROACHING DIRECTLY or NEAR MISS, lead with convective hazards (turbulence, lightning, IFR in TSRA, possible convective downdrafts) rather than the VFR/MVFR ceiling-visibility category. It is misleading to call conditions VFR while thunderstorms are expected — if you mention the flight category, immediately qualify it with the convective threat.
+- NEVER REUSE A NUMBER IN A DIFFERENT UNIT. A figure keeps the unit it was given in. Marine zone names carry DISTANCES ("waters from X out 20 NM", "20 to 60 NM") — those are how far offshore the zone lies, NOT wind speeds; writing "winds 20-60 kts" from a "20-60 NM" zone is a serious safety error. The same rule covers dBZ vs percent, miles vs minutes, feet vs metres, and closeness vs probability: if you did not receive a number in the unit you are about to write, do not write it.
+- USE THE DERIVED FACTS BLOCK. Where DERIVED FACTS gives a classification (flight_category, instability_class, shear_class, storm_impact_dbz, track_closeness_pct), state THAT — do not re-derive it from the raw numbers elsewhere in the context, and do not contradict it. If a raw number seems to disagree with a derived fact, the derived fact wins and the discrepancy is not worth narrating.
+- INSTABILITY vs STABILITY: negative Lifted Index and high CAPE mean the atmosphere is UNSTABLE. A high instability rating is never "high stability". Say "moderately unstable" / "strongly unstable", and tie it to the numbers.
+- SHEAR NEEDS MAGNITUDE BEFORE IT HAS A TYPE: only call shear "speed" or "directional" when shear_class is weak or above. When shear_class is negligible, say there is essentially no deep-layer shear — do not name a type, which reads as a finding when it is an absence.
+- STORM INTENSITY — TWO DIFFERENT NUMBERS: a cell's peak dBZ describes the cell where it is now; storm_impact_dbz describes what reaches YOU. Lead with the impact figure when saying what the user will experience, and never present a track-closeness percentage as an intensity, a probability, or a confidence.
 - AVIATION — CEILING & ICING DISCIPLINE: a "ceiling" is the lowest BROKEN or OVERCAST layer in the METAR. If the observation shows only FEW/SCT, there is NO ceiling — do not report one, and never present model cloud cover as an observed ceiling (if you use it, label it "model estimate"). Do NOT mention icing unless the data actually supports it (a freezing level low enough to matter for the altitudes being discussed, or an icing AIRMET) — warm-season low-level flight around convection is a turbulence/downdraft story, not an icing story. Don't assert "no turbulence expected outside convection" as a fact; attribute it ("no turbulence indicators in this data — check PIREPs/AIRMETs").
 - AVIATION — EVIDENCE-GATE THE STRONG CLAIMS: do NOT assert "severe turbulence", "microbursts", or a categorical no-go ("do not attempt VFR", "remain grounded until 6 PM") unless the data supports it (a SIGMET/AIRMET, PIREP, TAF, active NWS warning, or a strong shear/DCAPE signal). With weak shear and reflectivity alone, say "possible convective downdrafts and turbulence near the cells" and recommend the pilot obtain an official FAA/1800wxbrief briefing, current TAFs and SIGMETs before flight — frame it as "VFR flight through the rainband window would carry substantial risk", not a personal dispatch order. Do NOT promise conditions improve after a specific clock hour unless a TAF or forecast explicitly says so.
 - Marine section: when storms are approaching or grazing, explicitly note that gusty outflow winds (and a possible wind shift) may arrive before the storm core itself reaches the coast/water. Boaters should reduce sail and seek shelter ahead of the visible cell.

@@ -1481,6 +1481,7 @@ function openPopup3D(cell, cx, cy) {
 
 function onClick3D(e) {
   if (!V3D.ready) return;
+  if (V3D._suppressClickUntil && Date.now() < V3D._suppressClickUntil) return;  // v6.96: drag, not a tap
   var rect = V3D.renderer.domElement.getBoundingClientRect();
   V3D.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   V3D.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1663,11 +1664,14 @@ function _initLightingBtn() {
 // ═══════════════════════════════════════════════════════════════════════════
 V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   compass: null, hasAbs: false, yawFix: 0, trim: 0, hint: null, hintTimer: null,
-  dragX: null, ts: null, tm: null, te: null, vis: null };
+  dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
+  pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
+  prevFov: null, fade: null, ground: null };
 
 function toggleARMode3D() {
   if (V3D.ar.active) { _arExit(); return; }
-  if (!V3D.ready) return;
+  if (!V3D.ready || V3D.ar.pending) return;
+  V3D.ar.pending = true;
   // iOS choreography: DeviceOrientationEvent.requestPermission() must run
   // SYNCHRONOUSLY inside the tap gesture — so it goes first; getUserMedia
   // tolerates being past the await.
@@ -1678,7 +1682,7 @@ function toggleARMode3D() {
     motionP = Promise.resolve(true);
   }
   motionP.then(function (motion) {
-    if (!motion) { _arHint('Motion access was denied — AR needs the compass/gyro to aim the view. Re-enable it in Settings › Safari › Motion & Orientation.', 6000); return; }
+    if (!motion) { V3D.ar.pending = false; _arHint('Motion access was denied — AR needs the compass/gyro to aim the view. Close and reopen the app (or this tab) to be asked again.', 6000); return; }
     var gum = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
       ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
       : Promise.reject(new Error('mediaDevices unavailable'));
@@ -1696,11 +1700,16 @@ function toggleARMode3D() {
 }
 
 function _arEnter(stream) {
-  if (V3D.ar.active) return;
+  V3D.ar.pending = false;
   var container = document.getElementById('view3d-container');
-  if (!container) { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+  if (V3D.ar.active || !V3D.active || !container) {
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    return;
+  }
   _setCamMode('fixed');            // camera at the user's spot; FOV pinch stays live
   var ar = V3D.ar;
+  ar.prevFov = V3D._fov;
+  _setFov(64);                     // ≈ a phone main camera's vertical FOV in portrait; pinch to fine-tune
   ar.active = true; ar.stream = stream || null;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false;
   V3D.controls.enabled = false;    // sensors own the look direction now
@@ -1713,6 +1722,18 @@ function _arEnter(stream) {
     container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
     var p = v.play(); if (p && p.catch) p.catch(function () {});
     ar.video = v;
+    var fadeEl = document.createElement('div');
+    fadeEl.id = 'v3d-ar-fade';
+    fadeEl.style.cssText = 'position:absolute;left:0;right:0;top:-100%;height:300%;z-index:0;pointer-events:none;will-change:transform;' +
+      'background:linear-gradient(to bottom,rgba(5,10,20,0) 44%,rgba(5,10,20,0.55) 50%,rgba(5,10,20,0.94) 56%,rgba(5,10,20,0.96) 100%)';
+    container.insertBefore(fadeEl, cv || null);   // above the video, below the canvas
+    ar.fade = fadeEl;
+    var vt = stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+    if (vt) {
+      ar.vtrack = vt;
+      ar.trackEnd = function () { _arExit(); };
+      vt.addEventListener('ended', ar.trackEnd);
+    }
     // hide everything that would paint over the real world; cells, labels,
     // cones, rings and cardinal markers stay — they ARE the overlay
     if (V3D.skyDome) V3D.skyDome.visible = false;
@@ -1739,13 +1760,26 @@ function _arEnter(stream) {
   ar.tm = function (e) {
     if (ar.dragX == null || !e.touches || e.touches.length !== 1) return;
     var x = e.touches[0].clientX;
+    if (Math.abs(x - ar.dragX) > 2) ar.dragged = true;
     ar.trim -= (x - ar.dragX) * 0.12;
     ar.dragX = x;
   };
-  ar.te = function () { ar.dragX = null; };
+  ar.te = function () {
+    ar.dragX = null;
+    // the canvas touchend handler turns every lift into a raycast tap —
+    // a trim drag must not open a storm popup at the lift point
+    if (ar.dragged) { V3D._suppressClickUntil = Date.now() + 350; ar.dragged = false; }
+  };
   dom.addEventListener('touchstart', ar.ts, true);
   dom.addEventListener('touchmove', ar.tm, true);
   dom.addEventListener('touchend', ar.te, true);
+  if (stream) _arBuildGround();
+  ar.sensorTimer = setTimeout(function () {
+    if (ar.active && !ar.evt) {
+      ar.noSensor = true;
+      _arHint('No motion sensors detected — drag sideways to look around.', 5000);
+    }
+  }, 2500);
   // backgrounding the app must not leave the camera held — exit AR outright
   // (re-entering is one tap, and a stale sensor/camera session isn't worth it)
   ar.vis = function () { if (document.hidden) _arExit(); };
@@ -1763,6 +1797,8 @@ function _arExit() {
   ar.active = false;
   if (ar.stream) { ar.stream.getTracks().forEach(function (t) { t.stop(); }); ar.stream = null; }
   if (ar.video) { try { ar.video.srcObject = null; ar.video.remove(); } catch (e) {} ar.video = null; }
+  if (ar.fade) { try { ar.fade.remove(); } catch (e) {} ar.fade = null; }
+  _arDisposeGround();
   if (ar.handler) {
     window.removeEventListener('deviceorientation', ar.handler, true);
     window.removeEventListener('deviceorientationabsolute', ar.handler, true);
@@ -1775,6 +1811,10 @@ function _arExit() {
     if (ar.te) dom.removeEventListener('touchend', ar.te, true);
   }
   ar.ts = ar.tm = ar.te = null; ar.evt = null;
+  if (ar.vtrack) { if (ar.trackEnd) ar.vtrack.removeEventListener('ended', ar.trackEnd); ar.vtrack = null; ar.trackEnd = null; }
+  if (ar.sensorTimer) { clearTimeout(ar.sensorTimer); ar.sensorTimer = null; }
+  ar.noSensor = false; ar.pending = false;
+  if (ar.prevFov != null) { _setFov(ar.prevFov); ar.prevFov = null; }
   if (ar.vis) { document.removeEventListener('visibilitychange', ar.vis, true); ar.vis = null; }
   if (V3D.skyDome) V3D.skyDome.visible = true;
   if (V3D.groundMesh) V3D.groundMesh.visible = true;
@@ -1792,7 +1832,19 @@ function _arExit() {
 var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null;
 function _arApplyOrientation() {
   var ar = V3D.ar, e = ar.evt;
-  if (!e || e.a == null || e.b == null || e.g == null) return;  // hold last pose until sensors speak
+  if (!e || e.a == null || e.b == null || e.g == null) {
+    if (ar.noSensor && _AR_UP) {
+      // no motion sensors at all (desktop): drag-to-look, level pitch
+      V3D.camera.quaternion.setFromAxisAngle(_AR_UP, -ar.trim * Math.PI / 180);
+      V3D.camera.position.set(0, 0.15, 0);
+      _AR_FWD.set(0, 0, -1).applyQuaternion(V3D.camera.quaternion);
+      V3D.controls.target.set(_AR_FWD.x * 0.05, 0.15 + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
+      _arPlaceFade(_AR_FWD.y);
+    } else if (ar.noSensor && !_AR_UP) {
+      _AR_UP = new THREE.Vector3(0, 1, 0); _AR_FWD = new THREE.Vector3();
+    }
+    return;  // otherwise hold last pose until sensors speak
+  }
   if (!_AR_EUL) {
     _AR_EUL = new THREE.Euler(); _AR_QS = new THREE.Quaternion();
     _AR_Q0 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));  // -90° about X: device flat → camera out the back
@@ -1810,7 +1862,16 @@ function _arApplyOrientation() {
   // own heading against the absolute compass and converge slowly (no snapping).
   _AR_FWD.set(0, 0, -1).applyQuaternion(q);
   var rawHdg = (Math.atan2(_AR_FWD.x, -_AR_FWD.z) * 180 / Math.PI + 360) % 360;
-  if (ar.compass != null) {
+  // Servo gating (v6.96):
+  // - Android absolute events carry an earth-referenced alpha, so the pose
+  //   quaternion is ALREADY absolute — servoing it against a device-top heading
+  //   would steer it wrong in any non-portrait pose. Servo off; trim remains.
+  // - webkitCompassHeading is referenced to the device TOP in portrait; in
+  //   landscape it is ~90° off the view azimuth, and near the zenith/nadir its
+  //   horizontal projection degenerates and can flip. Servo only in portrait
+  //   with the view within ±55° of level; otherwise hold the converged yawFix.
+  var fwdPitch = Math.asin(Math.max(-1, Math.min(1, _AR_FWD.y))) * 180 / Math.PI;
+  if (ar.compass != null && !ar.hasAbs && scr === 0 && Math.abs(fwdPitch) < 55) {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
     ar.yawFix += diff * 0.04;
   }
@@ -1820,6 +1881,120 @@ function _arApplyOrientation() {
   // the raycaster and the sprite distance-scaling all keep working untouched
   _AR_FWD.set(0, 0, -1).applyQuaternion(q);
   V3D.controls.target.set(_AR_FWD.x * 0.05, 0.15 + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
+  _arPlaceFade(_AR_FWD.y);
+}
+
+// v6.96: slide the horizon fade so its midpoint tracks where level (pitch 0)
+// projects on screen. Clamped so extreme pitches park the fade off-screen
+// (all-video looking up, all-dark looking down) instead of inverting.
+function _arPlaceFade(fwdY) {
+  var ar = V3D.ar;
+  if (!ar.fade || !V3D.renderer) return;
+  var H = V3D.renderer.domElement.clientHeight || 1;
+  var pitch = Math.asin(Math.max(-1, Math.min(1, fwdY)));
+  var halfTan = Math.tan((V3D._fov || 64) * Math.PI / 360);
+  var yH = H / 2 * (1 + Math.tan(pitch) / halfTan);
+  yH = Math.max(-H, Math.min(2 * H, yH));
+  // fade element spans -H..+2H with its gradient midpoint at its centre (H/2
+  // into the container when untranslated) → translate by (yH − H/2)
+  var ty = Math.round(yH - H / 2);
+  if (ty !== ar._fadeTy) { ar._fadeTy = ty; ar.fade.style.transform = 'translateY(' + ty + 'px)'; }
+}
+
+
+// ═══ v6.96: AR local terrain — a real-elevation ground table around the user ═══
+// Pattern borrowed from Visual-Sensor-Studio's terrain module (terrarium tiles
+// at a fixed zoom, a small aligned tile window, hole-tolerant assembly, datum-
+// relative heights): a ~6-mile-radius patch centred on the user, elevations
+// from AWS terrarium z=12 (~30 m, SRTM's native resolution) and the current
+// basemap as its texture, rendered as a semi-transparent tactical table below
+// the horizon fade. Uses S.lat/S.lon, so it follows GPS or a typed location.
+var _AR_GROUND_GEN = 0;
+function _arBuildGround() {
+  var ar = V3D.ar;
+  if (!ar.active || !ar.stream || ar.ground || S.lat == null) return;
+  var gen = ++_AR_GROUND_GEN;
+  var lat = S.lat, lon = S.lon;
+  function tileXY(la, lo, z) {
+    var scale = Math.pow(2, z), r = Math.max(-85.05, Math.min(85.05, la)) * Math.PI / 180;
+    return { x: (lo + 180) / 360 * scale, y: (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * scale };
+  }
+  function tileLatLon(x, y, z) {
+    var scale = Math.pow(2, z), n = Math.PI - 2 * Math.PI * y / scale;
+    return { lat: 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))), lon: x / scale * 360 - 180 };
+  }
+  // 5×5 basemap tiles at z=13 centred on the user (~21 km across at 30°N);
+  // the covering terrarium window at z=12 is those bounds' parent tiles (≤3×3)
+  var ZT = 13, ZE = 12;
+  var c13 = tileXY(lat, lon, ZT);
+  var minX13 = Math.floor(c13.x) - 2, maxX13 = Math.floor(c13.x) + 2;
+  var minY13 = Math.floor(c13.y) - 2, maxY13 = Math.floor(c13.y) + 2;
+  var nw = tileLatLon(minX13, minY13, ZT), se = tileLatLon(maxX13 + 1, maxY13 + 1, ZT);
+  var minX12 = Math.floor(minX13 / 2), maxX12 = Math.floor(maxX13 / 2);
+  var minY12 = Math.floor(minY13 / 2), maxY12 = Math.floor(maxY13 / 2);
+  var exW = (maxX12 - minX12 + 1), exH = (maxY12 - minY12 + 1);
+  var ecv = document.createElement('canvas'); ecv.width = exW * 256; ecv.height = exH * 256;
+  var ectx = ecv.getContext('2d', { willReadFrequently: true });
+  var tcv = document.createElement('canvas'); tcv.width = 5 * 256; tcv.height = 5 * 256;
+  var tctx = tcv.getContext('2d');
+  tctx.fillStyle = '#0a1020'; tctx.fillRect(0, 0, tcv.width, tcv.height);
+  var jobs = [];
+  for (var ey = minY12; ey <= maxY12; ey++) for (var ex = minX12; ex <= maxX12; ex++) (function (ex, ey) {
+    jobs.push(loadImgCors3D('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/' + ZE + '/' + ex + '/' + ey + '.png')
+      .then(function (img) { if (img) ectx.drawImage(img, (ex - minX12) * 256, (ey - minY12) * 256); }));
+  })(ex, ey);
+  for (var ty = minY13; ty <= maxY13; ty++) for (var tx = minX13; tx <= maxX13; tx++) (function (tx, ty) {
+    var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(ZT, tx, ty) : '';
+    if (!url) return;
+    jobs.push(loadImgCors3D(url)
+      .then(function (img) { if (img) tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); }));
+  })(tx, ty);
+  Promise.all(jobs).then(function () {
+    if (gen !== _AR_GROUND_GEN || !ar.active || !ar.stream) return;   // AR exited or re-entered meanwhile
+    var ed;
+    try { ed = ectx.getImageData(0, 0, ecv.width, ecv.height).data; } catch (e) { return; }
+    function elevAt(la, lo) {
+      var t = tileXY(la, lo, ZE);
+      var px = Math.round((t.x - minX12) * 256), py = Math.round((t.y - minY12) * 256);
+      px = Math.max(0, Math.min(ecv.width - 1, px)); py = Math.max(0, Math.min(ecv.height - 1, py));
+      var i = (py * ecv.width + px) * 4;
+      if (ed[i] === 0 && ed[i + 1] === 0 && ed[i + 2] === 0) return null;   // hole (failed/ocean tile)
+      return ed[i] * 256 + ed[i + 1] + ed[i + 2] / 256 - 32768;
+    }
+    var datum = elevAt(lat, lon); if (datum == null) datum = 0;
+    var nwS = geoToScene3D(nw.lat, nw.lon), seS = geoToScene3D(se.lat, se.lon);
+    var plW = seS.x - nwS.x, plD = seS.z - nwS.z;
+    var SEG = 95;
+    var geo = new THREE.PlaneGeometry(plW, plD, SEG, SEG);
+    geo.rotateX(-Math.PI / 2);
+    var pos = geo.attributes.position;
+    for (var i = 0; i < pos.count; i++) {
+      var fx = (pos.getX(i) - (-plW / 2)) / plW, fz = (pos.getZ(i) - (-plD / 2)) / plD;
+      var la = nw.lat + (se.lat - nw.lat) * fz, lo = nw.lon + (se.lon - nw.lon) * fx;
+      var el = elevAt(la, lo);
+      pos.setY(i, el == null ? 0 : Math.max(-0.5, Math.min(8, (el - datum) * 0.001)));
+    }
+    geo.computeVertexNormals();
+    var tex = new THREE.CanvasTexture(tcv);
+    var mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.55, depthWrite: false });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set((nwS.x + seS.x) / 2, 0, (nwS.z + seS.z) / 2);
+    mesh.renderOrder = -1;                     // under the storm cells/halos
+    if (gen !== _AR_GROUND_GEN || !ar.active) { geo.dispose(); mat.dispose(); tex.dispose(); return; }
+    ar.ground = mesh;
+    V3D.scene.add(mesh);
+  });
+}
+function _arDisposeGround() {
+  _AR_GROUND_GEN++;                            // invalidate any in-flight build
+  var ar = V3D.ar;
+  if (!ar.ground) return;
+  try {
+    V3D.scene.remove(ar.ground);
+    if (ar.ground.geometry) ar.ground.geometry.dispose();
+    if (ar.ground.material) { if (ar.ground.material.map) ar.ground.material.map.dispose(); ar.ground.material.dispose(); }
+  } catch (e) {}
+  ar.ground = null;
 }
 
 function _arHint(html, ms) {
@@ -1835,7 +2010,11 @@ function _arHint(html, ms) {
   ar.hint.innerHTML = html;
   ar.hint.style.opacity = '1';
   if (ar.hintTimer) clearTimeout(ar.hintTimer);
-  ar.hintTimer = setTimeout(function () { if (ar.hint) ar.hint.style.opacity = '0'; }, ms || 5000);
+  ar.hintTimer = setTimeout(function () {
+    if (!ar.hint) return;
+    ar.hint.style.opacity = '0';
+    if (!ar.active) { var h = ar.hint; ar.hint = null; setTimeout(function () { try { h.remove(); } catch (e) {} }, 500); }
+  }, ms || 5000);
 }
 
 function deactivate3DView() {

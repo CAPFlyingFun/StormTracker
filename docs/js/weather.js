@@ -92,7 +92,14 @@ function _blendOMModels(gfs,hrrr){
   return out;
 }
 async function _fetchOMModels(host,omPath,isUS){
-  const _getJSON=url=>fetch(url,{signal:AbortSignal.timeout(12000)}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+  // v7.12: read as text and parse ourselves — a 200 carrying a non-JSON body
+  // (edge/challenge/maintenance page) is a provider failure with a readable
+  // reason, not Safari's opaque "string did not match the expected pattern"
+  const _getJSON=url=>fetch(url,{signal:AbortSignal.timeout(12000)}).then(async r=>{
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const txt=await r.text();
+    try{return JSON.parse(txt)}catch(e){console.warn('OM non-JSON body (HTTP '+r.status+'): '+JSON.stringify(String(txt).slice(0,120)));throw new Error('non-JSON body (HTTP '+r.status+')')}
+  });
   const base='https://'+host+'/v1/forecast'+omPath;
   const [_gfsRes,_hrrrRes]=await Promise.allSettled([
     _getJSON(base+'&models=gfs_seamless'),
@@ -307,7 +314,8 @@ async function _fetchMetNo(lat,lon){
   const url='https://api.met.no/weatherapi/locationforecast/2.0/complete?lat='+(+lat).toFixed(4)+'&lon='+(+lon).toFixed(4);
   const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
   if(!r.ok)throw new Error('HTTP '+r.status);
-  const j=await r.json();
+  const txt=await r.text();
+  let j=null;try{j=JSON.parse(txt)}catch(e){console.warn('MET Norway non-JSON body: '+JSON.stringify(String(txt).slice(0,120)));throw new Error('non-JSON body (HTTP '+r.status+')')}
   const om=_metNoToOm(j,lat,lon);
   console.log('MET Norway ✓ '+om.hourly.time.length+' hourly steps, '+om.daily.time.length+' days');
   return{blended:om,host:'met.no',_met:true,gfs:null,hrrr:null};

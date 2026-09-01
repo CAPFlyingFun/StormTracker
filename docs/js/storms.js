@@ -872,7 +872,21 @@ async function fetchWindsAloft(overrideLat,overrideLon){
           if(rr.status>=500&&rr.status<600&&i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
           break;
         }
-        r=rr;usedHost=host.tag;
+        // v7.12: parse HERE. A 200 with a non-JSON body (edge/challenge page,
+        // truncated reply) used to throw from r.json() BELOW the loop — past the
+        // sibling host and past the NOMADS fallback, straight into the outer
+        // catch. On Safari that surfaced as "The string did not match the
+        // expected pattern" (WebKit's wording for a failed .json()) and winds
+        // never recovered, even though NOMADS was fine. Now it's a host failure.
+        const txt=await rr.text();
+        let parsed=null;try{parsed=JSON.parse(txt)}catch(pe){parsed=null}
+        if(!parsed||typeof parsed!=='object'||!parsed.current){
+          lastErr=new Error(host.fqdn+' returned '+(parsed?'no current block':'non-JSON')+' (HTTP '+rr.status+')');
+          console.log('Winds aloft: '+lastErr.message+(parsed?'':' — body starts: '+JSON.stringify(String(txt).slice(0,100))));
+          if(i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
+          break;
+        }
+        r=parsed;usedHost=host.tag;
         if(i>0)console.log('Winds aloft: fell over to '+host.fqdn+' successfully');
         break;
       }catch(e){
@@ -884,7 +898,7 @@ async function fetchWindsAloft(overrideLat,overrideLon){
     }
     let aloftSpeeds=null,provInfo=null;
     if(r){
-      const d=await r.json();
+      const d=r;                       // already parsed + validated in the loop
       const c=d.current;
       const levels=[
         {p:1013,sk:'wind_speed_10m',dk:'wind_direction_10m',w:0.5,isSfc:true},

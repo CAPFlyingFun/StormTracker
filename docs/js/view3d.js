@@ -1829,7 +1829,7 @@ function _arExit() {
 }
 
 // scratch objects — loop3D calls this every frame, so no per-frame allocation
-var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null;
+var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null, _AR_DTOP = null;
 function _arApplyOrientation() {
   var ar = V3D.ar, e = ar.evt;
   if (!e || e.a == null || e.b == null || e.g == null) {
@@ -1857,6 +1857,14 @@ function _arApplyOrientation() {
   q.setFromEuler(_AR_EUL);
   q.multiply(_AR_Q0);
   q.multiply(_AR_QS.setFromAxisAngle(_AR_ZEE, -scr * D2R)); // undo screen rotation
+  // device TOP in Y-up world: the camera frame coincides with the device frame
+  // in portrait, and the scr correction re-rolled the camera relative to the
+  // device — so the device top is the SCREEN-frame up rotated back by scr,
+  // pushed through the finished pose. (Computing this from the raw W3C euler
+  // instead lands in the wrong frame and reads upright portrait as sideways.)
+  if (!_AR_DTOP) _AR_DTOP = new THREE.Vector3();
+  var scrR = scr * D2R;
+  _AR_DTOP.set(-Math.sin(scrR), Math.cos(scrR), 0).applyQuaternion(q);
   // servo the yaw so scene-north (-z, TRUE north per geoToScene3D) tracks the
   // real compass: raw alpha has an arbitrary zero on iOS, so compare the pose's
   // own heading against the absolute compass and converge slowly (no snapping).
@@ -1871,7 +1879,22 @@ function _arApplyOrientation() {
   //   horizontal projection degenerates and can flip. Servo only in portrait
   //   with the view within ±55° of level; otherwise hold the converged yawFix.
   var fwdPitch = Math.asin(Math.max(-1, Math.min(1, _AR_FWD.y))) * 180 / Math.PI;
-  if (ar.compass != null && !ar.hasAbs && scr === 0 && Math.abs(fwdPitch) < 55) {
+  var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
+  if (servoOK) {
+    // physical-attitude gate (v6.97): the compass reference follows the device
+    // TOP, which matches the view azimuth only when the top points near the
+    // zenith (upright portrait) or its horizontal projection aligns with the
+    // view (shallow tilts). A sideways hold — even under a portrait-locked
+    // screen, where scr stays 0 — puts the top perpendicular to the view and
+    // the compass ~90° off: freeze and let the converged yawFix + trim carry.
+    var dty = Math.abs(_AR_DTOP.y);
+    if (dty < 0.6) {
+      var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z) || 1;
+      var fm = Math.sqrt(_AR_FWD.x * _AR_FWD.x + _AR_FWD.z * _AR_FWD.z) || 1;
+      if ((_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm) < 0.8) servoOK = false;
+    }
+  }
+  if (servoOK) {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
     ar.yawFix += diff * 0.04;
   }
@@ -1937,17 +1960,20 @@ function _arBuildGround() {
   var ectx = ecv.getContext('2d', { willReadFrequently: true });
   var tcv = document.createElement('canvas'); tcv.width = 5 * 256; tcv.height = 5 * 256;
   var tctx = tcv.getContext('2d');
-  tctx.fillStyle = '#0a1020'; tctx.fillRect(0, 0, tcv.width, tcv.height);
+  tctx.fillStyle = '#1a2318'; tctx.fillRect(0, 0, tcv.width, tcv.height);
   var jobs = [];
   for (var ey = minY12; ey <= maxY12; ey++) for (var ex = minX12; ex <= maxX12; ex++) (function (ex, ey) {
     jobs.push(loadImgCors3D('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/' + ZE + '/' + ex + '/' + ey + '.png')
       .then(function (img) { if (img) ectx.drawImage(img, (ex - minX12) * 256, (ey - minY12) * 256); }));
   })(ex, ey);
   for (var ty = minY13; ty <= maxY13; ty++) for (var tx = minX13; tx <= maxX13; tx++) (function (tx, ty) {
-    var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(ZT, tx, ty) : '';
-    if (!url) return;
-    jobs.push(loadImgCors3D(url)
-      .then(function (img) { if (img) tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); }));
+    var sat = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + ZT + '/' + ty + '/' + tx;
+    jobs.push(loadImgCors3D(sat).then(function (img) {
+      if (img) { tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); return; }
+      var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(ZT, tx, ty) : '';
+      if (!url) return;
+      return loadImgCors3D(url).then(function (img2) { if (img2) tctx.drawImage(img2, (tx - minX13) * 256, (ty - minY13) * 256); });
+    }));
   })(tx, ty);
   Promise.all(jobs).then(function () {
     if (gen !== _AR_GROUND_GEN || !ar.active || !ar.stream) return;   // AR exited or re-entered meanwhile
@@ -1975,8 +2001,21 @@ function _arBuildGround() {
       pos.setY(i, el == null ? 0 : Math.max(-0.5, Math.min(8, (el - datum) * 0.001)));
     }
     geo.computeVertexNormals();
+    var nrm = geo.attributes.normal;
+    var cols = new Float32Array(pos.count * 3);
+    var sx = -0.45, sy = 0.78, sz = -0.35, sl = Math.sqrt(sx * sx + sy * sy + sz * sz);
+    sx /= sl; sy /= sl; sz /= sl;
+    for (var ci = 0; ci < pos.count; ci++) {
+      var d = Math.max(0, nrm.getX(ci) * sx + nrm.getY(ci) * sy + nrm.getZ(ci) * sz);
+      var b = 0.72 + 0.28 * d;
+      cols[ci * 3] = b; cols[ci * 3 + 1] = b; cols[ci * 3 + 2] = b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     var tex = new THREE.CanvasTexture(tcv);
-    var mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.55, depthWrite: false });
+    // v6.97: OPAQUE — the 55%-alpha table read as glass with the camera feed
+    // bleeding through it. Real ground occludes; depthWrite on so hills can
+    // also occlude storm geometry behind them.
+    var mat = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, depthWrite: true });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.position.set((nwS.x + seS.x) / 2, 0, (nwS.z + seS.z) / 2);
     mesh.renderOrder = -1;                     // under the storm cells/halos

@@ -745,6 +745,7 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   S.stormMovement={direction:Math.round(dir),speed:spdMph};
   S._windCache={lat,lon,ts:Date.now(),dir:Math.round(dir),speed:spdMph,provider:providerInfo.provider,host:providerInfo.host||null};
   _saveWindsAloft(aloftSpeeds,providerInfo,lat,lon);   // v7.09: survives a relaunch
+  S._aloftRetryN=0;S._aloftLastErr=null;
   console.log('[WindsAloft] Per-level: '+aloftSpeeds.map(a=>a.p+'hPa='+a.rawMs.toFixed(1)+'m/s@'+a.dir+'°').join(', '));
   console.log('[WindsAloft] Steering ('+providerInfo.provider+(providerInfo.host?'/'+providerInfo.host:'')+'): '+steering.map(a=>a.p+'hPa').join(',')+' Vx='+ax.toFixed(2)+' Vy='+ay.toFixed(2)+' → '+spdKt.toFixed(1)+'kt '+Math.round(dir)+'° → '+spdMph+' mph');
   if(S.map&&S._showPathArrows)buildPathArrows(S.map);
@@ -919,37 +920,53 @@ async function fetchWindsAloft(overrideLat,overrideLon){
     if(!aloftSpeeds||aloftSpeeds.length<2){
       const msg=lastErr?lastErr.message:'all providers failed';
       console.log('Winds aloft: all providers failed ('+msg+')');
+      S._aloftLastErr=msg;
       if(typeof _bootStepFail==='function')_bootStepFail('wind','Winds aloft failed ('+msg+')');
       _scheduleWindsAloftRetry(lat,lon,0);
       return;
     }
     _applyAloftData(aloftSpeeds,provInfo,lat,lon);
-  }catch(e){console.log('Winds aloft fetch failed:',e.message);if(typeof _bootStepFail==='function')_bootStepFail('wind','Winds aloft failed');_scheduleWindsAloftRetry(lat,lon,0)}
+  }catch(e){console.log('Winds aloft fetch failed:',e.message);S._aloftLastErr=e.message;if(typeof _bootStepFail==='function')_bootStepFail('wind','Winds aloft failed');_scheduleWindsAloftRetry(lat,lon,0)}
 }
 // v4.58: background retry for winds aloft. Mirrors the Open-Meteo background
 // retry in weather.js — when every aloft provider times out on a slow
 // connection, schedule a fresh attempt instead of giving up until the next
 // autorefresh. Storm-cone projections (which use the aloft vector to predict
 // where cells will track) silently quietly went stale otherwise.
-const _ALOFT_RETRY_DELAYS=[6000,15000,30000,60000];
+// v7.11: winds-aloft retry is a steady 8 s cadence with NO cap (owner: "keep
+// trying winds every ~8 s, toast each failure, keep retrying"). The old
+// 6/15/30/60 s ladder gave up after four tries (~2 min) and then only the
+// 10-min watchdog remained — during an Open-Meteo outage that meant storm
+// motion stayed empty for most of the outage. Each attempt still walks the
+// full provider chain (Open-Meteo → sibling → NOMADS GFS), so "8 s" is the gap
+// AFTER an attempt settles. Pauses while the app is hidden; defers to the boot
+// gate while it is driving attempts (re-arms so the loop never dies).
+const _ALOFT_RETRY_MS=8000;
 function _scheduleWindsAloftRetry(lat,lon,attempt){
-  if(attempt>=_ALOFT_RETRY_DELAYS.length){console.log('Winds aloft retry: giving up after '+_ALOFT_RETRY_DELAYS.length+' attempts');return}
+  if(S._aloftRetryLat!==lat||S._aloftRetryLon!==lon){S._aloftRetryLat=lat;S._aloftRetryLon=lon;S._aloftRetryN=0}
   if(S._aloftRetryTimer){clearTimeout(S._aloftRetryTimer);S._aloftRetryTimer=null}
   S._aloftRetryTimer=setTimeout(async()=>{
     S._aloftRetryTimer=null;
     // Bail if the user has moved or the cache filled in via some other path.
     if(S.lat!==lat||S.lon!==lon)return;
     if(S._aloftData&&S._aloftData.length>=2)return;
-    console.log('Winds aloft retry '+(attempt+1)+'/'+_ALOFT_RETRY_DELAYS.length+'…');
-    const before=S._aloftData?S._aloftData.length:0;
-    await fetchWindsAloft(lat,lon);
+    if(typeof document!=='undefined'&&document.hidden){_scheduleWindsAloftRetry(lat,lon,attempt);return}   // resume when visible
+    if(S._waGatePromise){_scheduleWindsAloftRetry(lat,lon,attempt);return}                                  // the gate is driving right now
+    const n=(S._aloftRetryN||0)+1;S._aloftRetryN=n;
+    console.log('Winds aloft retry '+n+'…');
+    try{await fetchWindsAloft(lat,lon)}catch(e){}
+    if(S.lat!==lat||S.lon!==lon)return;
     if(S._aloftData&&S._aloftData.length>=2){
-      console.log('Winds aloft retry succeeded — refreshing ALL storm surfaces');
+      console.log('Winds aloft retry '+n+' succeeded — refreshing ALL storm surfaces');
+      if(typeof toast==='function')toast('💨 Winds aloft back (retry '+n+') — storm motion & ETAs updated');
+      S._aloftRetryN=0;
       _queueWindStormRefresh();   // v6.63: same dedup'd path _applyAloftData uses
-    } else if((S._aloftData?S._aloftData.length:0)===before) {
-      _scheduleWindsAloftRetry(lat,lon,attempt+1);
+    }else{
+      // fetchWindsAloft's failure path has already re-armed the next 8 s attempt
+      if(typeof toast==='function')toast('⚠️ Winds aloft attempt '+n+' failed'+(S._aloftLastErr?' ('+S._aloftLastErr+')':'')+' — retrying in 8 s');
+      if(!S._aloftRetryTimer)_scheduleWindsAloftRetry(lat,lon,attempt);
     }
-  },_ALOFT_RETRY_DELAYS[attempt]);
+  },_ALOFT_RETRY_MS);
 }
 // v5.29: complete storm-surface refresh for when winds aloft arrives AFTER a
 // scan already rendered (slow connection: the 30s gate fell through, or a
@@ -1048,6 +1065,8 @@ async function ensureWindsAloft(lat,lon,reqId){
       try{await fetchWindsAloft(lat,lon)}catch(e){}
       if(_waReady(lat,lon)){if(typeof _bootStepDone==='function')_bootStepDone('wind','Winds aloft ✓');return true}
       if(reqId!=null&&reqId!==S._locReqId)return false;
+      // v7.11: the boot-step strip is usually gone by now — say it out loud
+      if(typeof toast==='function')toast('⚠️ Winds aloft attempt '+attempt+' failed'+(S._aloftLastErr?' ('+S._aloftLastErr+')':'')+' — retrying');
       const remain=deadline-Date.now();
       if(remain<=0)break;
       await new Promise(r=>setTimeout(r,Math.min(_WA_GATE_PAUSE_MS,remain)));

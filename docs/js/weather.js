@@ -997,7 +997,9 @@ function renderWeather(data){
 
   const _omPartial=data._omPartial===true;
   const _omChip=_omPartial?'<span style="display:inline-block;font-size:0.55em;color:var(--accent-cyan);background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.3);border-radius:4px;padding:1px 5px;line-height:1.4;font-weight:600">⏳ Open-Meteo</span>':null;
-  const _omBanner=_omPartial?`<div style="margin-bottom:8px;padding:8px 10px;background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.25);border-radius:8px;font-size:0.7em;color:var(--text-secondary);text-align:center"><strong style="color:var(--accent-cyan)">⏳ Waiting on Open-Meteo</strong> — UV, freezing level, hourly bars and 7-day forecast will fill in once the service is back. Showing live NWS/AWC observations meanwhile.</div>`:'';
+  // v7.11: say what is ACTUALLY missing — with MET Norway in, the hourly bars
+  // and 7-day forecast are already on screen; only the Open-Meteo-only fields wait
+  const _omBanner=_omPartial?`<div style="margin-bottom:8px;padding:8px 10px;background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.25);border-radius:8px;font-size:0.7em;color:var(--text-secondary);text-align:center"><strong style="color:var(--accent-cyan)">⏳ Waiting on Open-Meteo</strong> — ${data._metFallback?'forecast is from <strong>MET Norway</strong> meanwhile; UV, freezing level and instability indices fill in when Open-Meteo is back.':'UV, freezing level, hourly bars and 7-day forecast will fill in once the service is back. Showing live NWS/AWC observations meanwhile.'}</div>`:'';
   const _humStr=c.relative_humidity_2m!=null?Math.min(100,c.relative_humidity_2m)+'%':(_omChip||'--');
   const _ccStr=c.cloud_cover!=null?c.cloud_cover+'%':(_omChip||'--');
   const _presStr=c.pressure_msl!=null?fmtPres(c.pressure_msl):(_omChip||'--');

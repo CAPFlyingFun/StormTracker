@@ -674,6 +674,169 @@ function _getSkyPeriod(now, rise, set) {
   return 'dusk';
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.98: SUN ☀️ & MOON 🌙 — real positions in the 3D sky
+// Standard low-precision solar/lunar ephemeris (the same public formulas
+// SunCalc popularised — accurate to a fraction of a degree, plenty for an
+// icon). Both bodies render as canvas-drawn icon sprites on the sky sphere at
+// their true azimuth/altitude for S.lat/S.lon at the current time, in normal
+// 3D AND in AR — where lining the ☀️ up with the actual sun is the quickest
+// possible compass check. Sun label shows the next rise/set time from the
+// Open-Meteo daily data refreshSky3D already reads; the moon label shows
+// phase + illumination. Updated on the refreshSky3D cadence (~once a minute).
+var _ASTRO_RAD = Math.PI / 180, _ASTRO_E = 23.4397 * Math.PI / 180;
+function _astroDays(t) { return t / 86400000 - 0.5 + 2440588 - 2451545; }
+function _astroRaDec(l, b) {
+  return {
+    ra: Math.atan2(Math.sin(l) * Math.cos(_ASTRO_E) - Math.tan(b) * Math.sin(_ASTRO_E), Math.cos(l)),
+    dec: Math.asin(Math.sin(b) * Math.cos(_ASTRO_E) + Math.cos(b) * Math.sin(_ASTRO_E) * Math.sin(l))
+  };
+}
+function _astroAzAlt(ra, dec, t, lat, lon) {
+  var lw = -lon * _ASTRO_RAD, phi = lat * _ASTRO_RAD;
+  var H = _ASTRO_RAD * (280.16 + 360.9856235 * _astroDays(t)) - lw - ra;
+  return {
+    az: (Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)) / _ASTRO_RAD + 180 + 360) % 360,
+    alt: Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H)) / _ASTRO_RAD
+  };
+}
+function _astroSunCoords(d) {
+  var M = _ASTRO_RAD * (357.5291 + 0.98560028 * d);
+  var L = M + _ASTRO_RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M) + 102.9372) + Math.PI;
+  return _astroRaDec(L, 0);
+}
+function _astroSun(t, lat, lon) {
+  var c = _astroSunCoords(_astroDays(t));
+  return _astroAzAlt(c.ra, c.dec, t, lat, lon);
+}
+function _astroMoon(t, lat, lon) {
+  var d = _astroDays(t);
+  var L = _ASTRO_RAD * (218.316 + 13.176396 * d);
+  var M = _ASTRO_RAD * (134.963 + 13.064993 * d);
+  var F = _ASTRO_RAD * (93.272 + 13.229350 * d);
+  var l = L + _ASTRO_RAD * 6.289 * Math.sin(M);
+  var b = _ASTRO_RAD * 5.128 * Math.sin(F);
+  var m = _astroRaDec(l, b);
+  var pos = _astroAzAlt(m.ra, m.dec, t, lat, lon);
+  // illumination: phase angle between sun and moon as seen from earth
+  var sc = _astroSunCoords(d);
+  var sdist = 149598000, mdist = 385001 - 20905 * Math.cos(M);
+  var phi = Math.acos(Math.sin(sc.dec) * Math.sin(m.dec) + Math.cos(sc.dec) * Math.cos(m.dec) * Math.cos(sc.ra - m.ra));
+  var inc = Math.atan2(sdist * Math.sin(phi), mdist - sdist * Math.cos(phi));
+  var angle = Math.atan2(Math.cos(sc.dec) * Math.sin(sc.ra - m.ra),
+    Math.sin(sc.dec) * Math.cos(m.dec) - Math.cos(sc.dec) * Math.sin(m.dec) * Math.cos(sc.ra - m.ra));
+  pos.fraction = (1 + Math.cos(inc)) / 2;
+  pos.phase = 0.5 + 0.5 * inc * (angle < 0 ? -1 : 1) / Math.PI;
+  return pos;
+}
+function _astroPhaseName(p) {
+  if (p < 0.03 || p > 0.97) return 'New Moon';
+  if (p < 0.22) return 'Waxing Crescent';
+  if (p < 0.28) return 'First Quarter';
+  if (p < 0.47) return 'Waxing Gibbous';
+  if (p < 0.53) return 'Full Moon';
+  if (p < 0.72) return 'Waning Gibbous';
+  if (p < 0.78) return 'Last Quarter';
+  return 'Waning Crescent';
+}
+function _astroSunTex() {
+  var cv2 = document.createElement('canvas'); cv2.width = cv2.height = 128;
+  var c = cv2.getContext('2d'), m = 64;
+  var g = c.createRadialGradient(m, m, 4, m, m, 62);
+  g.addColorStop(0, 'rgba(255,250,220,1)'); g.addColorStop(0.35, 'rgba(255,214,64,0.95)');
+  g.addColorStop(0.55, 'rgba(255,180,40,0.35)'); g.addColorStop(1, 'rgba(255,160,30,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  c.strokeStyle = 'rgba(255,220,90,0.9)'; c.lineWidth = 5; c.lineCap = 'round';
+  for (var i = 0; i < 8; i++) {
+    var a = i * Math.PI / 4;
+    c.beginPath();
+    c.moveTo(m + Math.cos(a) * 34, m + Math.sin(a) * 34);
+    c.lineTo(m + Math.cos(a) * 48, m + Math.sin(a) * 48);
+    c.stroke();
+  }
+  c.fillStyle = '#fff3c4'; c.beginPath(); c.arc(m, m, 24, 0, Math.PI * 2); c.fill();
+  return new THREE.CanvasTexture(cv2);
+}
+function _astroMoonTex(phase) {
+  var cv2 = document.createElement('canvas'); cv2.width = cv2.height = 128;
+  var c = cv2.getContext('2d'), m = 64, R = 44;
+  // night side first, lit shape on top: semicircle on the lit limb plus a
+  // terminator half-ellipse that bulges lit-side before quarter, dark-side after
+  c.fillStyle = '#3a4150'; c.beginPath(); c.arc(m, m, R, 0, Math.PI * 2); c.fill();
+  var waxing = phase <= 0.5;
+  var k = Math.cos(phase * 2 * Math.PI);       // +1 new … -1 full … +1 new
+  c.fillStyle = '#e8e4d8';
+  c.beginPath();
+  c.arc(m, m, R, -Math.PI / 2, Math.PI / 2, !waxing);          // lit limb: right if waxing
+  c.ellipse(m, m, Math.abs(k) * R, R, 0, Math.PI / 2, -Math.PI / 2, k < 0 ? !waxing : waxing);
+  c.fill();
+  // a few craters on the lit side for texture
+  c.fillStyle = 'rgba(150,148,138,0.5)';
+  [[18, -12, 7], [-8, 14, 5], [6, 26, 4], [-16, -20, 4]].forEach(function (cr) {
+    c.beginPath(); c.arc(m + cr[0], m + cr[1], cr[2], 0, Math.PI * 2); c.fill();
+  });
+  c.strokeStyle = 'rgba(232,228,216,0.35)'; c.lineWidth = 2;
+  c.beginPath(); c.arc(m, m, R, 0, Math.PI * 2); c.stroke();
+  return new THREE.CanvasTexture(cv2);
+}
+var _ASTRO_R = 600;   // on the sky sphere, inside the 750 dome
+function _astroPlace(spr, az, alt, r) {
+  var azR = az * _ASTRO_RAD, altR = alt * _ASTRO_RAD;
+  spr.position.set(r * Math.cos(altR) * Math.sin(azR), r * Math.sin(altR), -r * Math.cos(altR) * Math.cos(azR));
+}
+function _astroTick() {
+  if (!V3D.ready || S.lat == null || typeof THREE === 'undefined') return;
+  var A = V3D._astro;
+  if (!A) {
+    A = V3D._astro = { grp: new THREE.Group() };
+    A.sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: _astroSunTex(), transparent: true, depthWrite: false }));
+    A.sun.scale.set(46, 46, 1);
+    A.moonPhase = -1;
+    A.moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: null, transparent: true, depthWrite: false }));
+    A.moon.scale.set(34, 34, 1);
+    A.sunLbl = makeSprite3D('', 'rgba(255,225,120,0.95)', 4.5, true);
+    A.moonLbl = makeSprite3D('', 'rgba(220,225,235,0.9)', 4.5, true);
+    A.grp.add(A.sun); A.grp.add(A.moon); A.grp.add(A.sunLbl); A.grp.add(A.moonLbl);
+    V3D.scene.add(A.grp);
+  }
+  var t = Date.now();
+  var sun = _astroSun(t, S.lat, S.lon);
+  var moon = _astroMoon(t, S.lat, S.lon);
+  A.sun.visible = sun.alt > -3;
+  A.sunLbl.visible = A.sun.visible;
+  if (A.sun.visible) {
+    _astroPlace(A.sun, sun.az, sun.alt, _ASTRO_R);
+    _astroPlace(A.sunLbl, sun.az, Math.max(-2, sun.alt - 5.5), _ASTRO_R);
+    // next rise/set from the daily data refreshSky3D already trusts
+    var lbl = '';
+    try {
+      var dl = S._lastWeatherData && S._lastWeatherData.daily;
+      if (dl && dl.sunset && dl.sunset[0]) {
+        var st = new Date(dl.sunset[0]).getTime(), rt = dl.sunrise && dl.sunrise[0] ? new Date(dl.sunrise[0]).getTime() : 0;
+        lbl = (t < st) ? ('sets ' + fmtClock(new Date(st))) : (rt ? ('rose ' + fmtClock(new Date(rt))) : '');
+      }
+    } catch (e) {}
+    if (lbl !== A._sunLblTxt) { A._sunLblTxt = lbl; updateSpriteText3D(A.sunLbl, lbl, 'rgba(255,225,120,0.95)'); }
+    A.sunLbl.visible = !!lbl;
+  }
+  A.moon.visible = moon.alt > -3;
+  A.moonLbl.visible = A.moon.visible;
+  if (A.moon.visible) {
+    _astroPlace(A.moon, moon.az, moon.alt, _ASTRO_R);
+    _astroPlace(A.moonLbl, moon.az, Math.max(-2, moon.alt - 4.5), _ASTRO_R);
+    if (Math.abs(moon.phase - A.moonPhase) > 0.01) {
+      A.moonPhase = moon.phase;
+      var old = A.moon.material.map;
+      A.moon.material.map = _astroMoonTex(moon.phase);
+      A.moon.material.needsUpdate = true;
+      if (old) old.dispose();
+    }
+    var mTxt = _astroPhaseName(moon.phase) + ' ' + Math.round(moon.fraction * 100) + '%';
+    if (mTxt !== A._moonLblTxt) { A._moonLblTxt = mTxt; updateSpriteText3D(A.moonLbl, mTxt, 'rgba(220,225,235,0.9)'); }
+  }
+}
+
 function refreshSky3D() {
   var now = Date.now() / 1000;
   var rise = 0, set = 0;
@@ -728,6 +891,9 @@ function refreshSky3D() {
   V3D.skyMat.uniforms.uGround.value.copy(groundC); V3D.scene.fog.color.copy(horizC);
 
   _applyGlowIntensity();
+  // v6.98: the sun/moon ride the same cadence as the sky recolour (activate,
+  // ~once a minute in the loop, and each lighting-mode change)
+  try { _astroTick(); } catch (e) {}
 }
 
 // =====================================================
@@ -1666,7 +1832,8 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   compass: null, hasAbs: false, yawFix: 0, trim: 0, hint: null, hintTimer: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
-  prevFov: null, fade: null, ground: null };
+  prevFov: null, fade: null, ground: null, revealed: false, revealTimer: null,
+  progress: null, groundPending: false };
 
 function toggleARMode3D() {
   if (V3D.ar.active) { _arExit(); return; }
@@ -1714,9 +1881,12 @@ function _arEnter(stream) {
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false;
   V3D.controls.enabled = false;    // sensors own the look direction now
   if (stream) {
+    // v6.98: the video warms up INVISIBLE and the virtual sky stays painted
+    // until the terrain table has loaded — _arReveal() then swaps to
+    // passthrough and fades the camera in under the already-present ground.
     var v = document.createElement('video');
     v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
-    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000';
+    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000;opacity:0;transition:opacity .8s';
     v.srcObject = stream;
     var cv = document.getElementById('view3d-canvas');
     container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
@@ -1734,12 +1904,17 @@ function _arEnter(stream) {
       ar.trackEnd = function () { _arExit(); };
       vt.addEventListener('ended', ar.trackEnd);
     }
-    // hide everything that would paint over the real world; cells, labels,
-    // cones, rings and cardinal markers stay — they ARE the overlay
-    if (V3D.skyDome) V3D.skyDome.visible = false;
-    if (V3D.groundMesh) V3D.groundMesh.visible = false;
-    if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
-    V3D.renderer.setClearColor(0x000000, 0);
+    if (S.lat != null) {
+      var prog = document.createElement('div');
+      prog.id = 'v3d-ar-progress';
+      prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
+      prog.innerHTML = '<div id="v3d-ar-prog-label" style="font-size:10px;color:#e8eef8;margin-bottom:5px;text-align:center">Loading terrain — 0%</div>'
+        + '<div style="height:4px;border-radius:2px;background:rgba(0,200,255,0.15)"><div id="v3d-ar-prog-fill" style="height:100%;width:0%;border-radius:2px;background:#00c8ff;transition:width .2s"></div></div>';
+      container.appendChild(prog);
+      ar.progress = prog;
+    }
+    // failsafe: a stalled tile must never hold the camera reveal hostage
+    ar.revealTimer = setTimeout(function () { _arReveal(); }, 15000);
   }
   // one handler for both event names: iOS fires deviceorientation with
   // webkitCompassHeading; Android Chrome fires deviceorientationabsolute with
@@ -1773,7 +1948,7 @@ function _arEnter(stream) {
   dom.addEventListener('touchstart', ar.ts, true);
   dom.addEventListener('touchmove', ar.tm, true);
   dom.addEventListener('touchend', ar.te, true);
-  if (stream) _arBuildGround();
+  if (stream) { _arBuildGround(); if (!ar.groundPending) _arReveal(); }
   ar.sensorTimer = setTimeout(function () {
     if (ar.active && !ar.evt) {
       ar.noSensor = true;
@@ -1791,6 +1966,24 @@ function _arEnter(stream) {
     : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.', 6500);
 }
 
+
+// v6.98: swap from virtual sky to camera passthrough. Runs once per AR
+// session — when the terrain table finishes (or fails, or the 15 s failsafe
+// fires) — so the ground is already in place when the real world appears.
+function _arReveal() {
+  var ar = V3D.ar;
+  if (!ar.active || ar.revealed || !ar.stream) return;
+  ar.revealed = true;
+  if (ar.revealTimer) { clearTimeout(ar.revealTimer); ar.revealTimer = null; }
+  if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
+  // hide everything that would paint over the real world; cells, labels,
+  // cones, rings, cardinal markers and the sun/moon stay — they ARE the overlay
+  if (V3D.skyDome) V3D.skyDome.visible = false;
+  if (V3D.groundMesh) V3D.groundMesh.visible = false;
+  if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
+  V3D.renderer.setClearColor(0x000000, 0);
+  if (ar.video) { var vv = ar.video; requestAnimationFrame(function () { vv.style.opacity = '1'; }); }
+}
 function _arExit() {
   var ar = V3D.ar;
   if (!ar.active) return;
@@ -1813,7 +2006,9 @@ function _arExit() {
   ar.ts = ar.tm = ar.te = null; ar.evt = null;
   if (ar.vtrack) { if (ar.trackEnd) ar.vtrack.removeEventListener('ended', ar.trackEnd); ar.vtrack = null; ar.trackEnd = null; }
   if (ar.sensorTimer) { clearTimeout(ar.sensorTimer); ar.sensorTimer = null; }
-  ar.noSensor = false; ar.pending = false;
+  ar.noSensor = false; ar.pending = false; ar.revealed = false; ar.groundPending = false;
+  if (ar.revealTimer) { clearTimeout(ar.revealTimer); ar.revealTimer = null; }
+  if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
   if (ar.prevFov != null) { _setFov(ar.prevFov); ar.prevFov = null; }
   if (ar.vis) { document.removeEventListener('visibilitychange', ar.vis, true); ar.vis = null; }
   if (V3D.skyDome) V3D.skyDome.visible = true;
@@ -1937,7 +2132,16 @@ function _arBuildGround() {
   var ar = V3D.ar;
   if (!ar.active || !ar.stream || ar.ground || S.lat == null) return;
   var gen = ++_AR_GROUND_GEN;
+  ar.groundPending = true;
   var lat = S.lat, lon = S.lon;
+  var _done = 0, _total = 0;
+  function _tick() {
+    _done++;
+    var f = document.getElementById('v3d-ar-prog-fill'), l = document.getElementById('v3d-ar-prog-label');
+    var pct = Math.round(_done / Math.max(1, _total) * 100);
+    if (f) f.style.width = pct + '%';
+    if (l) l.textContent = 'Loading terrain — ' + pct + '%';
+  }
   function tileXY(la, lo, z) {
     var scale = Math.pow(2, z), r = Math.max(-85.05, Math.min(85.05, la)) * Math.PI / 180;
     return { x: (lo + 180) / 360 * scale, y: (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * scale };
@@ -1948,37 +2152,41 @@ function _arBuildGround() {
   }
   // 5×5 basemap tiles at z=13 centred on the user (~21 km across at 30°N);
   // the covering terrarium window at z=12 is those bounds' parent tiles (≤3×3)
+  // v6.98: 7×7 imagery tiles at z=13 (~30 km across at 30°N — the requested
+  // ~10-mile reach) with a per-tile loading bar; the camera reveal waits on us
   var ZT = 13, ZE = 12;
   var c13 = tileXY(lat, lon, ZT);
-  var minX13 = Math.floor(c13.x) - 2, maxX13 = Math.floor(c13.x) + 2;
-  var minY13 = Math.floor(c13.y) - 2, maxY13 = Math.floor(c13.y) + 2;
+  var minX13 = Math.floor(c13.x) - 3, maxX13 = Math.floor(c13.x) + 3;
+  var minY13 = Math.floor(c13.y) - 3, maxY13 = Math.floor(c13.y) + 3;
   var nw = tileLatLon(minX13, minY13, ZT), se = tileLatLon(maxX13 + 1, maxY13 + 1, ZT);
   var minX12 = Math.floor(minX13 / 2), maxX12 = Math.floor(maxX13 / 2);
   var minY12 = Math.floor(minY13 / 2), maxY12 = Math.floor(maxY13 / 2);
   var exW = (maxX12 - minX12 + 1), exH = (maxY12 - minY12 + 1);
   var ecv = document.createElement('canvas'); ecv.width = exW * 256; ecv.height = exH * 256;
   var ectx = ecv.getContext('2d', { willReadFrequently: true });
-  var tcv = document.createElement('canvas'); tcv.width = 5 * 256; tcv.height = 5 * 256;
+  var tcv = document.createElement('canvas'); tcv.width = 7 * 256; tcv.height = 7 * 256;
   var tctx = tcv.getContext('2d');
   tctx.fillStyle = '#1a2318'; tctx.fillRect(0, 0, tcv.width, tcv.height);
   var jobs = [];
   for (var ey = minY12; ey <= maxY12; ey++) for (var ex = minX12; ex <= maxX12; ex++) (function (ex, ey) {
     jobs.push(loadImgCors3D('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/' + ZE + '/' + ex + '/' + ey + '.png')
-      .then(function (img) { if (img) ectx.drawImage(img, (ex - minX12) * 256, (ey - minY12) * 256); }));
+      .then(function (img) { if (img) ectx.drawImage(img, (ex - minX12) * 256, (ey - minY12) * 256); _tick(); }));
   })(ex, ey);
   for (var ty = minY13; ty <= maxY13; ty++) for (var tx = minX13; tx <= maxX13; tx++) (function (tx, ty) {
     var sat = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + ZT + '/' + ty + '/' + tx;
     jobs.push(loadImgCors3D(sat).then(function (img) {
-      if (img) { tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); return; }
+      if (img) { tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); _tick(); return; }
       var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(ZT, tx, ty) : '';
-      if (!url) return;
-      return loadImgCors3D(url).then(function (img2) { if (img2) tctx.drawImage(img2, (tx - minX13) * 256, (ty - minY13) * 256); });
+      if (!url) { _tick(); return; }
+      return loadImgCors3D(url).then(function (img2) { if (img2) tctx.drawImage(img2, (tx - minX13) * 256, (ty - minY13) * 256); _tick(); });
     }));
   })(tx, ty);
+  _total = jobs.length;
   Promise.all(jobs).then(function () {
+    ar.groundPending = false;
     if (gen !== _AR_GROUND_GEN || !ar.active || !ar.stream) return;   // AR exited or re-entered meanwhile
     var ed;
-    try { ed = ectx.getImageData(0, 0, ecv.width, ecv.height).data; } catch (e) { return; }
+    try { ed = ectx.getImageData(0, 0, ecv.width, ecv.height).data; } catch (e) { _arReveal(); return; }
     function elevAt(la, lo) {
       var t = tileXY(la, lo, ZE);
       var px = Math.round((t.x - minX12) * 256), py = Math.round((t.y - minY12) * 256);
@@ -1990,7 +2198,7 @@ function _arBuildGround() {
     var datum = elevAt(lat, lon); if (datum == null) datum = 0;
     var nwS = geoToScene3D(nw.lat, nw.lon), seS = geoToScene3D(se.lat, se.lon);
     var plW = seS.x - nwS.x, plD = seS.z - nwS.z;
-    var SEG = 95;
+    var SEG = 127;
     var geo = new THREE.PlaneGeometry(plW, plD, SEG, SEG);
     geo.rotateX(-Math.PI / 2);
     var pos = geo.attributes.position;
@@ -2022,6 +2230,7 @@ function _arBuildGround() {
     if (gen !== _AR_GROUND_GEN || !ar.active) { geo.dispose(); mat.dispose(); tex.dispose(); return; }
     ar.ground = mesh;
     V3D.scene.add(mesh);
+    _arReveal();                                // ground is in — bring the real world up under it
   });
 }
 function _arDisposeGround() {

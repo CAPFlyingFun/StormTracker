@@ -1863,8 +1863,9 @@ function _arAltLabel() {
 // so the compass servo, drag trim, altitude presets and terrain build are
 // shared, and only the passthrough/reveal differ.
 function toggleVRMode3D() {
-  if (V3D.ar.active) { _arExit(); return; }        // exits AR or VR alike
+  if (V3D.ar.active && V3D.ar.vr) { _arExit(); return; }   // VR again → off
   if (!V3D.ready || V3D.ar.pending) return;
+  if (V3D.ar.active) _arExit();                    // v7.07: in AR → switch straight to VR, one tap
   V3D.ar.pending = true;
   var motionP;
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -1879,8 +1880,9 @@ function toggleVRMode3D() {
 }
 
 function toggleARMode3D() {
-  if (V3D.ar.active) { _arExit(); return; }
+  if (V3D.ar.active && !V3D.ar.vr) { _arExit(); return; }  // AR (or ghost) again → off
   if (!V3D.ready || V3D.ar.pending) return;
+  if (V3D.ar.active) _arExit();                    // v7.07: in VR → switch straight to AR, one tap
   V3D.ar.pending = true;
   // iOS choreography: DeviceOrientationEvent.requestPermission() must run
   // SYNCHRONOUSLY inside the tap gesture — so it goes first; getUserMedia
@@ -2017,8 +2019,9 @@ function _arEnter(stream, vr) {
   _arHint(stream
     ? 'Point the phone toward a storm — cells are drawn at their real compass bearings over the camera view. Drag sideways if the compass looks off · pinch to zoom · tap a cell for details.'
     : (vr
-      ? 'VR — move the phone to look around: sky, sun/moon, terrain, buildings and storms are all live at their real bearings. Drag sideways to trim · pinch to zoom · ⛰ sets your eye altitude.'
-      : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.'), 6500);
+      ? 'VR — move the phone to look around: sky, sun/moon, terrain, buildings and storms are all live at their real bearings. Drag sideways to trim · pinch to zoom · HEIGHT sets your eye altitude.'
+      : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.'), 9000,
+    stream ? 'ar-intro' : (vr ? 'vr-intro' : 'ghost-intro'));
 }
 
 
@@ -2456,24 +2459,42 @@ function _arBldgFromWays(ways, gen, elevAt, datum) {
   V3D.scene.add(mesh);
 }
 
-function _arHint(html, ms) {
+// v7.07: centered popup with an OK button (no more waiting out the fade), and
+// — when dismissKey is given — a "don't show again" checkbox remembered in
+// localStorage. Errors and warnings pass no key, so they can never be muted.
+function _arHint(html, ms, dismissKey) {
   var ar = V3D.ar;
+  if (dismissKey) { try { if (localStorage.getItem('v3d_hint_off_' + dismissKey)) return; } catch (e) {} }
   var container = document.getElementById('view3d-container');
   if (!container) return;
-  if (!ar.hint) {
-    ar.hint = document.createElement('div');
-    ar.hint.id = 'v3d-ar-hint';
-    ar.hint.style.cssText = 'position:absolute;left:12px;right:12px;bottom:calc(120px + env(safe-area-inset-bottom,0px));z-index:24;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,204,0,0.35);border-radius:10px;padding:9px 12px;font-size:11px;line-height:1.5;color:#e8eef8;pointer-events:none;transition:opacity .4s';
-    container.appendChild(ar.hint);
-  }
-  ar.hint.innerHTML = html;
-  ar.hint.style.opacity = '1';
-  if (ar.hintTimer) clearTimeout(ar.hintTimer);
-  ar.hintTimer = setTimeout(function () {
-    if (!ar.hint) return;
-    ar.hint.style.opacity = '0';
-    if (!ar.active) { var h = ar.hint; ar.hint = null; setTimeout(function () { try { h.remove(); } catch (e) {} }, 500); }
-  }, ms || 5000);
+  if (ar.hint) { try { ar.hint.remove(); } catch (e) {} ar.hint = null; }
+  if (ar.hintTimer) { clearTimeout(ar.hintTimer); ar.hintTimer = null; }
+  var el = document.createElement('div');
+  el.id = 'v3d-ar-hint';
+  el.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) translateZ(0);z-index:30;width:min(340px,84%);background:rgba(5,10,20,0.92);backdrop-filter:blur(10px);border:1px solid rgba(255,204,0,0.35);border-radius:12px;padding:12px 14px;font-size:11px;line-height:1.5;color:#e8eef8;pointer-events:auto;transition:opacity .4s';
+  el.innerHTML = '<div>' + html + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px">'
+    + (dismissKey
+      ? '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:rgba(255,255,255,0.55);cursor:pointer;user-select:none"><input type="checkbox" id="v3d-hint-chk" style="accent-color:#ffcc00;width:13px;height:13px;margin:0">Don’t show again</label>'
+      : '<span></span>')
+    + '<button id="v3d-hint-ok" style="background:rgba(255,204,0,0.12);border:1px solid rgba(255,204,0,0.4);border-radius:7px;color:#ffcc00;font-size:11px;font-weight:600;padding:4px 18px;cursor:pointer;font-family:inherit">OK</button></div>';
+  container.appendChild(el);
+  ar.hint = el;
+  var close = function () {
+    if (dismissKey) {
+      var chk = el.querySelector('#v3d-hint-chk');
+      if (chk && chk.checked) { try { localStorage.setItem('v3d_hint_off_' + dismissKey, '1'); } catch (e) {} }
+    }
+    if (ar.hintTimer) { clearTimeout(ar.hintTimer); ar.hintTimer = null; }
+    if (ar.hint === el) ar.hint = null;
+    el.style.opacity = '0';
+    setTimeout(function () { try { el.remove(); } catch (e) {} }, 450);
+  };
+  var ok = el.querySelector('#v3d-hint-ok');
+  if (ok) ok.addEventListener('click', close);
+  // dismissable intros stay up longer so there's time to reach the checkbox;
+  // the OK button is the fast path either way
+  ar.hintTimer = setTimeout(close, ms || 5000);
 }
 
 function deactivate3DView() {

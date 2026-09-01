@@ -1881,24 +1881,15 @@ function _arEnter(stream) {
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false;
   V3D.controls.enabled = false;    // sensors own the look direction now
   if (stream) {
-    // v6.98: the video warms up INVISIBLE and the virtual sky stays painted
-    // until the terrain table has loaded — _arReveal() then swaps to
-    // passthrough and fades the camera in under the already-present ground.
-    var v = document.createElement('video');
-    v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
-    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000;opacity:0;transition:opacity .8s';
-    v.srcObject = stream;
-    var cv = document.getElementById('view3d-canvas');
-    container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
-    var p = v.play(); if (p && p.catch) p.catch(function () {});
-    v.addEventListener('transitionend', function () { v.style.transition = 'none'; }, { once: true });
-    ar.video = v;
-    var fadeEl = document.createElement('div');
-    fadeEl.id = 'v3d-ar-fade';
-    fadeEl.style.cssText = 'position:absolute;left:0;right:0;top:-100%;height:300%;z-index:0;pointer-events:none;will-change:transform;' +
-      'background:linear-gradient(to bottom,rgba(5,10,20,0) 44%,rgba(5,10,20,0.55) 50%,rgba(5,10,20,0.94) 56%,rgba(5,10,20,0.96) 100%)';
-    container.insertBefore(fadeEl, cv || null);   // above the video, below the canvas
-    ar.fade = fadeEl;
+    // v7.01: NO video element yet, and no opacity games ever. On the owner's
+    // phone the v6.98 video was VISIBLE while carrying opacity:0 (the camera
+    // appeared before the terrain, loading bar and all) and intermittently
+    // painted over the HUD even after v6.99's translateZ pins — iOS promotes
+    // a fullscreen MediaStream video to its own layer and then mis-applies
+    // both its opacity and its stacking. So the element simply does not exist
+    // until _arReveal(): the stream stays warm on its own, and the video is
+    // inserted at reveal as a plain static element — the exact configuration
+    // v6.97 proved stacks correctly under the HUD on-device.
     var vt = stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
     if (vt) {
       ar.vtrack = vt;
@@ -1977,13 +1968,29 @@ function _arReveal() {
   ar.revealed = true;
   if (ar.revealTimer) { clearTimeout(ar.revealTimer); ar.revealTimer = null; }
   if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
+  var container = document.getElementById('view3d-container');
+  var cv = document.getElementById('view3d-canvas');
+  if (container) {
+    var v = document.createElement('video');
+    v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
+    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000';
+    v.srcObject = ar.stream;
+    container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
+    var p = v.play(); if (p && p.catch) p.catch(function () {});
+    ar.video = v;
+    var fadeEl = document.createElement('div');
+    fadeEl.id = 'v3d-ar-fade';
+    fadeEl.style.cssText = 'position:absolute;left:0;right:0;top:-100%;height:300%;z-index:0;pointer-events:none;will-change:transform;' +
+      'background:linear-gradient(to bottom,rgba(5,10,20,0) 44%,rgba(5,10,20,0.55) 50%,rgba(5,10,20,0.94) 56%,rgba(5,10,20,0.96) 100%)';
+    container.insertBefore(fadeEl, cv || null);   // above the video, below the canvas
+    ar.fade = fadeEl;
+  }
   // hide everything that would paint over the real world; cells, labels,
   // cones, rings, cardinal markers and the sun/moon stay — they ARE the overlay
   if (V3D.skyDome) V3D.skyDome.visible = false;
   if (V3D.groundMesh) V3D.groundMesh.visible = false;
   if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
   V3D.renderer.setClearColor(0x000000, 0);
-  if (ar.video) { var vv = ar.video; requestAnimationFrame(function () { vv.style.opacity = '1'; }); }
 }
 function _arExit() {
   var ar = V3D.ar;

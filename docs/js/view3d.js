@@ -108,6 +108,7 @@ function toggleFilterPanel3D() {
 
 function reset3DView() {
   if (!V3D.camera || !V3D.controls) return;
+  if (V3D.ar && V3D.ar.active) _arExit();
   _setFov(72);
   _setCamMode('fixed');
 }
@@ -224,6 +225,10 @@ function _removeFovZoom() {
 }
 
 function toggleCamMode3D() {
+  // v6.95: the mode button stays tappable during AR, but 'free' mode would
+  // strip the FOV pinch handlers and re-enable orbit input under a
+  // sensor-driven camera — so a tap here means "back to normal viewing".
+  if (V3D.ar && V3D.ar.active) { _arExit(); return; }
   _setCamMode(V3D._camMode === 'fixed' ? 'free' : 'fixed');
 }
 
@@ -378,8 +383,13 @@ function init3DScene() {
   cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:0';
   container.appendChild(cv);
 
-  V3D.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false, powerPreference: 'high-performance' });
+  // v6.95: alpha:true so AR mode can clear transparent over the live camera
+  // <video> behind the canvas — context attributes are fixed at creation, so
+  // this must be set here even though normal mode never shows transparency
+  // (the explicit opaque clear color below reproduces the old look exactly).
+  V3D.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: 'high-performance' });
   V3D.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  V3D.renderer.setClearColor(0x050a14, 1);
   V3D.renderer.sortObjects = true;
   var w = container.clientWidth, h = container.clientHeight;
   V3D.renderer.setSize(w, h);
@@ -581,6 +591,8 @@ function buildTerrainMesh3D(elevData, mapTex, plW, plD, planeCX, planeCZ) {
   };
   var mat = new THREE.MeshBasicMaterial({ map: mapTex });
   V3D.terrainMesh = new THREE.Mesh(geo, mat);
+  // v6.95: the terrain arrives async — born hidden if AR passthrough is live
+  if (V3D.ar && V3D.ar.active && V3D.ar.stream) V3D.terrainMesh.visible = false;
   V3D.terrainMesh.position.set(planeCX, 0, planeCZ);
   V3D.scene.add(V3D.terrainMesh);
 }
@@ -635,7 +647,9 @@ async function buildMapGround3D(lat, lon) {
     V3D.terrainElevData = null;
     var newPlane = new THREE.Mesh(new THREE.PlaneGeometry(plW, plD), new THREE.MeshBasicMaterial({ map: tex }));
     newPlane.rotation.x = -Math.PI / 2; newPlane.position.set(planeCX, 0, planeCZ);
-    V3D.groundMesh = newPlane; V3D.scene.add(V3D.groundMesh);
+    V3D.groundMesh = newPlane;
+    if (V3D.ar && V3D.ar.active && V3D.ar.stream) V3D.groundMesh.visible = false;  // v6.95: async arrival during AR
+    V3D.scene.add(V3D.groundMesh);
   }
 }
 
@@ -1492,16 +1506,25 @@ function loop3D() {
   V3D.frame++;
   var _off = V3D.camera.position.clone().sub(V3D.controls.target);
   var _dist = _off.length();
-  if (V3D._camMode === 'fixed') {
-    V3D.controls.minPolarAngle = Math.PI * 0.05;
-    V3D.controls.maxPolarAngle = Math.PI * 0.95;
+  if (V3D.ar && V3D.ar.active) {
+    // v6.95 AR: the phone's orientation sensors own the camera this frame.
+    // OrbitControls.update() would overwrite the quaternion from its internal
+    // spherical (even with controls.enabled=false), so it is skipped entirely;
+    // _arApplyOrientation also re-syncs controls.target so the compass tape,
+    // raycaster and sprite scaling keep working unmodified.
+    _arApplyOrientation();
   } else {
-    var _cosMax = (0.15 - V3D.controls.target.y) / _dist;
-    _cosMax = Math.max(-1, Math.min(1, _cosMax));
-    V3D.controls.maxPolarAngle = Math.min(Math.PI * 0.48, Math.acos(_cosMax));
+    if (V3D._camMode === 'fixed') {
+      V3D.controls.minPolarAngle = Math.PI * 0.05;
+      V3D.controls.maxPolarAngle = Math.PI * 0.95;
+    } else {
+      var _cosMax = (0.15 - V3D.controls.target.y) / _dist;
+      _cosMax = Math.max(-1, Math.min(1, _cosMax));
+      V3D.controls.maxPolarAngle = Math.min(Math.PI * 0.48, Math.acos(_cosMax));
+    }
+    V3D.controls.update();
+    if (V3D._camMode !== 'fixed' && V3D.camera.position.y < 0.15) { V3D.camera.position.y = 0.15; V3D.controls.update(); }
   }
-  V3D.controls.update();
-  if (V3D._camMode !== 'fixed' && V3D.camera.position.y < 0.15) { V3D.camera.position.y = 0.15; V3D.controls.update(); }
 
   var camDist = _dist;
   var zf = Math.max(1, Math.min(5, camDist / 18));
@@ -1620,7 +1643,205 @@ function _initLightingBtn() {
   if (btn) btn.textContent = labels[idx];
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.95: AR STORM VIEW — "magic window" augmented reality, no WebXR needed
+// (iOS Safari has no immersive-ar). The live rear camera plays as a fullscreen
+// <video> BEHIND the WebGL canvas, the renderer clears transparent, and the
+// device orientation sensors drive the camera so storm cells hang at their
+// REAL compass bearings: point the phone at the storm and its cell is drawn
+// over the actual clouds. Nothing is warped into an HDRI — passthrough AR
+// keeps the video flat and rotates the WORLD, which is both cheaper and
+// correct (a phone camera only ever sees ~70° of sky at once).
+//
+// Heading model: alpha/beta/gamma → quaternion (the classic W3C YXZ formula,
+// screen-orientation compensated). iOS alpha is RELATIVE (arbitrary zero), so
+// a slow servo steers the yaw toward webkitCompassHeading (absolute magnetic);
+// Android absolute events already carry a magnetic alpha. Magnetic vs true
+// north (declination, roughly ±15° across CONUS, ~2° in Pensacola) and compass
+// wobble are absorbed by the same servo plus a one-finger drag trim.
+// ═══════════════════════════════════════════════════════════════════════════
+V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
+  compass: null, hasAbs: false, yawFix: 0, trim: 0, hint: null, hintTimer: null,
+  dragX: null, ts: null, tm: null, te: null, vis: null };
+
+function toggleARMode3D() {
+  if (V3D.ar.active) { _arExit(); return; }
+  if (!V3D.ready) return;
+  // iOS choreography: DeviceOrientationEvent.requestPermission() must run
+  // SYNCHRONOUSLY inside the tap gesture — so it goes first; getUserMedia
+  // tolerates being past the await.
+  var motionP;
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    motionP = DeviceOrientationEvent.requestPermission().then(function (r) { return r === 'granted'; }).catch(function () { return false; });
+  } else {
+    motionP = Promise.resolve(true);
+  }
+  motionP.then(function (motion) {
+    if (!motion) { _arHint('Motion access was denied — AR needs the compass/gyro to aim the view. Re-enable it in Settings › Safari › Motion & Orientation.', 6000); return; }
+    var gum = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+      ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      : Promise.reject(new Error('mediaDevices unavailable'));
+    gum.then(function (stream) { _arEnter(stream); })
+      .catch(function (err) {
+        // camera refused or absent → ghost mode: sensors aim the virtual scene.
+        // (Installed iOS web apps re-ask for the camera each cold launch, and a
+        // denial there is sticky — hence the explicit hint.)
+        _arEnter(null);
+        _arHint((err && err.name === 'NotAllowedError')
+          ? 'Camera blocked — AR is running against the virtual sky instead. To get passthrough in the installed app, remove and re-add it, or use Safari directly.'
+          : 'No rear camera found — AR is running against the virtual sky instead.', 7000);
+      });
+  });
+}
+
+function _arEnter(stream) {
+  if (V3D.ar.active) return;
+  var container = document.getElementById('view3d-container');
+  if (!container) { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+  _setCamMode('fixed');            // camera at the user's spot; FOV pinch stays live
+  var ar = V3D.ar;
+  ar.active = true; ar.stream = stream || null;
+  ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false;
+  V3D.controls.enabled = false;    // sensors own the look direction now
+  if (stream) {
+    var v = document.createElement('video');
+    v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
+    v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000';
+    v.srcObject = stream;
+    var cv = document.getElementById('view3d-canvas');
+    container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
+    var p = v.play(); if (p && p.catch) p.catch(function () {});
+    ar.video = v;
+    // hide everything that would paint over the real world; cells, labels,
+    // cones, rings and cardinal markers stay — they ARE the overlay
+    if (V3D.skyDome) V3D.skyDome.visible = false;
+    if (V3D.groundMesh) V3D.groundMesh.visible = false;
+    if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
+    V3D.renderer.setClearColor(0x000000, 0);
+  }
+  // one handler for both event names: iOS fires deviceorientation with
+  // webkitCompassHeading; Android Chrome fires deviceorientationabsolute with
+  // absolute=true. Once an absolute event is seen, relative ones are ignored
+  // for pose (mixed zero-points would make the view jump).
+  ar.handler = function (e) {
+    if (e.alpha == null && e.beta == null) return;
+    if (e.absolute) { ar.hasAbs = true; ar.evt = { a: e.alpha, b: e.beta, g: e.gamma }; ar.compass = (360 - e.alpha) % 360; return; }
+    if (!ar.hasAbs) ar.evt = { a: e.alpha, b: e.beta, g: e.gamma };
+    if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) ar.compass = e.webkitCompassHeading;
+  };
+  window.addEventListener('deviceorientation', ar.handler, true);
+  window.addEventListener('deviceorientationabsolute', ar.handler, true);
+  // one-finger horizontal drag = heading trim (map-drag metaphor: pull the
+  // world right → view turns left). Compasses drift; the horizon doesn't.
+  var dom = V3D.renderer.domElement;
+  ar.ts = function (e) { if (e.touches && e.touches.length === 1) ar.dragX = e.touches[0].clientX; };
+  ar.tm = function (e) {
+    if (ar.dragX == null || !e.touches || e.touches.length !== 1) return;
+    var x = e.touches[0].clientX;
+    ar.trim -= (x - ar.dragX) * 0.12;
+    ar.dragX = x;
+  };
+  ar.te = function () { ar.dragX = null; };
+  dom.addEventListener('touchstart', ar.ts, true);
+  dom.addEventListener('touchmove', ar.tm, true);
+  dom.addEventListener('touchend', ar.te, true);
+  // backgrounding the app must not leave the camera held — exit AR outright
+  // (re-entering is one tap, and a stale sensor/camera session isn't worth it)
+  ar.vis = function () { if (document.hidden) _arExit(); };
+  document.addEventListener('visibilitychange', ar.vis, true);
+  var btn = document.getElementById('v3d-ar-btn');
+  if (btn) { btn.textContent = '📷 Exit AR'; btn.style.borderColor = '#ffcc00'; btn.style.color = '#ffcc00'; }
+  _arHint(stream
+    ? 'Point the phone toward a storm — cells are drawn at their real compass bearings over the camera view. Drag sideways if the compass looks off · pinch to zoom · tap a cell for details.'
+    : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.', 6500);
+}
+
+function _arExit() {
+  var ar = V3D.ar;
+  if (!ar.active) return;
+  ar.active = false;
+  if (ar.stream) { ar.stream.getTracks().forEach(function (t) { t.stop(); }); ar.stream = null; }
+  if (ar.video) { try { ar.video.srcObject = null; ar.video.remove(); } catch (e) {} ar.video = null; }
+  if (ar.handler) {
+    window.removeEventListener('deviceorientation', ar.handler, true);
+    window.removeEventListener('deviceorientationabsolute', ar.handler, true);
+    ar.handler = null;
+  }
+  var dom = V3D.renderer && V3D.renderer.domElement;
+  if (dom) {
+    if (ar.ts) dom.removeEventListener('touchstart', ar.ts, true);
+    if (ar.tm) dom.removeEventListener('touchmove', ar.tm, true);
+    if (ar.te) dom.removeEventListener('touchend', ar.te, true);
+  }
+  ar.ts = ar.tm = ar.te = null; ar.evt = null;
+  if (ar.vis) { document.removeEventListener('visibilitychange', ar.vis, true); ar.vis = null; }
+  if (V3D.skyDome) V3D.skyDome.visible = true;
+  if (V3D.groundMesh) V3D.groundMesh.visible = true;
+  if (V3D.terrainMesh) V3D.terrainMesh.visible = true;
+  if (V3D.renderer) V3D.renderer.setClearColor(0x050a14, 1);
+  if (ar.hint) { try { ar.hint.remove(); } catch (e) {} ar.hint = null; }
+  if (ar.hintTimer) { clearTimeout(ar.hintTimer); ar.hintTimer = null; }
+  var btn = document.getElementById('v3d-ar-btn');
+  if (btn) { btn.textContent = '📷 AR'; btn.style.borderColor = ''; btn.style.color = ''; }
+  if (V3D.controls) V3D.controls.enabled = true;
+  _setCamMode('fixed');            // clean re-sync of camera/target/handlers
+}
+
+// scratch objects — loop3D calls this every frame, so no per-frame allocation
+var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null;
+function _arApplyOrientation() {
+  var ar = V3D.ar, e = ar.evt;
+  if (!e || e.a == null || e.b == null || e.g == null) return;  // hold last pose until sensors speak
+  if (!_AR_EUL) {
+    _AR_EUL = new THREE.Euler(); _AR_QS = new THREE.Quaternion();
+    _AR_Q0 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));  // -90° about X: device flat → camera out the back
+    _AR_FWD = new THREE.Vector3(); _AR_ZEE = new THREE.Vector3(0, 0, 1); _AR_UP = new THREE.Vector3(0, 1, 0);
+  }
+  var D2R = Math.PI / 180;
+  var scr = (screen.orientation && screen.orientation.angle != null) ? screen.orientation.angle : (window.orientation || 0);
+  var q = V3D.camera.quaternion;
+  _AR_EUL.set(e.b * D2R, e.a * D2R, -e.g * D2R, 'YXZ');   // the W3C deviceorientation frame
+  q.setFromEuler(_AR_EUL);
+  q.multiply(_AR_Q0);
+  q.multiply(_AR_QS.setFromAxisAngle(_AR_ZEE, -scr * D2R)); // undo screen rotation
+  // servo the yaw so scene-north (-z, TRUE north per geoToScene3D) tracks the
+  // real compass: raw alpha has an arbitrary zero on iOS, so compare the pose's
+  // own heading against the absolute compass and converge slowly (no snapping).
+  _AR_FWD.set(0, 0, -1).applyQuaternion(q);
+  var rawHdg = (Math.atan2(_AR_FWD.x, -_AR_FWD.z) * 180 / Math.PI + 360) % 360;
+  if (ar.compass != null) {
+    var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
+    ar.yawFix += diff * 0.04;
+  }
+  q.premultiply(_AR_QS.setFromAxisAngle(_AR_UP, -(ar.yawFix + ar.trim) * D2R));
+  V3D.camera.position.set(0, 0.15, 0);
+  // keep controls.target just ahead so the compass tape (which reads target),
+  // the raycaster and the sprite distance-scaling all keep working untouched
+  _AR_FWD.set(0, 0, -1).applyQuaternion(q);
+  V3D.controls.target.set(_AR_FWD.x * 0.05, 0.15 + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
+}
+
+function _arHint(html, ms) {
+  var ar = V3D.ar;
+  var container = document.getElementById('view3d-container');
+  if (!container) return;
+  if (!ar.hint) {
+    ar.hint = document.createElement('div');
+    ar.hint.id = 'v3d-ar-hint';
+    ar.hint.style.cssText = 'position:absolute;left:12px;right:12px;bottom:calc(120px + env(safe-area-inset-bottom,0px));z-index:24;background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,204,0,0.35);border-radius:10px;padding:9px 12px;font-size:11px;line-height:1.5;color:#e8eef8;pointer-events:none;transition:opacity .4s';
+    container.appendChild(ar.hint);
+  }
+  ar.hint.innerHTML = html;
+  ar.hint.style.opacity = '1';
+  if (ar.hintTimer) clearTimeout(ar.hintTimer);
+  ar.hintTimer = setTimeout(function () { if (ar.hint) ar.hint.style.opacity = '0'; }, ms || 5000);
+}
+
 function deactivate3DView() {
+  // leaving the tab must release the camera (kills the OS recording indicator)
+  // and the orientation listener — unlike the gauges compass, AR really stops.
+  try { if (V3D.ar && V3D.ar.active) _arExit(); } catch (e) {}
   V3D.active = false;
   if (V3D._markerRAF) { cancelAnimationFrame(V3D._markerRAF); V3D._markerRAF = null; }
   if (V3D._etaInterval) { clearInterval(V3D._etaInterval); V3D._etaInterval = null; }

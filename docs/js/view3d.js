@@ -345,11 +345,28 @@ function dbzCat3D(dbz) { var e = _dbzEntry(dbz); return { name: e.label, col: e.
 function dbzHex3D(dbz) { return dbzCat3D(dbz).col; }
 function dbzInt3D(dbz) { return Math.max(0.3, Math.min(2.5, (dbz - 15) / 30)); }
 
-function loadImgCors3D(url) {
+// v7.08: optional registry so a burst of tile loads can be CANCELLED (img.src=''
+// aborts the in-flight request) when the view that wanted them goes away.
+function loadImgCors3D(url, reg) {
   return new Promise(function (res) {
     var img = new Image(); img.crossOrigin = 'anonymous';
-    img.onload = function () { res(img); }; img.onerror = function () { res(null); }; img.src = url;
+    var done = false;
+    var finish = function (v) {
+      if (done) return; done = true;
+      if (reg) { var i = reg.indexOf(img); if (i >= 0) reg.splice(i, 1); }
+      res(v);
+    };
+    img.onload = function () { finish(img); }; img.onerror = function () { finish(null); };
+    if (reg) {
+      reg.push(img);
+      img._cancel = function () { try { img.onload = img.onerror = null; img.src = ''; } catch (e) {} finish(null); };
+    }
+    img.src = url;
   });
+}
+function _cancelLoads3D(reg) {
+  if (!reg) return;
+  while (reg.length) { var im = reg.pop(); try { if (im && im._cancel) im._cancel(); } catch (e) {} }
 }
 
 function sampleTerrainHeight3D(sx, sz) {
@@ -838,6 +855,7 @@ function _astroTick() {
 }
 
 function refreshSky3D() {
+  if (!V3D.ready || typeof THREE === 'undefined') return;   // v7.08: never touch a scene that isn't built
   var now = Date.now() / 1000;
   var rise = 0, set = 0;
   try {
@@ -1785,6 +1803,7 @@ async function activate3DView() {
   if (locKey !== _v3dLocKey && !_v3dLoading) {
     _v3dLocKey = locKey;
     _v3dLoading = true;
+    if (V3D._arCache && !_arCacheHit()) _arDisposeCache();   // v7.08: parked AR ground is for the old spot
     var loadEl = document.getElementById('v3d-loading');
     if (loadEl) loadEl.style.display = 'flex';
     await buildMapGround3D(S.lat, S.lon);
@@ -1833,7 +1852,8 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
-  progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '' };
+  progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '',
+  loads: null, bldgAbort: null, groundKey: null, groundElev: null, groundDatum: 0 };
 // v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
 var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
 try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
@@ -1945,7 +1965,7 @@ function _arEnter(stream, vr) {
       vt.addEventListener('ended', ar.trackEnd);
     }
   }
-  if ((stream || vr) && S.lat != null) {
+  if ((stream || vr) && S.lat != null && !_arCacheHit()) {   // v7.08: a cached ground needs no loading bar
     var prog = document.createElement('div');
     prog.id = 'v3d-ar-progress';
     prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
@@ -2233,12 +2253,50 @@ function _arPlaceFade(fwdY) {
 // basemap as its texture, rendered as a semi-transparent tactical table below
 // the horizon fade. Uses S.lat/S.lon, so it follows GPS or a typed location.
 var _AR_GROUND_GEN = 0;
+// v7.08: the finished ground + buildings are KEPT across AR/VR exits (hidden,
+// out of the scene) and reused on the next entry at the same spot — no second
+// download, no loading bar, instant reveal. Leaving mid-build cancels every
+// in-flight tile so the radar scan and winds-aloft fetch get the link back.
+V3D._arCache = null;          // { key, ground, bldg, elevAt, datum }
+function _arCacheKey() { return (S.lat != null) ? (S.lat.toFixed(4) + ',' + S.lon.toFixed(4)) : null; }
+function _arCacheHit() { return !!(V3D._arCache && V3D._arCache.key && V3D._arCache.key === _arCacheKey()); }
+function _arDisposeCache() {
+  var c = V3D._arCache; V3D._arCache = null;
+  if (!c) return;
+  [c.ground, c.bldg].forEach(function (m) {
+    if (!m) return;
+    try {
+      if (m.parent) m.parent.remove(m);
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) { if (m.material.map) m.material.map.dispose(); m.material.dispose(); }
+    } catch (e) {}
+  });
+}
 function _arBuildGround() {
   var ar = V3D.ar;
   if (!ar.active || (!ar.stream && !ar.vr) || ar.ground || S.lat == null) return;
   var gen = ++_AR_GROUND_GEN;
-  ar.groundPending = true;
   var lat = S.lat, lon = S.lon;
+  var key = _arCacheKey();
+  if (_arCacheHit()) {
+    // reuse: same spot, ground already built this session
+    var c = V3D._arCache;
+    ar.ground = c.ground; ar.bldg = c.bldg || null;
+    ar.groundKey = key; ar.groundElev = c.elevAt; ar.groundDatum = c.datum;
+    ar.ground.visible = true; V3D.scene.add(ar.ground);
+    if (ar.bldg) { ar.bldg.visible = true; V3D.scene.add(ar.bldg); }
+    if (!ar.stream) {
+      if (V3D.groundMesh) V3D.groundMesh.visible = false;
+      if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
+    }
+    _arReveal();
+    if (!ar.bldg) _arBuildBuildings(gen, lat, lon, c.elevAt, c.datum);   // buildings never landed last time
+    return;
+  }
+  if (V3D._arCache) _arDisposeCache();        // different location — the old one is dead weight
+  ar.groundPending = true;
+  ar.loads = [];
+  S._netBusyUntil = Date.now() + 90000;       // our own tile burst — the net monitor must not blame the link
   var _done = 0, _total = 0;
   function _tick() {
     _done++;
@@ -2274,22 +2332,24 @@ function _arBuildGround() {
   tctx.fillStyle = '#1a2318'; tctx.fillRect(0, 0, tcv.width, tcv.height);
   var jobs = [];
   for (var ey = minY12; ey <= maxY12; ey++) for (var ex = minX12; ex <= maxX12; ex++) (function (ex, ey) {
-    jobs.push(loadImgCors3D('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/' + ZE + '/' + ex + '/' + ey + '.png')
+    jobs.push(loadImgCors3D('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/' + ZE + '/' + ex + '/' + ey + '.png', ar.loads)
       .then(function (img) { if (img) ectx.drawImage(img, (ex - minX12) * 256, (ey - minY12) * 256); _tick(); }));
   })(ex, ey);
   for (var ty = minY13; ty <= maxY13; ty++) for (var tx = minX13; tx <= maxX13; tx++) (function (tx, ty) {
     var sat = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + ZT + '/' + ty + '/' + tx;
-    jobs.push(loadImgCors3D(sat).then(function (img) {
+    jobs.push(loadImgCors3D(sat, ar.loads).then(function (img) {
       if (img) { tctx.drawImage(img, (tx - minX13) * 256, (ty - minY13) * 256); _tick(); return; }
+      if (gen !== _AR_GROUND_GEN) { _tick(); return; }   // cancelled — don't start the fallback fetch
       var url = (typeof basemapTileUrl === 'function') ? basemapTileUrl(ZT, tx, ty) : '';
       if (!url) { _tick(); return; }
-      return loadImgCors3D(url).then(function (img2) { if (img2) tctx.drawImage(img2, (tx - minX13) * 256, (ty - minY13) * 256); _tick(); });
+      return loadImgCors3D(url, ar.loads).then(function (img2) { if (img2) tctx.drawImage(img2, (tx - minX13) * 256, (ty - minY13) * 256); _tick(); });
     }));
   })(tx, ty);
   _total = jobs.length;
   Promise.all(jobs).then(function () {
-    ar.groundPending = false;
+    S._netBusyUntil = Date.now() + 8000;      // short grace, same as the radar scan's tail
     if (gen !== _AR_GROUND_GEN || !ar.active || (!ar.stream && !ar.vr)) return;   // AR/VR exited or re-entered meanwhile
+    ar.groundPending = false;
     var ed;
     try { ed = ectx.getImageData(0, 0, ecv.width, ecv.height).data; } catch (e) { _arReveal(); return; }
     function elevAt(la, lo) {
@@ -2333,7 +2393,7 @@ function _arBuildGround() {
     mesh.position.set((nwS.x + seS.x) / 2, 0, (nwS.z + seS.z) / 2);
     mesh.renderOrder = -1;                     // under the storm cells/halos
     if (gen !== _AR_GROUND_GEN || !ar.active) { geo.dispose(); mat.dispose(); tex.dispose(); return; }
-    ar.ground = mesh;
+    ar.ground = mesh; ar.groundKey = key; ar.groundElev = elevAt; ar.groundDatum = datum;
     V3D.scene.add(mesh);
     if (!ar.stream) {
       // VR: the real terrain table replaces the flat stand-in ground outright
@@ -2345,24 +2405,22 @@ function _arBuildGround() {
     _arBuildBuildings(gen, lat, lon, elevAt, datum);   // v7.03: OSM buildings pop in when ready
   });
 }
+// v7.08: on exit the ground is RELEASED, not destroyed — in-flight downloads are
+// cancelled, and a finished ground (+ buildings) is parked in V3D._arCache for
+// the next entry. Real disposal happens only when the location changes.
 function _arDisposeGround() {
   _AR_GROUND_GEN++;                            // invalidate any in-flight build
   var ar = V3D.ar;
+  _cancelLoads3D(ar.loads); ar.loads = null;   // abort every pending tile — give the link back
+  if (ar.bldgAbort) { try { ar.bldgAbort.abort(); } catch (e) {} ar.bldgAbort = null; }
+  ar.groundPending = false;
   if (!ar.ground) return;
   try {
-    V3D.scene.remove(ar.ground);
-    if (ar.ground.geometry) ar.ground.geometry.dispose();
-    if (ar.ground.material) { if (ar.ground.material.map) ar.ground.material.map.dispose(); ar.ground.material.dispose(); }
+    V3D.scene.remove(ar.ground); ar.ground.visible = false;
+    if (ar.bldg) { V3D.scene.remove(ar.bldg); ar.bldg.visible = false; }
   } catch (e) {}
-  ar.ground = null;
-  if (ar.bldg) {
-    try {
-      V3D.scene.remove(ar.bldg);
-      if (ar.bldg.geometry) ar.bldg.geometry.dispose();
-      if (ar.bldg.material) ar.bldg.material.dispose();
-    } catch (e) {}
-    ar.bldg = null;
-  }
+  V3D._arCache = { key: ar.groundKey, ground: ar.ground, bldg: ar.bldg || null, elevAt: ar.groundElev, datum: ar.groundDatum };
+  ar.ground = null; ar.bldg = null; ar.groundKey = null; ar.groundElev = null;
 }
 
 // ═══ v7.03: OSM buildings — real footprints and heights on the AR ground ═══
@@ -2394,17 +2452,33 @@ function _arBuildBuildings(gen, lat, lon, elevAt, datum) {
     + (lat - dLa).toFixed(5) + ',' + (lon - dLo).toFixed(5) + ','
     + (lat + dLa).toFixed(5) + ',' + (lon + dLo).toFixed(5) + ');out geom 4000;';
   var urls = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  var ar = V3D.ar;
   (function attempt(i) {
-    if (i >= urls.length) return;             // both mirrors down — AR just shows terrain, as before
+    if (i >= urls.length || gen !== _AR_GROUND_GEN) return;   // mirrors down, or AR/VR already left
+    // v7.08: abortable + 30 s cap — leaving AR/VR must not leave a multi-MB
+    // building download running against the radar scan
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    ar.bldgAbort = ctrl;
+    var tmo = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
+    S._netBusyUntil = Date.now() + 30000;
     fetch(urls[i], { method: 'POST', body: 'data=' + encodeURIComponent(q),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl ? ctrl.signal : undefined })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (j) {
+        if (tmo) clearTimeout(tmo);
+        if (ar.bldgAbort === ctrl) ar.bldgAbort = null;
+        S._netBusyUntil = Date.now() + 8000;
         var ways = (j && j.elements) ? j.elements : [];
         _BLDG_CACHE = { key: key, ways: ways };
         _arBldgFromWays(ways, gen, elevAt, datum);
       })
-      .catch(function () { attempt(i + 1); });
+      .catch(function () {
+        if (tmo) clearTimeout(tmo);
+        if (ar.bldgAbort === ctrl) ar.bldgAbort = null;
+        S._netBusyUntil = Date.now() + 8000;
+        if (ctrl && ctrl.signal.aborted && gen !== _AR_GROUND_GEN) return;   // we cancelled it — stop
+        attempt(i + 1);
+      });
   })(0);
 }
 function _arBldgFromWays(ways, gen, elevAt, datum) {

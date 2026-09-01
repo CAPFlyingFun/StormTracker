@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v6.98</title>
+<title>StormTracker v6.99</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=796">
+<link rel="stylesheet" href="css/style.css?v=797">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.98</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v6.99</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -623,7 +623,7 @@
         <div style="color:#e8eef8;font-size:13px;font-weight:600">No storm scan yet</div>
         <div style="color:rgba(255,200,50,0.7);font-size:11px;line-height:1.4;margin-top:3px">Visit the Radar tab to scan for storms, then return here to see them in 3D.</div>
       </div>
-      <div id="v3d-hud" style="position:absolute;inset:0;pointer-events:none;z-index:10">
+      <div id="v3d-hud" style="position:absolute;inset:0;pointer-events:none;z-index:10;transform:translateZ(0)">
         <div id="v3d-bottom-controls" style="position:absolute;bottom:calc(8px + env(safe-area-inset-bottom,0px));left:12px;z-index:12;pointer-events:all;display:flex;flex-direction:column;gap:4px">
           <div id="v3d-tier-row" style="display:flex;flex-direction:row;gap:2px;padding:0 4px;background:rgba(5,10,20,0.82);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.15);border-radius:8px;max-height:0;opacity:0;overflow:hidden;transition:max-height .25s ease,opacity .2s ease,padding .25s ease">
             <button id="v3d-tier-0" onclick="toggleTier3D(0)" style="width:22px;height:22px;border-radius:4px;border:1.5px solid #00F8FF;background:#00F8FF;color:#000;font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:inherit;transition:all .15s" title="Blue 20-30 dBZ">✓</button>
@@ -653,12 +653,12 @@
             <button id="v3d-lighting-btn" onclick="cycleLightingMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="Cycle lighting: Auto / Day / Night / Golden">🌐 Auto</button>
           </div>
         </div>
-        <div id="v3d-compass-bar" style="position:absolute;top:0;left:0;right:0;height:36px;overflow:hidden;pointer-events:none;z-index:10;background:rgba(5,10,20,0.55);backdrop-filter:blur(6px);border-bottom:1px solid rgba(0,200,255,0.12)">
+        <div id="v3d-compass-bar" style="position:absolute;top:0;left:0;right:0;height:36px;overflow:hidden;pointer-events:none;z-index:10;transform:translateZ(0);background:rgba(5,10,20,0.55);backdrop-filter:blur(6px);border-bottom:1px solid rgba(0,200,255,0.12)">
           <div id="v3d-compass-center-mark" style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #00e5ff;z-index:2"></div>
           <div id="v3d-compass-tape" style="position:absolute;top:0;height:28px;white-space:nowrap;will-change:transform"></div>
           <div id="v3d-compass-hdg" style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:700;color:#00e5ff;letter-spacing:.06em;z-index:2"></div>
         </div>
-        <div id="v3d-info-tl" style="position:absolute;top:44px;left:8px;background:rgba(5,10,20,0.78);backdrop-filter:blur(10px);border:1px solid rgba(0,200,255,0.1);border-radius:10px;padding:7px 10px;max-width:200px;pointer-events:none;font-size:10px">
+        <div id="v3d-info-tl" style="position:absolute;top:44px;left:8px;transform:translateZ(0);background:rgba(5,10,20,0.78);backdrop-filter:blur(10px);border:1px solid rgba(0,200,255,0.1);border-radius:10px;padding:7px 10px;max-width:200px;pointer-events:none;font-size:10px">
           <div style="font-size:11px;font-weight:600;color:#e8eef8;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="v3d-loc-name">—</div>
           <div style="font-size:9px;color:rgba(255,255,255,0.45);margin-top:1px" id="v3d-loc-coords">—</div>
           <div style="border-top:1px solid rgba(0,200,255,0.12);margin:4px 0 3px"></div>
@@ -669,7 +669,7 @@
           <div style="font-size:8px;color:rgba(255,255,255,0.35);margin-top:1px" id="v3d-cloud-base-info">—</div>
         </div>
       </div>
-      <div id="v3d-popup" style="position:absolute;z-index:20;background:rgba(5,10,20,0.93);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:16px 18px;min-width:210px;pointer-events:all;display:none;box-shadow:0 8px 40px rgba(0,0,0,0.7)">
+      <div id="v3d-popup" style="transform:translateZ(0);position:absolute;z-index:20;background:rgba(5,10,20,0.93);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:16px 18px;min-width:210px;pointer-events:all;display:none;box-shadow:0 8px 40px rgba(0,0,0,0.7)">
         <span id="v3d-pop-close" onclick="document.getElementById('v3d-popup').style.display='none'" style="position:absolute;top:10px;right:12px;color:rgba(255,255,255,0.35);cursor:pointer;font-size:16px;line-height:1">✕</span>
         <div class="pop-cat" id="v3d-pop-cat">—</div>
         <div class="pop-dbz" id="v3d-pop-dbz">— dBZ</div>
@@ -742,25 +742,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=796" defer></script>
-<script src="js/core.js?v=796" defer></script>
-<script src="js/gauges.js?v=796" defer></script>
-<script src="js/icons.js?v=796" defer></script>
-<script src="js/geo.js?v=796" defer></script>
-<script src="js/settings.js?v=796" defer></script>
-<script src="js/thresholds.js?v=796" defer></script>
-<script src="js/weather.js?v=796" defer></script>
-<script src="js/radar.js?v=796" defer></script>
-<script src="js/tropical-model.js?v=796" defer></script>
-<script src="js/storms.js?v=796" defer></script>
-<script src="js/station.js?v=796" defer></script>
-<script src="js/alerts.js?v=796" defer></script>
-<script src="js/briefingEngine.js?v=796" defer></script>
-<script src="js/ai.js?v=796" defer></script>
-<script src="js/push.js?v=796" defer></script>
-<script src="js/qrcode.js?v=796" defer></script>
-<script src="js/devicelink.js?v=796" defer></script>
-<script src="js/init.js?v=796" defer></script>
+<script src="js/radar-shared.js?v=797" defer></script>
+<script src="js/core.js?v=797" defer></script>
+<script src="js/gauges.js?v=797" defer></script>
+<script src="js/icons.js?v=797" defer></script>
+<script src="js/geo.js?v=797" defer></script>
+<script src="js/settings.js?v=797" defer></script>
+<script src="js/thresholds.js?v=797" defer></script>
+<script src="js/weather.js?v=797" defer></script>
+<script src="js/radar.js?v=797" defer></script>
+<script src="js/tropical-model.js?v=797" defer></script>
+<script src="js/storms.js?v=797" defer></script>
+<script src="js/station.js?v=797" defer></script>
+<script src="js/alerts.js?v=797" defer></script>
+<script src="js/briefingEngine.js?v=797" defer></script>
+<script src="js/ai.js?v=797" defer></script>
+<script src="js/push.js?v=797" defer></script>
+<script src="js/qrcode.js?v=797" defer></script>
+<script src="js/devicelink.js?v=797" defer></script>
+<script src="js/init.js?v=797" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -770,7 +770,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=796')
+    navigator.serviceWorker.register('sw.js?v=797')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

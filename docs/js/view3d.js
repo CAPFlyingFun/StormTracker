@@ -1891,6 +1891,7 @@ function _arEnter(stream) {
     var cv = document.getElementById('view3d-canvas');
     container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
     var p = v.play(); if (p && p.catch) p.catch(function () {});
+    v.addEventListener('transitionend', function () { v.style.transition = 'none'; }, { once: true });
     ar.video = v;
     var fadeEl = document.createElement('div');
     fadeEl.id = 'v3d-ar-fade';
@@ -1907,7 +1908,7 @@ function _arEnter(stream) {
     if (S.lat != null) {
       var prog = document.createElement('div');
       prog.id = 'v3d-ar-progress';
-      prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
+      prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
       prog.innerHTML = '<div id="v3d-ar-prog-label" style="font-size:10px;color:#e8eef8;margin-bottom:5px;text-align:center">Loading terrain — 0%</div>'
         + '<div style="height:4px;border-radius:2px;background:rgba(0,200,255,0.15)"><div id="v3d-ar-prog-fill" style="height:100%;width:0%;border-radius:2px;background:#00c8ff;transition:width .2s"></div></div>';
       container.appendChild(prog);
@@ -2252,7 +2253,7 @@ function _arHint(html, ms) {
   if (!ar.hint) {
     ar.hint = document.createElement('div');
     ar.hint.id = 'v3d-ar-hint';
-    ar.hint.style.cssText = 'position:absolute;left:12px;right:12px;bottom:calc(120px + env(safe-area-inset-bottom,0px));z-index:24;background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,204,0,0.35);border-radius:10px;padding:9px 12px;font-size:11px;line-height:1.5;color:#e8eef8;pointer-events:none;transition:opacity .4s';
+    ar.hint.style.cssText = 'position:absolute;left:12px;right:12px;bottom:calc(120px + env(safe-area-inset-bottom,0px));z-index:24;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,204,0,0.35);border-radius:10px;padding:9px 12px;font-size:11px;line-height:1.5;color:#e8eef8;pointer-events:none;transition:opacity .4s';
     container.appendChild(ar.hint);
   }
   ar.hint.innerHTML = html;

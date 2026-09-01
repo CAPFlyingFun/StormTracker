@@ -903,7 +903,9 @@ async function fetchWindsAloft(overrideLat,overrideLon){
     // v4.43: NOMADS GFS fallback for US locations when every Open-Meteo
     // subdomain failed (or returned too few usable levels). Operationally
     // independent NOAA pipeline, key-less, browser-fetchable.
-    if((!aloftSpeeds||aloftSpeeds.length<2)&&typeof isUSLocation==='function'&&isUSLocation(lat,lon)){
+    // v7.10: GFS is a global model and rucsoundings takes any lat,lon — the old
+    // US-only gate left every non-US user with NO winds fallback at all.
+    if(!aloftSpeeds||aloftSpeeds.length<2){
       if(typeof _bootStep==='function')_bootStep('wind','Getting winds aloft… (NOMADS GFS)');
       try{
         aloftSpeeds=await fetchWindsAloftNOMADS(lat,lon);

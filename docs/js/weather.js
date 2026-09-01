@@ -167,6 +167,151 @@ function _hydrateLastWeather(){
   }catch(e){}
   return false;
 }
+
+// ═══ v7.10: MET NORWAY — keyless GLOBAL forecast fallback ═══════════════════
+// Open-Meteo is the only forecast source outside the US, so when it went down a
+// non-US user lost every hourly/daily card, the trends, the Storm Scope forecast
+// ring and the precip bars (NWS only covers the US; METARs give current obs
+// only). The Norwegian Meteorological Institute publishes a free, keyless,
+// CORS-enabled global forecast (Locationforecast 2.0, ECMWF-based) that maps
+// cleanly onto the Open-Meteo shape every renderer already consumes. Rules of
+// their free tier honoured here: ≤4-decimal coordinates, one request per boot
+// only when it is actually needed, and visible attribution ("MET Norway" in the
+// source line). Times are emitted as device-local wall-clock strings, matching
+// how Open-Meteo's timezone=auto hours are parsed downstream (new Date(t)).
+function _localIso(d){
+  const p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());
+}
+// Sunrise/sunset (NOAA/Almanac approximation, ±2 min) as device-local Dates.
+function _sunTimesLocal(lat,lon,dayDate){
+  const rad=Math.PI/180;
+  const doy=Math.floor((Date.UTC(dayDate.getFullYear(),dayDate.getMonth(),dayDate.getDate())-Date.UTC(dayDate.getFullYear(),0,0))/86400000);
+  function calc(rise){
+    const lngHour=lon/15,t=doy+((rise?6:18)-lngHour)/24;
+    const M=(0.9856*t)-3.289;
+    let L=M+(1.916*Math.sin(M*rad))+(0.020*Math.sin(2*M*rad))+282.634;L=((L%360)+360)%360;
+    let RA=Math.atan(0.91764*Math.tan(L*rad))/rad;RA=((RA%360)+360)%360;
+    RA=(RA+(Math.floor(L/90)*90-Math.floor(RA/90)*90))/15;
+    const sinDec=0.39782*Math.sin(L*rad),cosDec=Math.cos(Math.asin(sinDec));
+    const cosH=(Math.cos(90.833*rad)-(sinDec*Math.sin(lat*rad)))/(cosDec*Math.cos(lat*rad));
+    if(cosH>1||cosH<-1)return null;                       // polar day/night
+    const H=(rise?360-Math.acos(cosH)/rad:Math.acos(cosH)/rad)/15;
+    let UT=H+RA-(0.06571*t)-6.622-lngHour;UT=((UT%24)+24)%24;
+    return new Date(Date.UTC(dayDate.getFullYear(),dayDate.getMonth(),dayDate.getDate())+UT*3600000);
+  }
+  const rise=calc(true);let set=calc(false);
+  if(rise&&set&&set.getTime()<rise.getTime())set=new Date(set.getTime()+86400000);
+  return{rise,set};
+}
+// Solar elevation in degrees (SunCalc-style low-precision ephemeris) — used for
+// day/night per hour so a device-vs-location timezone gap can't break it.
+function _sunAltDeg(lat,lon,ms){
+  const rad=Math.PI/180,d=ms/86400000-10957.5;               // days since J2000.0
+  const M=rad*(357.5291+0.98560028*d);
+  const L=M+rad*(1.9148*Math.sin(M)+0.02*Math.sin(2*M)+0.0003*Math.sin(3*M))+rad*102.9372+Math.PI;
+  const e=rad*23.4397,dec=Math.asin(Math.sin(e)*Math.sin(L)),ra=Math.atan2(Math.sin(L)*Math.cos(e),Math.cos(L));
+  const H=rad*(280.16+360.9856235*d)+rad*lon-ra,phi=rad*lat;
+  return Math.asin(Math.sin(phi)*Math.sin(dec)+Math.cos(phi)*Math.cos(dec)*Math.cos(H))/rad;
+}
+// MET symbol_code → WMO code (the set icons.js/wmoDesc already understand).
+function _metSymbolToWmo(sym){
+  const s=String(sym||'').replace(/_(day|night|polartwilight)$/,'');
+  const thunder=/thunder/.test(s);
+  if(thunder)return 95;
+  const t={clearsky:0,fair:1,partlycloudy:2,cloudy:3,fog:45,
+    lightrain:61,rain:63,heavyrain:65,lightrainshowers:80,rainshowers:81,heavyrainshowers:82,
+    lightsleet:66,sleet:66,heavysleet:67,lightsleetshowers:66,sleetshowers:66,heavysleetshowers:67,
+    lightsnow:71,snow:73,heavysnow:75,lightsnowshowers:85,snowshowers:85,heavysnowshowers:86};
+  return t[s]!=null?t[s]:(/snow/.test(s)?73:/sleet/.test(s)?66:/rain/.test(s)?63:3);
+}
+function _lerp(a,b,f){return(a==null||b==null)?(a!=null?a:b):a+(b-a)*f}
+function _lerpDeg(a,b,f){if(a==null||b==null)return a!=null?a:b;let d=((b-a+540)%360)-180;return((a+d*f)%360+360)%360}
+// Convert a Locationforecast payload into the Open-Meteo shape (contiguous
+// hourly series from now through the last timestep; 6-hourly blocks beyond the
+// hourly horizon are interpolated, precipitation spread evenly).
+function _metNoToOm(json,lat,lon){
+  const ts=(json&&json.properties&&json.properties.timeseries)||[];
+  if(ts.length<6)throw new Error('MET Norway: too few timesteps');
+  const ent=ts.map(e=>({t:new Date(e.time).getTime(),i:(e.data&&e.data.instant&&e.data.instant.details)||{},
+    n1:e.data&&e.data.next_1_hours,n6:e.data&&e.data.next_6_hours,n12:e.data&&e.data.next_12_hours})).filter(e=>isFinite(e.t)).sort((a,b)=>a.t-b.t);
+  const H=3600000,start=Math.floor(ent[0].t/H)*H,end=ent[ent.length-1].t;
+  const out={time:[],temperature_2m:[],apparent_temperature:[],relative_humidity_2m:[],dew_point_2m:[],precipitation:[],
+    precipitation_probability:[],weather_code:[],wind_speed_10m:[],wind_gusts_10m:[],wind_direction_10m:[],pressure_msl:[],
+    cloud_cover:[],visibility:[],is_day:[],cape:[],lifted_index:[],convective_inhibition:[],uv_index:[],freezing_level_height:[]};
+  const isDayAt=ms=>_sunAltDeg(lat,lon,ms)>-0.833?1:0;   // civil sunrise/sunset threshold
+  let j=0;
+  for(let h=start;h<=end;h+=H){
+    while(j<ent.length-1&&ent[j+1].t<=h)j++;
+    const a=ent[j],b=ent[Math.min(j+1,ent.length-1)];
+    const f=(b.t>a.t)?Math.max(0,Math.min(1,(h-a.t)/(b.t-a.t))):0;
+    const ai=a.i,bi=b.i;
+    // the block that COVERS this hour: an exact 1-h step, else the 6-h/12-h step it falls in
+    let blk=null,div=1;
+    const exact=ent.find(e=>e.t===h);
+    if(exact&&exact.n1){blk=exact.n1;div=1}
+    else{const cov=ent.filter(e=>e.n6&&e.t<=h&&h<e.t+6*H).pop();if(cov){blk=cov.n6;div=6}
+      else{const c12=ent.filter(e=>e.n12&&e.t<=h&&h<e.t+12*H).pop();if(c12){blk=c12.n12;div=12}}}
+    const bd=(blk&&blk.details)||{},bs=(blk&&blk.summary&&blk.summary.symbol_code)||null;
+    const temp=_lerp(ai.air_temperature,bi.air_temperature,f);
+    const rh=_lerp(ai.relative_humidity,bi.relative_humidity,f);
+    const ws=_lerp(ai.wind_speed,bi.wind_speed,f);
+    const gust=_lerp(ai.wind_speed_of_gust,bi.wind_speed_of_gust,f);
+    const dewp=_lerp(ai.dew_point_temperature,bi.dew_point_temperature,f);
+    out.time.push(_localIso(new Date(h)));
+    out.temperature_2m.push(temp!=null?+temp.toFixed(1):null);
+    out.apparent_temperature.push(temp!=null?+temp.toFixed(1):null);
+    out.relative_humidity_2m.push(rh!=null?Math.round(rh):null);
+    out.dew_point_2m.push(dewp!=null?+dewp.toFixed(1):(temp!=null&&rh!=null?+(temp-((100-rh)/5)).toFixed(1):null));
+    out.precipitation.push(bd.precipitation_amount!=null?+(bd.precipitation_amount/div).toFixed(2):0);
+    out.precipitation_probability.push(bd.probability_of_precipitation!=null?Math.round(bd.probability_of_precipitation):null);
+    out.weather_code.push(bs?_metSymbolToWmo(bs):(_lerp(ai.cloud_area_fraction,bi.cloud_area_fraction,f)>75?3:1));
+    out.wind_speed_10m.push(ws!=null?+(ws*3.6).toFixed(1):null);
+    out.wind_gusts_10m.push(gust!=null?+(gust*3.6).toFixed(1):(ws!=null?+(ws*3.6*1.4).toFixed(1):null));
+    out.wind_direction_10m.push(Math.round(_lerpDeg(ai.wind_from_direction,bi.wind_from_direction,f)||0));
+    out.pressure_msl.push(_lerp(ai.air_pressure_at_sea_level,bi.air_pressure_at_sea_level,f));
+    out.cloud_cover.push(Math.round(_lerp(ai.cloud_area_fraction,bi.cloud_area_fraction,f)||0));
+    out.visibility.push(null);out.is_day.push(isDayAt(h));
+    out.cape.push(null);out.lifted_index.push(null);out.convective_inhibition.push(null);
+    out.uv_index.push(ai.ultraviolet_index_clear_sky!=null?ai.ultraviolet_index_clear_sky:null);out.freezing_level_height.push(null);
+  }
+  // daily aggregates per local date
+  const daily={time:[],weather_code:[],temperature_2m_max:[],temperature_2m_min:[],precipitation_sum:[],precipitation_probability_max:[],sunrise:[],sunset:[],wind_speed_10m_max:[]};
+  const byDay={};
+  out.time.forEach((t,i)=>{const k=t.slice(0,10);(byDay[k]=byDay[k]||[]).push(i)});
+  Object.keys(byDay).sort().forEach(k=>{
+    const idx=byDay[k];
+    const pick=(arr,fn)=>{const v=idx.map(i=>arr[i]).filter(x=>x!=null);return v.length?fn(v):null};
+    daily.time.push(k);
+    daily.temperature_2m_max.push(pick(out.temperature_2m,v=>Math.max(...v)));
+    daily.temperature_2m_min.push(pick(out.temperature_2m,v=>Math.min(...v)));
+    daily.precipitation_sum.push(+(idx.reduce((s,i)=>s+(out.precipitation[i]||0),0)).toFixed(2));
+    daily.precipitation_probability_max.push(pick(out.precipitation_probability,v=>Math.max(...v)));
+    daily.wind_speed_10m_max.push(pick(out.wind_speed_10m,v=>Math.max(...v)));
+    // headline code: the worst hour of the whole local day (a 3 AM thunderstorm
+    // is still the day's story) — thunder > snow > rain > drizzle > fog > cloud
+    const rank=c=>c>=95?9:c>=80?6+(c-80)/10:c>=71?5:c>=61?4+(c-61)/10:c>=51?3:c>=45?2:c;
+    daily.weather_code.push(pick(out.weather_code,v=>v.reduce((w,c)=>rank(c)>rank(w)?c:w,v[0])));
+    const d0=new Date(k+'T00:00'),s=_sunTimesLocal(lat,lon,d0);
+    daily.sunrise.push(s.rise?_localIso(s.rise):null);daily.sunset.push(s.set?_localIso(s.set):null);
+  });
+  const now=Date.now();
+  let ci=out.time.findIndex(t=>new Date(t).getTime()>now-H);if(ci<0)ci=0;
+  const current={time:out.time[ci],temperature_2m:out.temperature_2m[ci],apparent_temperature:out.apparent_temperature[ci],
+    relative_humidity_2m:out.relative_humidity_2m[ci],precipitation:out.precipitation[ci]||0,weather_code:out.weather_code[ci],
+    cloud_cover:out.cloud_cover[ci],pressure_msl:out.pressure_msl[ci],wind_speed_10m:out.wind_speed_10m[ci]||0,
+    wind_direction_10m:out.wind_direction_10m[ci]||0,wind_gusts_10m:out.wind_gusts_10m[ci]||0,is_day:out.is_day[ci]};
+  return{current,hourly:out,daily,timezone:'auto',_modelBlend:null,_omHost:'met.no',_omPartial:true,_metFallback:true};
+}
+async function _fetchMetNo(lat,lon){
+  const url='https://api.met.no/weatherapi/locationforecast/2.0/complete?lat='+(+lat).toFixed(4)+'&lon='+(+lon).toFixed(4);
+  const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const j=await r.json();
+  const om=_metNoToOm(j,lat,lon);
+  console.log('MET Norway ✓ '+om.hourly.time.length+' hourly steps, '+om.daily.time.length+' days');
+  return{blended:om,host:'met.no',_met:true,gfs:null,hrrr:null};
+}
 async function fetchWeather(){
   const reqId=S._locReqId;
   const el=document.getElementById('page-weather');
@@ -194,6 +339,10 @@ async function fetchWeather(){
     // still-running Open-Meteo request back-fills hourly/daily in place when
     // (if) it lands — the same back-fill the background retry already used.
     const _omP=_fetchOMSequence(_omPath,_isUSLoc,reqId);
+    // v7.10: outside NWS coverage there is no other forecast source, so MET
+    // Norway is requested alongside Open-Meteo from the start; inside the US it
+    // is only fetched lazily, after a miss, and back-fills the partial render.
+    const _metP=_isUSLoc?null:_fetchMetNo(S.lat,S.lon).catch(e=>{console.log('MET Norway failed: '+e.message);return null});
     const _omBudget=(typeof netIsSlow==='function'&&netIsSlow())?7000:9000;
     const _omCapped=Promise.race([_omP,new Promise(r=>setTimeout(()=>r('__om_pending'),_omBudget))]);
     const all=await Promise.allSettled([_omCapped,..._otherP]);
@@ -209,10 +358,17 @@ async function fetchWeather(){
     const nwsCur=_isUSLoc&&all[2]&&all[2].status==='fulfilled'?all[2].value:null;
     const nwsFc=_isUSLoc&&all[3]&&all[3].status==='fulfilled'?all[3].value:null;
     const nwsQpf=_isUSLoc&&all[4]&&all[4].status==='fulfilled'?all[4].value:null;
-    let omData,isPartial=false;
+    let omData,isPartial=false,_usedMet=false;
+    if(!(omRes&&omRes.blended)&&_metP){
+      // non-US: MET Norway has been in flight since boot — give it a moment
+      const met=await Promise.race([_metP,new Promise(r=>setTimeout(()=>r(null),3000))]);
+      if(reqId!==S._locReqId)return;
+      if(met&&met.blended){omRes=met;_usedMet=true;}
+    }
     if(omRes&&omRes.blended){
       omData=omRes.blended;
       omData._omHost=omRes.host;
+      if(_usedMet){isPartial=true;console.log('OM models: '+(_omLate?'still pending':'failed')+' — rendering the MET Norway forecast, Open-Meteo will back-fill');}
     } else if(awcCur||nwsCur||nwsFc){
       omData=_buildPartialOmData();
       isPartial=true;
@@ -231,8 +387,8 @@ async function fetchWeather(){
     S.forecast=omData;
     try{
       const sources=[];
-      if(!isPartial){
-        const _omHostLabel=omData._omHost==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo';
+      if(!isPartial||_usedMet){
+        const _omHostLabel=_usedMet?'MET Norway':(omData._omHost==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo');
         sources.push({src:_omHostLabel,temp:omData.current.temperature_2m,dewp:null,
           windKmh:omData.current.wind_speed_10m,windDir:omData.current.wind_direction_10m,
           gustKmh:omData.current.wind_gusts_10m,presMb:omData.current.pressure_msl,
@@ -322,6 +478,18 @@ async function fetchWeather(){
     S.weather=omData.current;S._lastWeatherFetch=Date.now();S._lastWeatherData=omData;try{localStorage.setItem('st_lastWeather',JSON.stringify({ts:S._lastWeatherFetch,data:omData}))}catch(e){}_resetMinMax();renderWeather(omData);if(typeof updateThreatTicker==='function')updateThreatTicker();if(_curLang!=='en')setTimeout(quickTranslate,300);setTimeout(checkWeatherThresholds,500);if(typeof V3D!=='undefined'&&V3D.active&&typeof refreshSky3D==='function')refreshSky3D();
     if(typeof _bootStepDone==='function')_bootStepDone('wx',isPartial?'Weather partial (waiting on Open-Meteo)':'Weather data received');
     if(isPartial)_scheduleOMRetry(reqId,_omPath,_isUSLoc,0);
+    // v7.10: a partial render with NO forecast at all (US: NWS text only, or
+    // non-US when MET was slow too) — fetch MET Norway now and back-fill the
+    // hourly/daily cards in place; Open-Meteo still overrides it when it returns.
+    if(isPartial&&!_usedMet){
+      const lazy=_metP||_fetchMetNo(S.lat,S.lon).catch(e=>{console.log('MET Norway failed: '+e.message);return null});
+      lazy.then(met=>{
+        if(reqId!==S._locReqId||!met||!met.blended)return;
+        const cur=S._lastWeatherData;
+        if(!cur||!cur._omPartial||cur._metFallback)return;   // Open-Meteo already landed, or MET already applied
+        _applyOMBackfill(met,'MET Norway');
+      }).catch(()=>{});
+    }
   }catch(e){
     if(reqId!==S._locReqId)return;
     if(typeof hideLoadingScreen==='function')hideLoadingScreen();
@@ -348,12 +516,14 @@ function _applyOMBackfill(r,why){
   const cached=S._lastWeatherData;
   if(!cached)return;
   const om=r.blended;
+  const isMet=!!r._met;                 // v7.10: MET Norway fills the forecast but stays "partial" so Open-Meteo still overrides
   cached.hourly=om.hourly;
   cached.daily=om.daily;
   cached.timezone=om.timezone;
   cached._modelBlend=om._modelBlend;
   cached._omHost=r.host;
-  cached._omPartial=false;
+  cached._omPartial=isMet;
+  cached._metFallback=isMet;
   const cc=cached.current,oc=om.current;
   if(cc.temperature_2m==null)cc.temperature_2m=oc.temperature_2m;
   if(cc.apparent_temperature==null)cc.apparent_temperature=oc.apparent_temperature;
@@ -366,12 +536,17 @@ function _applyOMBackfill(r,why){
   if(!cc.precipitation)cc.precipitation=oc.precipitation||0;
   cc.is_day=oc.is_day;
   const _modelTag=cached._modelBlend?` [${cached._modelBlend}]`:'';
-  const _omHostLabel=r.host==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo';
-  cc._source=(cc._source||'').replace(/ · ⏳ Open-Meteo$/,'')||(_omHostLabel+_modelTag);
-  console.log('Open-Meteo back-fill ('+(why||'background retry')+') via '+r.host+' — re-rendering');
+  const _omHostLabel=isMet?'MET Norway':(r.host==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo');
+  let base=(cc._source||'').replace(/ · ⏳ Open-Meteo$/,'');
+  if(isMet)cc._source=(base&&!/MET Norway/.test(base)?base+' + ':'')+'MET Norway · ⏳ Open-Meteo';
+  else{
+    base=base.replace(/\s*\[MET Norway\]/g,'').replace(/MET Norway\s*\+\s*/g,'').replace(/\s*\+\s*MET Norway/g,'').replace(/^MET Norway$/,'').trim();
+    cc._source=base||(_omHostLabel+_modelTag);
+  }
+  console.log((isMet?'MET Norway':'Open-Meteo')+' back-fill ('+(why||'background retry')+') via '+r.host+' — re-rendering');
   try{renderWeather(cached)}catch(e){console.log('partial-retry render failed:',e.message)}
   if(typeof refreshRainClock==='function')refreshRainClock(true);
-  if(typeof _bootStepDone==='function')_bootStepDone('wx','Weather data filled in');
+  if(typeof _bootStepDone==='function')_bootStepDone('wx',isMet?'Forecast filled in (MET Norway) — waiting on Open-Meteo':'Weather data filled in');
 }
 const _OM_RETRY_DELAYS=[5000,10000,20000,45000,90000];
 function _scheduleOMRetry(reqId,omPath,isUS,attempt){

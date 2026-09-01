@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v7.05</title>
+<title>StormTracker v7.06</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=803">
+<link rel="stylesheet" href="css/style.css?v=804">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.05</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.06</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -633,26 +633,47 @@
             <button id="v3d-tier-4" onclick="toggleTier3D(4)" style="width:22px;height:22px;border-radius:4px;border:1.5px solid #FF0200;background:#FF0200;color:#000;font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:inherit;transition:all .15s" title="Red 52-60 dBZ">✓</button>
             <button id="v3d-tier-5" onclick="toggleTier3D(5)" style="width:22px;height:22px;border-radius:4px;border:1.5px solid #FF00F5;background:#FF00F5;color:#000;font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:inherit;transition:all .15s" title="Magenta 61+ dBZ">✓</button>
           </div>
-          <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-            <button id="v3d-filter-toggle" onclick="toggleFilterPanel3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="Toggle dBZ tier filters">Filter</button>
-            <button onclick="reset3DView()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:background .2s" title="Reset camera to default view">⟲ Reset</button>
-            <button id="v3d-cam-mode-btn" onclick="toggleCamMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="Toggle Fixed (locked at your location) / Free (full orbit + pan)">📌 Fixed</button>
-            <button id="v3d-ar-btn" onclick="toggleARMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="AR view — live camera passthrough with storm cells at their real compass bearings (needs camera + motion access)">📷 AR</button>
-            <button id="v3d-vr-btn" onclick="toggleVRMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="VR view — look around the rendered sky, terrain and storms with the phone's motion sensors, no camera needed">🥽 VR</button>
-            <button id="v3d-alt-btn" onclick="cycleARAlt3D()" style="display:none;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="AR eye altitude above your ground level — tap to cycle 2/5/10/20/50/100/200/350/500 m">⛰ 100m</button>
-            <span id="v3d-fov-val" style="display:none;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;padding:3px 8px;font-size:9px;color:#00c8ff;font-weight:700;letter-spacing:.04em" title="Current field of view (scroll/pinch to adjust)">72°</span>
-          </div>
-          <div id="v3d-zoom-wrap" style="display:flex;gap:4px;align-items:center;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;padding:3px 8px">
-            <span style="font-size:9px;color:#00c8ff;font-weight:600">🔍</span>
-            <input type="range" id="v3d-zoom-slider" min="30" max="120" step="1" value="72" oninput="_setFov(this.value)" style="width:80px;height:14px;accent-color:#00c8ff;cursor:pointer">
-          </div>
-          <div style="display:flex;gap:4px;align-items:center">
-            <div style="display:flex;align-items:center;gap:3px;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;padding:3px 8px" title="Cloud glow intensity (0=off, 3=max)">
-              <span style="font-size:12px">💡</span>
-              <input type="range" min="0" max="3" step="1" value="1" oninput="setGlowLevel3D(this.value)" style="width:48px;height:14px;accent-color:#ffcc00;cursor:pointer">
-              <span id="v3d-lt-val" style="font-size:9px;color:#ffcc00;font-weight:700;min-width:8px;text-align:center">1</span>
+          <div style="display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap">
+            <div class="v3d-grp">
+              <div class="v3d-grp-label">View</div>
+              <div class="v3d-grp-row">
+                <button id="v3d-filter-toggle" class="v3d-gbtn" onclick="toggleFilterPanel3D()" title="Toggle dBZ tier filters">Filter</button>
+                <button class="v3d-gbtn" onclick="reset3DView()" title="Reset camera to default view">⟲ Reset</button>
+                <button id="v3d-cam-mode-btn" class="v3d-gbtn" onclick="toggleCamMode3D()" title="Toggle Fixed (locked at your location) / Free (full orbit + pan)">📌 Fixed</button>
+              </div>
             </div>
-            <button id="v3d-lighting-btn" onclick="cycleLightingMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="Cycle lighting: Auto / Day / Night / Golden">🌐 Auto</button>
+            <div class="v3d-grp">
+              <div class="v3d-grp-label">Mode</div>
+              <div class="v3d-grp-row">
+                <button id="v3d-ar-btn" class="v3d-gbtn" onclick="toggleARMode3D()" title="AR view — live camera passthrough with storm cells at their real compass bearings (needs camera + motion access)">📷 AR</button>
+                <button id="v3d-vr-btn" class="v3d-gbtn" onclick="toggleVRMode3D()" title="VR view — look around the rendered sky, terrain and storms with the phone's motion sensors, no camera needed">🥽 VR</button>
+              </div>
+            </div>
+            <div class="v3d-grp" id="v3d-alt-grp" style="display:none" title="Your eye altitude above ground level (2/5/10/20/50/100/200/350/500 m)">
+              <div class="v3d-grp-label">Height</div>
+              <div class="v3d-grp-row">
+                <button class="v3d-gbtn" onclick="stepARAlt3D(-1)" title="Lower eye altitude">−</button>
+                <span id="v3d-alt-btn" class="v3d-gval">100 m</span>
+                <button class="v3d-gbtn" onclick="stepARAlt3D(1)" title="Raise eye altitude">+</button>
+              </div>
+            </div>
+            <div class="v3d-grp" id="v3d-zoom-wrap" title="Zoom (field of view) — pinch or scroll also works">
+              <div class="v3d-grp-label">Zoom</div>
+              <div class="v3d-grp-row">
+                <button class="v3d-gbtn" onclick="_setFov(V3D._fov+8)" title="Zoom out (wider view)">−</button>
+                <span id="v3d-fov-val" class="v3d-gval">72°</span>
+                <button class="v3d-gbtn" onclick="_setFov(V3D._fov-8)" title="Zoom in (narrower view)">+</button>
+              </div>
+            </div>
+            <div class="v3d-grp">
+              <div class="v3d-grp-label">Light</div>
+              <div class="v3d-grp-row">
+                <span style="font-size:11px" title="Cloud glow intensity (0=off, 3=max)">💡</span>
+                <input type="range" min="0" max="3" step="1" value="1" oninput="setGlowLevel3D(this.value)" style="width:44px;height:14px;accent-color:#ffcc00;cursor:pointer" title="Cloud glow intensity (0=off, 3=max)">
+                <span id="v3d-lt-val" style="font-size:9px;color:#ffcc00;font-weight:700;min-width:8px;text-align:center">1</span>
+                <button id="v3d-lighting-btn" class="v3d-gbtn" onclick="cycleLightingMode3D()" title="Cycle lighting: Auto / Day / Night / Golden">🌐 Auto</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="v3d-compass-bar" style="position:absolute;top:0;left:0;right:0;height:36px;overflow:hidden;pointer-events:none;z-index:10;transform:translateZ(0);background:rgba(5,10,20,0.55);backdrop-filter:blur(6px);border-bottom:1px solid rgba(0,200,255,0.12)">
@@ -744,25 +765,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=803" defer></script>
-<script src="js/core.js?v=803" defer></script>
-<script src="js/gauges.js?v=803" defer></script>
-<script src="js/icons.js?v=803" defer></script>
-<script src="js/geo.js?v=803" defer></script>
-<script src="js/settings.js?v=803" defer></script>
-<script src="js/thresholds.js?v=803" defer></script>
-<script src="js/weather.js?v=803" defer></script>
-<script src="js/radar.js?v=803" defer></script>
-<script src="js/tropical-model.js?v=803" defer></script>
-<script src="js/storms.js?v=803" defer></script>
-<script src="js/station.js?v=803" defer></script>
-<script src="js/alerts.js?v=803" defer></script>
-<script src="js/briefingEngine.js?v=803" defer></script>
-<script src="js/ai.js?v=803" defer></script>
-<script src="js/push.js?v=803" defer></script>
-<script src="js/qrcode.js?v=803" defer></script>
-<script src="js/devicelink.js?v=803" defer></script>
-<script src="js/init.js?v=803" defer></script>
+<script src="js/radar-shared.js?v=804" defer></script>
+<script src="js/core.js?v=804" defer></script>
+<script src="js/gauges.js?v=804" defer></script>
+<script src="js/icons.js?v=804" defer></script>
+<script src="js/geo.js?v=804" defer></script>
+<script src="js/settings.js?v=804" defer></script>
+<script src="js/thresholds.js?v=804" defer></script>
+<script src="js/weather.js?v=804" defer></script>
+<script src="js/radar.js?v=804" defer></script>
+<script src="js/tropical-model.js?v=804" defer></script>
+<script src="js/storms.js?v=804" defer></script>
+<script src="js/station.js?v=804" defer></script>
+<script src="js/alerts.js?v=804" defer></script>
+<script src="js/briefingEngine.js?v=804" defer></script>
+<script src="js/ai.js?v=804" defer></script>
+<script src="js/push.js?v=804" defer></script>
+<script src="js/qrcode.js?v=804" defer></script>
+<script src="js/devicelink.js?v=804" defer></script>
+<script src="js/init.js?v=804" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -772,7 +793,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=803')
+    navigator.serviceWorker.register('sw.js?v=804')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

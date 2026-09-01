@@ -1833,7 +1833,7 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
-  progress: null, groundPending: false, altM: 100, vr: false };
+  progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '' };
 // v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
 var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
 try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
@@ -1843,9 +1843,18 @@ function cycleARAlt3D() {
   try { localStorage.setItem('v3d_ar_alt', String(V3D.ar.altM)); } catch (e) {}
   _arAltLabel();
 }
+// v7.06: −/+ stepper (clamps at 2 m and 500 m instead of wrapping)
+function stepARAlt3D(d) {
+  var i = _AR_ALTS.indexOf(V3D.ar.altM);
+  if (i < 0) i = 5;                                    // unknown value → restart from 100 m
+  else i = Math.max(0, Math.min(_AR_ALTS.length - 1, i + d));
+  V3D.ar.altM = _AR_ALTS[i];
+  try { localStorage.setItem('v3d_ar_alt', String(V3D.ar.altM)); } catch (e) {}
+  _arAltLabel();
+}
 function _arAltLabel() {
   var b = document.getElementById('v3d-alt-btn');
-  if (b) b.textContent = '⛰ ' + V3D.ar.altM + 'm';
+  if (b) b.textContent = V3D.ar.altM + ' m';
 }
 
 // v7.05: VR mode — the same sensor-aimed first-person view as AR, but the
@@ -1914,8 +1923,8 @@ function _arEnter(stream, vr) {
   ar.active = true; ar.stream = stream || null; ar.vr = !!vr;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
-  var altBtn = document.getElementById('v3d-alt-btn');
-  if (altBtn) altBtn.style.display = '';
+  var altGrp = document.getElementById('v3d-alt-grp');
+  if (altGrp) altGrp.style.display = '';
   _arAltLabel();
   if (stream) {
     // v7.01: NO video element yet, and no opacity games ever. On the owner's
@@ -1962,8 +1971,16 @@ function _arEnter(stream, vr) {
   // one-finger horizontal drag = heading trim (map-drag metaphor: pull the
   // world right → view turns left). Compasses drift; the horizon doesn't.
   var dom = V3D.renderer.domElement;
+  // v7.06: while AR/VR owns the view, a finger on the canvas must never scroll
+  // the page (the whole app was scrolling under look-around drags — owner
+  // screenshots). touch-action:none stops the browser's native pan/zoom, and
+  // the touchmove handler swallows what remains (bound non-passive below so
+  // preventDefault is honored).
+  ar.prevTouchAction = dom.style.touchAction || '';
+  dom.style.touchAction = 'none';
   ar.ts = function (e) { if (e.touches && e.touches.length === 1) ar.dragX = e.touches[0].clientX; };
   ar.tm = function (e) {
+    if (e.cancelable) e.preventDefault();          // page must not scroll or pinch-zoom
     if (ar.dragX == null || !e.touches || e.touches.length !== 1) return;
     var x = e.touches[0].clientX;
     if (Math.abs(x - ar.dragX) > 2) ar.dragged = true;
@@ -1977,7 +1994,7 @@ function _arEnter(stream, vr) {
     if (ar.dragged) { V3D._suppressClickUntil = Date.now() + 350; ar.dragged = false; }
   };
   dom.addEventListener('touchstart', ar.ts, true);
-  dom.addEventListener('touchmove', ar.tm, true);
+  dom.addEventListener('touchmove', ar.tm, { capture: true, passive: false });
   dom.addEventListener('touchend', ar.te, true);
   if (stream || vr) { _arBuildGround(); if (!ar.groundPending) _arReveal(); }
   ar.sensorTimer = setTimeout(function () {
@@ -2046,8 +2063,8 @@ function _arExit() {
   if (ar.stream) { ar.stream.getTracks().forEach(function (t) { t.stop(); }); ar.stream = null; }
   if (ar.video) { try { ar.video.srcObject = null; ar.video.remove(); } catch (e) {} ar.video = null; }
   if (ar.fade) { try { ar.fade.remove(); } catch (e) {} ar.fade = null; }
-  var altBtn = document.getElementById('v3d-alt-btn');
-  if (altBtn) altBtn.style.display = 'none';
+  var altGrp = document.getElementById('v3d-alt-grp');
+  if (altGrp) altGrp.style.display = 'none';
   _arDisposeGround();
   if (ar.handler) {
     window.removeEventListener('deviceorientation', ar.handler, true);
@@ -2059,6 +2076,7 @@ function _arExit() {
     if (ar.ts) dom.removeEventListener('touchstart', ar.ts, true);
     if (ar.tm) dom.removeEventListener('touchmove', ar.tm, true);
     if (ar.te) dom.removeEventListener('touchend', ar.te, true);
+    dom.style.touchAction = ar.prevTouchAction || '';
   }
   ar.ts = ar.tm = ar.te = null; ar.evt = null;
   if (ar.vtrack) { if (ar.trackEnd) ar.vtrack.removeEventListener('ended', ar.trackEnd); ar.vtrack = null; ar.trackEnd = null; }

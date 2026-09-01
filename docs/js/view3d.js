@@ -2077,17 +2077,22 @@ function _arApplyOrientation() {
   var fwdPitch = Math.asin(Math.max(-1, Math.min(1, _AR_FWD.y))) * 180 / Math.PI;
   var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
   if (servoOK) {
-    // physical-attitude gate (v6.97): the compass reference follows the device
-    // TOP, which matches the view azimuth only when the top points near the
-    // zenith (upright portrait) or its horizontal projection aligns with the
-    // view (shallow tilts). A sideways hold — even under a portrait-locked
-    // screen, where scr stays 0 — puts the top perpendicular to the view and
-    // the compass ~90° off: freeze and let the converged yawFix + trim carry.
-    var dty = Math.abs(_AR_DTOP.y);
-    if (dty < 0.6) {
-      var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z) || 1;
+    // physical-attitude gate (v7.00): the compass reference follows the device
+    // TOP, so it equals the view azimuth only while the top LEANS TOWARD the
+    // view. What matters is the direction of the lean, not how vertical the
+    // top is — v6.97's near-zenith test left a hole: tilt UP past vertical and
+    // the top swings BEHIND you while still near the zenith, the compass reads
+    // the reciprocal (view ±180°), and the servo slewed the whole scene around
+    // (owner report: flips at 40–60° up; down was always fine, because tilting
+    // down leans the top toward the view). Rule: freeze unless the top's
+    // horizontal lean points with the view — which also freezes any sideways
+    // hold (lean ⟂ view), portrait-locked or not. A dead-vertical top (lean
+    // magnitude < ~5°) is measurement noise, not a lean: keep the servo, since
+    // that is the normal upright hold where the compass is well-behaved.
+    var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z);
+    if (hm >= 0.08) {
       var fm = Math.sqrt(_AR_FWD.x * _AR_FWD.x + _AR_FWD.z * _AR_FWD.z) || 1;
-      if ((_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm) < 0.8) servoOK = false;
+      if ((_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm) < 0.5) servoOK = false;
     }
   }
   if (servoOK) {

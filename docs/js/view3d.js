@@ -1829,7 +1829,7 @@ function _initLightingBtn() {
 // wobble are absorbed by the same servo plus a one-finger drag trim.
 // ═══════════════════════════════════════════════════════════════════════════
 V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
-  compass: null, hasAbs: false, yawFix: 0, trim: 0, hint: null, hintTimer: null,
+  compass: null, hasAbs: false, yawFix: 0, trim: 0, yawRaw: null, hint: null, hintTimer: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, revealed: false, revealTimer: null,
@@ -1878,7 +1878,7 @@ function _arEnter(stream) {
   ar.prevFov = V3D._fov;
   _setFov(64);                     // ≈ a phone main camera's vertical FOV in portrait; pinch to fine-tune
   ar.active = true; ar.stream = stream || null;
-  ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false;
+  ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
   if (stream) {
     // v7.01: NO video element yet, and no opacity games ever. On the owner's
@@ -2068,11 +2068,27 @@ function _arApplyOrientation() {
   if (!_AR_DTOP) _AR_DTOP = new THREE.Vector3();
   var scrR = scr * D2R;
   _AR_DTOP.set(-Math.sin(scrR), Math.cos(scrR), 0).applyQuaternion(q);
+  // ── v7.02: yaw first, then pitch (owner-prescribed) ──
+  // The raw quaternion above is only a MEASUREMENT now — it is never rendered.
+  // Extract where the camera actually faces: yaw about world-Y from the
+  // forward's horizontal projection, then pitch from its rise. Near straight
+  // up/down that projection collapses and the sensor euler stream turns
+  // treacherous (paired alpha/gamma ±180 flips that preserve forward but spin
+  // the frame, and transient one-axis-flipped samples that reverse it), so
+  // the yaw HOLDS its last trusted value whenever the projection is too short
+  // to believe (|pitch| ≳ 81°), and roll is discarded entirely. The pose is
+  // then REBUILT as Qy(yaw)·Qx(pitch), so no representation artifact can
+  // rotate the camera toward a direction it isn't physically facing.
+  _AR_FWD.set(0, 0, -1).applyQuaternion(q);
+  var R2D = 180 / Math.PI;
+  var fhm = Math.sqrt(_AR_FWD.x * _AR_FWD.x + _AR_FWD.z * _AR_FWD.z);
+  var fwdPitch = Math.atan2(_AR_FWD.y, fhm) * R2D;      // ±90, never wraps
+  if (fhm >= 0.15 || ar.yawRaw == null)
+    ar.yawRaw = Math.atan2(_AR_FWD.x, -_AR_FWD.z) * R2D;
+  var rawHdg = (ar.yawRaw % 360 + 360) % 360;
   // servo the yaw so scene-north (-z, TRUE north per geoToScene3D) tracks the
   // real compass: raw alpha has an arbitrary zero on iOS, so compare the pose's
   // own heading against the absolute compass and converge slowly (no snapping).
-  _AR_FWD.set(0, 0, -1).applyQuaternion(q);
-  var rawHdg = (Math.atan2(_AR_FWD.x, -_AR_FWD.z) * 180 / Math.PI + 360) % 360;
   // Servo gating (v6.96):
   // - Android absolute events carry an earth-referenced alpha, so the pose
   //   quaternion is ALREADY absolute — servoing it against a device-top heading
@@ -2081,7 +2097,6 @@ function _arApplyOrientation() {
   //   landscape it is ~90° off the view azimuth, and near the zenith/nadir its
   //   horizontal projection degenerates and can flip. Servo only in portrait
   //   with the view within ±55° of level; otherwise hold the converged yawFix.
-  var fwdPitch = Math.asin(Math.max(-1, Math.min(1, _AR_FWD.y))) * 180 / Math.PI;
   var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
   if (servoOK) {
     // physical-attitude gate (v7.00): the compass reference follows the device
@@ -2098,7 +2113,7 @@ function _arApplyOrientation() {
     // that is the normal upright hold where the compass is well-behaved.
     var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z);
     if (hm >= 0.08) {
-      var fm = Math.sqrt(_AR_FWD.x * _AR_FWD.x + _AR_FWD.z * _AR_FWD.z) || 1;
+      var fm = fhm || 1;
       if ((_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm) < 0.5) servoOK = false;
     }
   }
@@ -2106,7 +2121,11 @@ function _arApplyOrientation() {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
     ar.yawFix += diff * 0.04;
   }
-  q.premultiply(_AR_QS.setFromAxisAngle(_AR_UP, -(ar.yawFix + ar.trim) * D2R));
+  // rebuild: heading = extracted yaw + compass servo + drag trim, applied about
+  // world-Y FIRST, then the (clamped) pitch about the camera's own X. Roll = 0.
+  var pc = Math.max(-89, Math.min(89, fwdPitch));
+  _AR_EUL.set(pc * D2R, -(ar.yawRaw + ar.yawFix + ar.trim) * D2R, 0, 'YXZ');
+  q.setFromEuler(_AR_EUL);
   V3D.camera.position.set(0, 0.15, 0);
   // keep controls.target just ahead so the compass tape (which reads target),
   // the raycaster and the sprite distance-scaling all keep working untouched

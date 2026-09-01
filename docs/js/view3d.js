@@ -1833,7 +1833,20 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
-  progress: null, groundPending: false };
+  progress: null, groundPending: false, altM: 100 };
+// v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
+var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
+try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
+function cycleARAlt3D() {
+  var i = _AR_ALTS.indexOf(V3D.ar.altM);
+  V3D.ar.altM = _AR_ALTS[(i + 1) % _AR_ALTS.length];   // unknown value → index -1 → wraps to 2 m
+  try { localStorage.setItem('v3d_ar_alt', String(V3D.ar.altM)); } catch (e) {}
+  _arAltLabel();
+}
+function _arAltLabel() {
+  var b = document.getElementById('v3d-alt-btn');
+  if (b) b.textContent = '⛰ ' + V3D.ar.altM + 'm';
+}
 
 function toggleARMode3D() {
   if (V3D.ar.active) { _arExit(); return; }
@@ -1880,6 +1893,9 @@ function _arEnter(stream) {
   ar.active = true; ar.stream = stream || null;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
+  var altBtn = document.getElementById('v3d-alt-btn');
+  if (altBtn) altBtn.style.display = '';
+  _arAltLabel();
   if (stream) {
     // v7.01: NO video element yet, and no opacity games ever. On the owner's
     // phone the v6.98 video was VISIBLE while carrying opacity:0 (the camera
@@ -1999,6 +2015,8 @@ function _arExit() {
   if (ar.stream) { ar.stream.getTracks().forEach(function (t) { t.stop(); }); ar.stream = null; }
   if (ar.video) { try { ar.video.srcObject = null; ar.video.remove(); } catch (e) {} ar.video = null; }
   if (ar.fade) { try { ar.fade.remove(); } catch (e) {} ar.fade = null; }
+  var altBtn = document.getElementById('v3d-alt-btn');
+  if (altBtn) altBtn.style.display = 'none';
   _arDisposeGround();
   if (ar.handler) {
     window.removeEventListener('deviceorientation', ar.handler, true);
@@ -2035,13 +2053,14 @@ function _arExit() {
 var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null, _AR_DTOP = null;
 function _arApplyOrientation() {
   var ar = V3D.ar, e = ar.evt;
+  var aY = (ar.altM || 100) * 0.001;             // v7.04: preset eye altitude, km units
   if (!e || e.a == null || e.b == null || e.g == null) {
     if (ar.noSensor && _AR_UP) {
       // no motion sensors at all (desktop): drag-to-look, level pitch
       V3D.camera.quaternion.setFromAxisAngle(_AR_UP, -ar.trim * Math.PI / 180);
-      V3D.camera.position.set(0, 0.15, 0);
+      V3D.camera.position.set(0, aY, 0);
       _AR_FWD.set(0, 0, -1).applyQuaternion(V3D.camera.quaternion);
-      V3D.controls.target.set(_AR_FWD.x * 0.05, 0.15 + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
+      V3D.controls.target.set(_AR_FWD.x * 0.05, aY + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
       _arPlaceFade(_AR_FWD.y);
     } else if (ar.noSensor && !_AR_UP) {
       _AR_UP = new THREE.Vector3(0, 1, 0); _AR_FWD = new THREE.Vector3();
@@ -2126,11 +2145,11 @@ function _arApplyOrientation() {
   var pc = Math.max(-89, Math.min(89, fwdPitch));
   _AR_EUL.set(pc * D2R, -(ar.yawRaw + ar.yawFix + ar.trim) * D2R, 0, 'YXZ');
   q.setFromEuler(_AR_EUL);
-  V3D.camera.position.set(0, 0.15, 0);
+  V3D.camera.position.set(0, aY, 0);
   // keep controls.target just ahead so the compass tape (which reads target),
   // the raycaster and the sprite distance-scaling all keep working untouched
   _AR_FWD.set(0, 0, -1).applyQuaternion(q);
-  V3D.controls.target.set(_AR_FWD.x * 0.05, 0.15 + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
+  V3D.controls.target.set(_AR_FWD.x * 0.05, aY + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
   _arPlaceFade(_AR_FWD.y);
 }
 

@@ -1061,9 +1061,11 @@ async function scanRadarForView(){
   showScanOverlay();
   // v4.76: gate on winds aloft before scanning/rendering points.
   const _vReqId=S._locReqId;
-  const _waOk=await ensureWindsAloft(cLat,cLng,_vReqId);
+  // v7.09: bounded — the boot gate may still be running; points must not wait on it
+  const _waOk=await _waitWindsBounded(ensureWindsAloft(cLat,cLng,_vReqId),_waFirstPaintGrace());
   if(_vReqId!==S._locReqId){hideScanOverlay();return}
-  if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
+  if(_waOk==='pending')toast('⏳ Winds aloft still loading — storm motion & ETAs will fill in');
+  else if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
   scanStep(2,'Scanning radar tiles...');
   try{
     // v5.44: thin wrapper over the unified runRadarScan engine — center coords
@@ -1119,9 +1121,11 @@ async function scanRadarHiRes(map,fromHome){
   showScanOverlay();
   // v4.76: gate on winds aloft before scanning/rendering points.
   const _hReqId=S._locReqId;
-  const _waOk=await ensureWindsAloft(cLat,cLng,_hReqId);
+  // v7.09: bounded — same rule as the storms scan
+  const _waOk=await _waitWindsBounded(ensureWindsAloft(cLat,cLng,_hReqId),_waFirstPaintGrace());
   if(_hReqId!==S._locReqId){hideScanOverlay();return}
-  if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
+  if(_waOk==='pending')toast('⏳ Winds aloft still loading — storm motion & ETAs will fill in');
+  else if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
   scanStep(2,'Hi-Res scanning (step=1)...');
   try{
     // v5.44: thin wrapper over the unified runRadarScan engine — fixed hi-res

@@ -685,6 +685,21 @@ async function fetchWindsAloftNOMADS(lat,lon){
 // v4.43: Compute & store wind-shear, steering, and stormMovement from a
 // parsed aloftSpeeds array. Extracted so both Open-Meteo and NOMADS-GFS
 // providers can drive the same downstream consumers.
+// v7.09: last-good winds-aloft profile, persisted for the next launch.
+function _saveWindsAloft(aloftSpeeds,providerInfo,lat,lon){
+  if(!aloftSpeeds||aloftSpeeds.length<2)return;
+  if(providerInfo&&/last session/.test(providerInfo.label||''))return;   // don't re-save a restore under a new timestamp
+  try{localStorage.setItem('st_windAloft',JSON.stringify({ts:Date.now(),lat,lon,aloftSpeeds,provider:providerInfo.provider,host:providerInfo.host||null,label:providerInfo.label||providerInfo.provider}))}catch(e){}
+}
+function _loadSavedWindsAloft(lat,lon){
+  try{
+    const c=JSON.parse(localStorage.getItem('st_windAloft')||'null');
+    if(!c||!c.ts||!Array.isArray(c.aloftSpeeds)||c.aloftSpeeds.length<2)return null;
+    if(Date.now()-c.ts>=30*60000)return null;
+    if(haversine(lat,lon,c.lat,c.lon)>=100)return null;
+    return c;
+  }catch(e){return null}
+}
 function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   // v6.63: remember whether steering was already known — if this call is the
   // moment motion FIRST resolves and storms are already on screen, their ETAs/
@@ -729,6 +744,7 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   const spdMph=Math.round(spdKt*1.151);
   S.stormMovement={direction:Math.round(dir),speed:spdMph};
   S._windCache={lat,lon,ts:Date.now(),dir:Math.round(dir),speed:spdMph,provider:providerInfo.provider,host:providerInfo.host||null};
+  _saveWindsAloft(aloftSpeeds,providerInfo,lat,lon);   // v7.09: survives a relaunch
   console.log('[WindsAloft] Per-level: '+aloftSpeeds.map(a=>a.p+'hPa='+a.rawMs.toFixed(1)+'m/s@'+a.dir+'°').join(', '));
   console.log('[WindsAloft] Steering ('+providerInfo.provider+(providerInfo.host?'/'+providerInfo.host:'')+'): '+steering.map(a=>a.p+'hPa').join(',')+' Vx='+ax.toFixed(2)+' Vy='+ay.toFixed(2)+' → '+spdKt.toFixed(1)+'kt '+Math.round(dir)+'° → '+spdMph+' mph');
   if(S.map&&S._showPathArrows)buildPathArrows(S.map);
@@ -793,6 +809,22 @@ async function fetchWindsAloft(overrideLat,overrideLon){
     if(d<100){
       console.log('Winds aloft: using cache ('+d.toFixed(0)+'mi from last fetch, '+((Date.now()-cache.ts)/60000).toFixed(0)+'m old)');
       if(typeof _bootStepDone==='function')_bootStepDone('wind','Winds aloft (cached)');
+      return;
+    }
+  }
+  // v7.09: the in-memory cache dies with the page and setLoc nulls it on every
+  // launch, so a boot ALWAYS refetched — and when Open-Meteo was down, the
+  // whole 30 s gate ran with nothing to fall back on. The last good profile now
+  // persists (st_windAloft) and serves a boot within the same 30-min / 100-mi
+  // rules as the in-memory cache, keeping its ORIGINAL timestamp so it still
+  // expires on schedule and the next scan refreshes it.
+  if(!cache){
+    const saved=_loadSavedWindsAloft(lat,lon);
+    if(saved){
+      _applyAloftData(saved.aloftSpeeds,{provider:saved.provider,host:saved.host||null,label:(saved.label||saved.provider)+' · last session'},lat,lon);
+      if(S._windCache)S._windCache.ts=saved.ts;
+      console.log('Winds aloft: restored last session ('+((Date.now()-saved.ts)/60000).toFixed(0)+'m old, '+saved.provider+')');
+      if(typeof _bootStepDone==='function')_bootStepDone('wind','Winds aloft (last session)');
       return;
     }
   }
@@ -963,6 +995,20 @@ function refreshStormViewsForWinds(){
 // afterward so projections fill in once WA finally arrives.
 const _WA_GATE_BUDGET_MS=30000;
 const _WA_GATE_PAUSE_MS=3000;
+// v7.09: how long a scan waits for the gate AFTER its tiles have landed
+// before rendering without steering. On a slow tier the wait is shorter — the
+// link is the bottleneck, and points beat a spinner.
+const _WA_FIRST_PAINT_GRACE_MS=2500;
+function _waFirstPaintGrace(){
+  try{if(typeof netIsSlow==='function'&&netIsSlow())return 1000}catch(e){}
+  return _WA_FIRST_PAINT_GRACE_MS;
+}
+// Resolves to the gate's own boolean if it settles within ms, else 'pending'.
+function _waitWindsBounded(gateP,ms){
+  let settled=false;
+  const g=Promise.resolve(gateP).then(v=>{settled=true;return v},()=>{settled=true;return false});
+  return Promise.race([g,new Promise(r=>setTimeout(()=>r('pending'),ms))]).then(v=>settled?v:'pending');
+}
 // Winds-aloft is "ready" only when we have >=2 aloft levels AND that data was
 // fetched FOR the requested location. S._windCache records the lat/lon the aloft
 // data was fetched at and is cleared on every location change (setLoc /
@@ -1801,14 +1847,18 @@ async function scanRadarForStorms(){
   if(reqId!==S._locReqId){hideScanOverlay();return}
   S._fullScanActive=true;
   if(typeof _bootStep==='function')_bootStep('scan','Scanning radar…');
-  // v4.76: block on the winds-aloft gate before scanning/rendering any points,
-  // so storm steering / ETAs / cones never run without aloft data on first
-  // load. AFD is fetched in parallel since it doesn't gate point rendering.
+  // v7.09: the winds-aloft gate no longer holds the radar tiles hostage.
+  // v4.76 awaited the full 30 s gate (plus the AFD) before requesting a single
+  // tile, so an Open-Meteo outage meant 30-42 s of nothing, then a "winds
+  // aloft unavailable" toast, THEN the first storm point (owner trace, v7.09).
+  // Now the gate and the tile burst run together; once the tiles land the
+  // scan waits only a short grace for winds (healthy link: winds are back in
+  // ~1 s, so the first paint still carries motion), then renders regardless.
+  // Winds that arrive later re-render every storm surface through the
+  // existing late-arrival path (_applyAloftData → _queueWindStormRefresh).
+  // The AFD only feeds the AI briefing — it never needed to gate points.
   const _waGateP=ensureWindsAloft(S.lat,S.lon,reqId);
-  const _afdP=fetchAFD();
-  const _waOk=await _waGateP;await _afdP;
-  if(reqId!==S._locReqId){hideScanOverlay();return}
-  if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
+  try{const _p=fetchAFD();if(_p&&_p.catch)_p.catch(()=>{})}catch(e){}
   scanStep(2,'Scanning radar tiles...');
   try{
     // v5.44: thin wrapper over the unified runRadarScan engine (radar.js).
@@ -1820,6 +1870,17 @@ async function scanRadarForStorms(){
       minDbz:(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15,
       source:useNexrad?'nexrad':'rainviewer'
     });
+    if(reqId!==S._locReqId){hideScanOverlay();return}
+    const _waOk=await _waitWindsBounded(_waGateP,_waFirstPaintGrace());
+    if(reqId!==S._locReqId){hideScanOverlay();return}
+    if(_waOk==='pending'){
+      toast('⏳ Winds aloft still loading — storm motion & ETAs will fill in');
+      _waGateP.then(ok=>{
+        if(reqId!==S._locReqId)return;
+        if(ok){if(typeof _queueWindStormRefresh==='function')_queueWindStormRefresh()}
+        else toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
+      }).catch(()=>{});
+    }else if(!_waOk)toast('⚠️ Winds aloft unavailable — storm motion & ETAs may be limited');
     if(!result){
       // v6.72: a failed refresh (couldn't even reach the radar service) must
       // never erase the last good picture — the old code cleared every storm

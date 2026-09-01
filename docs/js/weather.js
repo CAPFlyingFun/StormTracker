@@ -187,9 +187,24 @@ async function fetchWeather(){
     const _otherP=[fetchAWCNearest()];
     if(_isUSLoc)_otherP.push(fetchNWSCurrent(),fetchNWSForecast(),fetchNwsHourlyQpf());
     else console.log('[non-US] Skipped: NWS current obs, NWS forecast, NWS QPF');
-    const all=await Promise.allSettled([_fetchOMSequence(_omPath,_isUSLoc,reqId),..._otherP]);
+    // v7.09: Open-Meteo gets a FIRST-PAINT budget. Its full sequence (12 s ×2
+    // models, 2.5 s pause, retry, sibling host) can run 30 s+ when the service
+    // is down, and the tab showed nothing that whole time even with NWS/AWC in
+    // hand. Now the page renders from whatever is back by the budget, and the
+    // still-running Open-Meteo request back-fills hourly/daily in place when
+    // (if) it lands — the same back-fill the background retry already used.
+    const _omP=_fetchOMSequence(_omPath,_isUSLoc,reqId);
+    const _omBudget=(typeof netIsSlow==='function'&&netIsSlow())?7000:9000;
+    const _omCapped=Promise.race([_omP,new Promise(r=>setTimeout(()=>r('__om_pending'),_omBudget))]);
+    const all=await Promise.allSettled([_omCapped,..._otherP]);
     if(reqId!==S._locReqId)return;
-    const omRes=all[0].status==='fulfilled'?all[0].value:null;
+    let omRes=all[0].status==='fulfilled'?all[0].value:null;
+    let _omLate=false;
+    if(omRes==='__om_pending'){
+      omRes=null;_omLate=true;
+      console.log('OM models: past the '+_omBudget+' ms first-paint budget — rendering from NWS/AWC, Open-Meteo will back-fill');
+      _omP.then(r=>{if(reqId!==S._locReqId)return;if(r&&r.blended&&S._lastWeatherData&&S._lastWeatherData._omPartial)_applyOMBackfill(r,'first-paint budget')}).catch(()=>{});
+    }
     const awcCur=all[1].status==='fulfilled'?all[1].value:null;
     const nwsCur=_isUSLoc&&all[2]&&all[2].status==='fulfilled'?all[2].value:null;
     const nwsFc=_isUSLoc&&all[3]&&all[3].status==='fulfilled'?all[3].value:null;
@@ -201,8 +216,14 @@ async function fetchWeather(){
     } else if(awcCur||nwsCur||nwsFc){
       omData=_buildPartialOmData();
       isPartial=true;
-      console.log('OM models: both hosts failed — partial render via '+
+      console.log('OM models: '+(_omLate?'still pending':'both hosts failed')+' — partial render via '+
         [nwsCur&&'NWS-current',nwsFc&&'NWS-forecast',awcCur&&'AWC-METAR'].filter(Boolean).join('+'));
+    } else if(_omLate){
+      // nothing else answered either — Open-Meteo is the only hope, wait it out
+      const r=await _omP.catch(()=>null);
+      if(reqId!==S._locReqId)return;
+      if(r&&r.blended){omData=r.blended;omData._omHost=r.host;_omLate=false;}
+      else throw new Error('All sources failed (Open-Meteo + NWS + AWC)');
     } else {
       throw new Error('All sources failed (Open-Meteo + NWS + AWC)');
     }
@@ -321,6 +342,37 @@ async function fetchWeather(){
 // Open-Meteo" and have to manually close/reopen the app. New chain stays
 // snappy early (5s) and stretches to ~3 minutes total before yielding to
 // the hourly autorefresh.
+// v7.09: apply a late Open-Meteo result over a partial (NWS/AWC-only) render —
+// shared by the background retry and the first-paint-budget back-fill.
+function _applyOMBackfill(r,why){
+  const cached=S._lastWeatherData;
+  if(!cached)return;
+  const om=r.blended;
+  cached.hourly=om.hourly;
+  cached.daily=om.daily;
+  cached.timezone=om.timezone;
+  cached._modelBlend=om._modelBlend;
+  cached._omHost=r.host;
+  cached._omPartial=false;
+  const cc=cached.current,oc=om.current;
+  if(cc.temperature_2m==null)cc.temperature_2m=oc.temperature_2m;
+  if(cc.apparent_temperature==null)cc.apparent_temperature=oc.apparent_temperature;
+  if(cc.relative_humidity_2m==null)cc.relative_humidity_2m=oc.relative_humidity_2m;
+  if(cc.pressure_msl==null)cc.pressure_msl=oc.pressure_msl;
+  if(cc.cloud_cover==null)cc.cloud_cover=oc.cloud_cover;
+  if(!cc.wind_speed_10m)cc.wind_speed_10m=oc.wind_speed_10m;
+  if(!cc.wind_gusts_10m)cc.wind_gusts_10m=oc.wind_gusts_10m;
+  if(cc.weather_code===3&&oc.weather_code!=null)cc.weather_code=oc.weather_code;
+  if(!cc.precipitation)cc.precipitation=oc.precipitation||0;
+  cc.is_day=oc.is_day;
+  const _modelTag=cached._modelBlend?` [${cached._modelBlend}]`:'';
+  const _omHostLabel=r.host==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo';
+  cc._source=(cc._source||'').replace(/ · ⏳ Open-Meteo$/,'')||(_omHostLabel+_modelTag);
+  console.log('Open-Meteo back-fill ('+(why||'background retry')+') via '+r.host+' — re-rendering');
+  try{renderWeather(cached)}catch(e){console.log('partial-retry render failed:',e.message)}
+  if(typeof refreshRainClock==='function')refreshRainClock(true);
+  if(typeof _bootStepDone==='function')_bootStepDone('wx','Weather data filled in');
+}
 const _OM_RETRY_DELAYS=[5000,10000,20000,45000,90000];
 function _scheduleOMRetry(reqId,omPath,isUS,attempt){
   if(attempt>=_OM_RETRY_DELAYS.length){console.log('OM background retry: giving up after '+_OM_RETRY_DELAYS.length+' attempts — autorefresh will retry');return}
@@ -333,33 +385,7 @@ function _scheduleOMRetry(reqId,omPath,isUS,attempt){
     const r=await _fetchOMSequence(omPath,isUS,reqId);
     if(reqId!==S._locReqId)return;
     if(r&&r.blended){
-      const cached=S._lastWeatherData;
-      if(!cached){return}
-      const om=r.blended;
-      cached.hourly=om.hourly;
-      cached.daily=om.daily;
-      cached.timezone=om.timezone;
-      cached._modelBlend=om._modelBlend;
-      cached._omHost=r.host;
-      cached._omPartial=false;
-      const cc=cached.current,oc=om.current;
-      if(cc.temperature_2m==null)cc.temperature_2m=oc.temperature_2m;
-      if(cc.apparent_temperature==null)cc.apparent_temperature=oc.apparent_temperature;
-      if(cc.relative_humidity_2m==null)cc.relative_humidity_2m=oc.relative_humidity_2m;
-      if(cc.pressure_msl==null)cc.pressure_msl=oc.pressure_msl;
-      if(cc.cloud_cover==null)cc.cloud_cover=oc.cloud_cover;
-      if(!cc.wind_speed_10m)cc.wind_speed_10m=oc.wind_speed_10m;
-      if(!cc.wind_gusts_10m)cc.wind_gusts_10m=oc.wind_gusts_10m;
-      if(cc.weather_code===3&&oc.weather_code!=null)cc.weather_code=oc.weather_code;
-      if(!cc.precipitation)cc.precipitation=oc.precipitation||0;
-      cc.is_day=oc.is_day;
-      const _modelTag=cached._modelBlend?` [${cached._modelBlend}]`:'';
-      const _omHostLabel=r.host==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo';
-      cc._source=(cc._source||'').replace(/ · ⏳ Open-Meteo$/,'')||(_omHostLabel+_modelTag);
-      console.log('OM background retry succeeded via '+r.host+' — re-rendering');
-      try{renderWeather(cached)}catch(e){console.log('partial-retry render failed:',e.message)}
-      if(typeof refreshRainClock==='function')refreshRainClock(true);
-      if(typeof _bootStepDone==='function')_bootStepDone('wx','Weather data filled in');
+      _applyOMBackfill(r,'background retry');
     } else {
       console.log('OM background retry '+(attempt+1)+' failed');
       _scheduleOMRetry(reqId,omPath,isUS,attempt+1);

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v7.04</title>
+<title>StormTracker v7.05</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=802">
+<link rel="stylesheet" href="css/style.css?v=803">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.04</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.05</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -638,6 +638,7 @@
             <button onclick="reset3DView()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:background .2s" title="Reset camera to default view">⟲ Reset</button>
             <button id="v3d-cam-mode-btn" onclick="toggleCamMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="Toggle Fixed (locked at your location) / Free (full orbit + pan)">📌 Fixed</button>
             <button id="v3d-ar-btn" onclick="toggleARMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="AR view — live camera passthrough with storm cells at their real compass bearings (needs camera + motion access)">📷 AR</button>
+            <button id="v3d-vr-btn" onclick="toggleVRMode3D()" style="background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="VR view — look around the rendered sky, terrain and storms with the phone's motion sensors, no camera needed">🥽 VR</button>
             <button id="v3d-alt-btn" onclick="cycleARAlt3D()" style="display:none;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;color:#e8eef8;font-size:10px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;font-family:inherit;transition:all .2s" title="AR eye altitude above your ground level — tap to cycle 2/5/10/20/50/100/200/350/500 m">⛰ 100m</button>
             <span id="v3d-fov-val" style="display:none;background:rgba(5,10,20,0.78);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:8px;padding:3px 8px;font-size:9px;color:#00c8ff;font-weight:700;letter-spacing:.04em" title="Current field of view (scroll/pinch to adjust)">72°</span>
           </div>
@@ -743,25 +744,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=802" defer></script>
-<script src="js/core.js?v=802" defer></script>
-<script src="js/gauges.js?v=802" defer></script>
-<script src="js/icons.js?v=802" defer></script>
-<script src="js/geo.js?v=802" defer></script>
-<script src="js/settings.js?v=802" defer></script>
-<script src="js/thresholds.js?v=802" defer></script>
-<script src="js/weather.js?v=802" defer></script>
-<script src="js/radar.js?v=802" defer></script>
-<script src="js/tropical-model.js?v=802" defer></script>
-<script src="js/storms.js?v=802" defer></script>
-<script src="js/station.js?v=802" defer></script>
-<script src="js/alerts.js?v=802" defer></script>
-<script src="js/briefingEngine.js?v=802" defer></script>
-<script src="js/ai.js?v=802" defer></script>
-<script src="js/push.js?v=802" defer></script>
-<script src="js/qrcode.js?v=802" defer></script>
-<script src="js/devicelink.js?v=802" defer></script>
-<script src="js/init.js?v=802" defer></script>
+<script src="js/radar-shared.js?v=803" defer></script>
+<script src="js/core.js?v=803" defer></script>
+<script src="js/gauges.js?v=803" defer></script>
+<script src="js/icons.js?v=803" defer></script>
+<script src="js/geo.js?v=803" defer></script>
+<script src="js/settings.js?v=803" defer></script>
+<script src="js/thresholds.js?v=803" defer></script>
+<script src="js/weather.js?v=803" defer></script>
+<script src="js/radar.js?v=803" defer></script>
+<script src="js/tropical-model.js?v=803" defer></script>
+<script src="js/storms.js?v=803" defer></script>
+<script src="js/station.js?v=803" defer></script>
+<script src="js/alerts.js?v=803" defer></script>
+<script src="js/briefingEngine.js?v=803" defer></script>
+<script src="js/ai.js?v=803" defer></script>
+<script src="js/push.js?v=803" defer></script>
+<script src="js/qrcode.js?v=803" defer></script>
+<script src="js/devicelink.js?v=803" defer></script>
+<script src="js/init.js?v=803" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -771,7 +772,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=802')
+    navigator.serviceWorker.register('sw.js?v=803')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

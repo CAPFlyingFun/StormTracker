@@ -1833,7 +1833,7 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
-  progress: null, groundPending: false, altM: 100 };
+  progress: null, groundPending: false, altM: 100, vr: false };
 // v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
 var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
 try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
@@ -1846,6 +1846,27 @@ function cycleARAlt3D() {
 function _arAltLabel() {
   var b = document.getElementById('v3d-alt-btn');
   if (b) b.textContent = '⛰ ' + V3D.ar.altM + 'm';
+}
+
+// v7.05: VR mode — the same sensor-aimed first-person view as AR, but the
+// camera stays off: the rendered sky, sun/moon, terrain, buildings and storm
+// cells ARE the scene. One code path with AR (stream === null, vr flag on),
+// so the compass servo, drag trim, altitude presets and terrain build are
+// shared, and only the passthrough/reveal differ.
+function toggleVRMode3D() {
+  if (V3D.ar.active) { _arExit(); return; }        // exits AR or VR alike
+  if (!V3D.ready || V3D.ar.pending) return;
+  V3D.ar.pending = true;
+  var motionP;
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    motionP = DeviceOrientationEvent.requestPermission().then(function (r) { return r === 'granted'; }).catch(function () { return false; });
+  } else {
+    motionP = Promise.resolve(true);
+  }
+  motionP.then(function (motion) {
+    if (!motion) { V3D.ar.pending = false; _arHint('Motion access was denied — VR needs the compass/gyro to aim the view. Close and reopen the app (or this tab) to be asked again.', 6000); return; }
+    _arEnter(null, true);
+  });
 }
 
 function toggleARMode3D() {
@@ -1879,7 +1900,7 @@ function toggleARMode3D() {
   });
 }
 
-function _arEnter(stream) {
+function _arEnter(stream, vr) {
   V3D.ar.pending = false;
   var container = document.getElementById('view3d-container');
   if (V3D.ar.active || !V3D.active || !container) {
@@ -1890,7 +1911,7 @@ function _arEnter(stream) {
   var ar = V3D.ar;
   ar.prevFov = V3D._fov;
   _setFov(64);                     // ≈ a phone main camera's vertical FOV in portrait; pinch to fine-tune
-  ar.active = true; ar.stream = stream || null;
+  ar.active = true; ar.stream = stream || null; ar.vr = !!vr;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
   var altBtn = document.getElementById('v3d-alt-btn');
@@ -1912,16 +1933,18 @@ function _arEnter(stream) {
       ar.trackEnd = function () { _arExit(); };
       vt.addEventListener('ended', ar.trackEnd);
     }
-    if (S.lat != null) {
-      var prog = document.createElement('div');
-      prog.id = 'v3d-ar-progress';
-      prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
-      prog.innerHTML = '<div id="v3d-ar-prog-label" style="font-size:10px;color:#e8eef8;margin-bottom:5px;text-align:center">Loading terrain — 0%</div>'
-        + '<div style="height:4px;border-radius:2px;background:rgba(0,200,255,0.15)"><div id="v3d-ar-prog-fill" style="height:100%;width:0%;border-radius:2px;background:#00c8ff;transition:width .2s"></div></div>';
-      container.appendChild(prog);
-      ar.progress = prog;
-    }
-    // failsafe: a stalled tile must never hold the camera reveal hostage
+  }
+  if ((stream || vr) && S.lat != null) {
+    var prog = document.createElement('div');
+    prog.id = 'v3d-ar-progress';
+    prog.style.cssText = 'position:absolute;top:44px;left:15%;right:15%;z-index:26;transform:translateZ(0);background:rgba(5,10,20,0.85);backdrop-filter:blur(8px);border:1px solid rgba(0,200,255,0.25);border-radius:10px;padding:8px 12px;pointer-events:none';
+    prog.innerHTML = '<div id="v3d-ar-prog-label" style="font-size:10px;color:#e8eef8;margin-bottom:5px;text-align:center">Loading terrain — 0%</div>'
+      + '<div style="height:4px;border-radius:2px;background:rgba(0,200,255,0.15)"><div id="v3d-ar-prog-fill" style="height:100%;width:0%;border-radius:2px;background:#00c8ff;transition:width .2s"></div></div>';
+    container.appendChild(prog);
+    ar.progress = prog;
+  }
+  if (stream || vr) {
+    // failsafe: a stalled tile must never hold the reveal hostage
     ar.revealTimer = setTimeout(function () { _arReveal(); }, 15000);
   }
   // one handler for both event names: iOS fires deviceorientation with
@@ -1956,7 +1979,7 @@ function _arEnter(stream) {
   dom.addEventListener('touchstart', ar.ts, true);
   dom.addEventListener('touchmove', ar.tm, true);
   dom.addEventListener('touchend', ar.te, true);
-  if (stream) { _arBuildGround(); if (!ar.groundPending) _arReveal(); }
+  if (stream || vr) { _arBuildGround(); if (!ar.groundPending) _arReveal(); }
   ar.sensorTimer = setTimeout(function () {
     if (ar.active && !ar.evt) {
       ar.noSensor = true;
@@ -1967,11 +1990,18 @@ function _arEnter(stream) {
   // (re-entering is one tap, and a stale sensor/camera session isn't worth it)
   ar.vis = function () { if (document.hidden) _arExit(); };
   document.addEventListener('visibilitychange', ar.vis, true);
-  var btn = document.getElementById('v3d-ar-btn');
-  if (btn) { btn.textContent = '📷 Exit AR'; btn.style.borderColor = '#ffcc00'; btn.style.color = '#ffcc00'; }
+  if (vr) {
+    var vbtn = document.getElementById('v3d-vr-btn');
+    if (vbtn) { vbtn.textContent = '🥽 Exit VR'; vbtn.style.borderColor = '#ffcc00'; vbtn.style.color = '#ffcc00'; }
+  } else {
+    var btn = document.getElementById('v3d-ar-btn');
+    if (btn) { btn.textContent = '📷 Exit AR'; btn.style.borderColor = '#ffcc00'; btn.style.color = '#ffcc00'; }
+  }
   _arHint(stream
     ? 'Point the phone toward a storm — cells are drawn at their real compass bearings over the camera view. Drag sideways if the compass looks off · pinch to zoom · tap a cell for details.'
-    : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.', 6500);
+    : (vr
+      ? 'VR — move the phone to look around: sky, sun/moon, terrain, buildings and storms are all live at their real bearings. Drag sideways to trim · pinch to zoom · ⛰ sets your eye altitude.'
+      : 'Move the phone to look around the virtual sky. Drag sideways to trim the heading · pinch to zoom.'), 6500);
 }
 
 
@@ -1980,10 +2010,11 @@ function _arEnter(stream) {
 // fires) — so the ground is already in place when the real world appears.
 function _arReveal() {
   var ar = V3D.ar;
-  if (!ar.active || ar.revealed || !ar.stream) return;
+  if (!ar.active || ar.revealed || (!ar.stream && !ar.vr)) return;
   ar.revealed = true;
   if (ar.revealTimer) { clearTimeout(ar.revealTimer); ar.revealTimer = null; }
   if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
+  if (!ar.stream) return;   // v7.05 VR: no passthrough — sky and clear color stay
   var container = document.getElementById('view3d-container');
   var cv = document.getElementById('view3d-canvas');
   if (container) {
@@ -2032,7 +2063,7 @@ function _arExit() {
   ar.ts = ar.tm = ar.te = null; ar.evt = null;
   if (ar.vtrack) { if (ar.trackEnd) ar.vtrack.removeEventListener('ended', ar.trackEnd); ar.vtrack = null; ar.trackEnd = null; }
   if (ar.sensorTimer) { clearTimeout(ar.sensorTimer); ar.sensorTimer = null; }
-  ar.noSensor = false; ar.pending = false; ar.revealed = false; ar.groundPending = false;
+  ar.noSensor = false; ar.pending = false; ar.revealed = false; ar.groundPending = false; ar.vr = false;
   if (ar.revealTimer) { clearTimeout(ar.revealTimer); ar.revealTimer = null; }
   if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
   if (ar.prevFov != null) { _setFov(ar.prevFov); ar.prevFov = null; }
@@ -2045,6 +2076,8 @@ function _arExit() {
   if (ar.hintTimer) { clearTimeout(ar.hintTimer); ar.hintTimer = null; }
   var btn = document.getElementById('v3d-ar-btn');
   if (btn) { btn.textContent = '📷 AR'; btn.style.borderColor = ''; btn.style.color = ''; }
+  var vbtn = document.getElementById('v3d-vr-btn');
+  if (vbtn) { vbtn.textContent = '🥽 VR'; vbtn.style.borderColor = ''; vbtn.style.color = ''; }
   if (V3D.controls) V3D.controls.enabled = true;
   _setCamMode('fixed');            // clean re-sync of camera/target/handlers
 }
@@ -2181,7 +2214,7 @@ function _arPlaceFade(fwdY) {
 var _AR_GROUND_GEN = 0;
 function _arBuildGround() {
   var ar = V3D.ar;
-  if (!ar.active || !ar.stream || ar.ground || S.lat == null) return;
+  if (!ar.active || (!ar.stream && !ar.vr) || ar.ground || S.lat == null) return;
   var gen = ++_AR_GROUND_GEN;
   ar.groundPending = true;
   var lat = S.lat, lon = S.lon;
@@ -2235,7 +2268,7 @@ function _arBuildGround() {
   _total = jobs.length;
   Promise.all(jobs).then(function () {
     ar.groundPending = false;
-    if (gen !== _AR_GROUND_GEN || !ar.active || !ar.stream) return;   // AR exited or re-entered meanwhile
+    if (gen !== _AR_GROUND_GEN || !ar.active || (!ar.stream && !ar.vr)) return;   // AR/VR exited or re-entered meanwhile
     var ed;
     try { ed = ectx.getImageData(0, 0, ecv.width, ecv.height).data; } catch (e) { _arReveal(); return; }
     function elevAt(la, lo) {
@@ -2281,6 +2314,12 @@ function _arBuildGround() {
     if (gen !== _AR_GROUND_GEN || !ar.active) { geo.dispose(); mat.dispose(); tex.dispose(); return; }
     ar.ground = mesh;
     V3D.scene.add(mesh);
+    if (!ar.stream) {
+      // VR: the real terrain table replaces the flat stand-in ground outright
+      // (done here, not in _arReveal, so a post-failsafe arrival still swaps)
+      if (V3D.groundMesh) V3D.groundMesh.visible = false;
+      if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
+    }
     _arReveal();                                // ground is in — bring the real world up under it
     _arBuildBuildings(gen, lat, lon, elevAt, datum);   // v7.03: OSM buildings pop in when ready
   });

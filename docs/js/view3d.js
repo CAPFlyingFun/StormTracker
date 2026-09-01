@@ -1832,7 +1832,7 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   compass: null, hasAbs: false, yawFix: 0, trim: 0, yawRaw: null, hint: null, hintTimer: null,
   dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
-  prevFov: null, fade: null, ground: null, revealed: false, revealTimer: null,
+  prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
   progress: null, groundPending: false };
 
 function toggleARMode3D() {
@@ -2263,6 +2263,7 @@ function _arBuildGround() {
     ar.ground = mesh;
     V3D.scene.add(mesh);
     _arReveal();                                // ground is in — bring the real world up under it
+    _arBuildBuildings(gen, lat, lon, elevAt, datum);   // v7.03: OSM buildings pop in when ready
   });
 }
 function _arDisposeGround() {
@@ -2275,6 +2276,108 @@ function _arDisposeGround() {
     if (ar.ground.material) { if (ar.ground.material.map) ar.ground.material.map.dispose(); ar.ground.material.dispose(); }
   } catch (e) {}
   ar.ground = null;
+  if (ar.bldg) {
+    try {
+      V3D.scene.remove(ar.bldg);
+      if (ar.bldg.geometry) ar.bldg.geometry.dispose();
+      if (ar.bldg.material) ar.bldg.material.dispose();
+    } catch (e) {}
+    ar.bldg = null;
+  }
+}
+
+// ═══ v7.03: OSM buildings — real footprints and heights on the AR ground ═══
+// OpenStreetMap building outlines from the free, keyless Overpass API,
+// extruded at TRUE scale (same 1 unit = 1 km frame as everything else):
+// height comes from the mapped `height` tag, else `building:levels` ×
+// storey height, else a one-storey default. A ~2.5 km-radius box keeps the
+// download small while filling the AR foreground where buildings actually
+// read; footprints sit on the terrain via the same elevation sampler and
+// datum the ground mesh used, sunk slightly so slopes never leave them
+// floating. Baked hillshade (same sun as the terrain) + a per-building
+// brightness hash so blocks don't render as one uniform slab.
+var _BLDG_CACHE = null;         // { key, ways } — re-entering AR at the same spot skips the refetch
+function _bldgHeightM(tags) {
+  if (tags) {
+    var h = parseFloat(tags.height);
+    if (isFinite(h) && h > 0) return Math.min(h, 350);
+    var lv = parseFloat(tags['building:levels']);
+    if (isFinite(lv) && lv > 0) return Math.min(lv, 100) * 3.2 + 1.5;
+  }
+  return 5;                     // most untagged OSM buildings are single-storey houses
+}
+function _arBuildBuildings(gen, lat, lon, elevAt, datum) {
+  if (typeof fetch !== 'function' || typeof THREE === 'undefined' || !THREE.ExtrudeGeometry) return;
+  var key = lat.toFixed(3) + ',' + lon.toFixed(3);
+  if (_BLDG_CACHE && _BLDG_CACHE.key === key) { _arBldgFromWays(_BLDG_CACHE.ways, gen, elevAt, datum); return; }
+  var dLa = 2.5 / 111.32, dLo = 2.5 / (111.32 * Math.cos(lat * Math.PI / 180));
+  var q = '[out:json][timeout:25];way["building"]('
+    + (lat - dLa).toFixed(5) + ',' + (lon - dLo).toFixed(5) + ','
+    + (lat + dLa).toFixed(5) + ',' + (lon + dLo).toFixed(5) + ');out geom 4000;';
+  var urls = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  (function attempt(i) {
+    if (i >= urls.length) return;             // both mirrors down — AR just shows terrain, as before
+    fetch(urls[i], { method: 'POST', body: 'data=' + encodeURIComponent(q),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (j) {
+        var ways = (j && j.elements) ? j.elements : [];
+        _BLDG_CACHE = { key: key, ways: ways };
+        _arBldgFromWays(ways, gen, elevAt, datum);
+      })
+      .catch(function () { attempt(i + 1); });
+  })(0);
+}
+function _arBldgFromWays(ways, gen, elevAt, datum) {
+  var ar = V3D.ar;
+  if (gen !== _AR_GROUND_GEN || !ar.active || ar.bldg || !ways.length) return;
+  if (!THREE.BufferGeometryUtils || !THREE.BufferGeometryUtils.mergeBufferGeometries) return;
+  var sunx = -0.45, suny = 0.78, sunz = -0.35;
+  var sl = Math.sqrt(sunx * sunx + suny * suny + sunz * sunz);
+  sunx /= sl; suny /= sl; sunz /= sl;
+  var geos = [];
+  for (var w = 0; w < ways.length && geos.length < 2500; w++) {
+    var gm = ways[w].geometry;
+    if (!gm || gm.length < 4) continue;
+    try {
+      var pts = [], cla = 0, clo = 0, n = gm.length - 1;   // drop the closing repeat node
+      for (var p = 0; p < n; p++) {
+        var sp = geoToScene3D(gm[p].lat, gm[p].lon);
+        pts.push(new THREE.Vector2(sp.x, -sp.z));          // rotateX(-90°) maps shape (x,y) → world (x,·,-y)
+        cla += gm[p].lat; clo += gm[p].lon;
+      }
+      if (pts.length < 3) continue;
+      if (THREE.ShapeUtils.area(pts) < 0) pts.reverse();   // OSM winding varies; CCW keeps wall normals outward
+      var hgt = _bldgHeightM(ways[w].tags) * 0.001;
+      var eg = new THREE.ExtrudeGeometry(new THREE.Shape(pts), { depth: hgt, bevelEnabled: false });
+      eg.rotateX(-Math.PI / 2);
+      var el = elevAt ? elevAt(cla / n, clo / n) : null;
+      var base = (el == null ? 0 : Math.max(-0.5, Math.min(8, (el - datum) * 0.001))) - 0.002;
+      eg.translate(0, base, 0);
+      var epos = eg.attributes.position, enrm = eg.attributes.normal;
+      var cols = new Float32Array(epos.count * 3);
+      var vary = 0.9 + (((w * 2654435761) >>> 0) % 97) / 97 * 0.18;   // per-building brightness hash
+      for (var vi = 0; vi < epos.count; vi++) {
+        var b;
+        if (enrm.getY(vi) > 0.7) b = 0.88;                            // roof: flat light gray
+        else b = 0.5 + 0.38 * Math.max(0, enrm.getX(vi) * sunx + enrm.getY(vi) * suny + enrm.getZ(vi) * sunz);
+        b *= vary;
+        cols[vi * 3] = b * 0.95; cols[vi * 3 + 1] = b * 0.94; cols[vi * 3 + 2] = b * 0.92;
+      }
+      eg.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      if (eg.attributes.uv) eg.deleteAttribute('uv');                 // unused; keeps merge attribute sets identical
+      geos.push(eg);
+    } catch (e) {}                                                    // one bad footprint never sinks the batch
+  }
+  if (!geos.length) return;
+  var merged = THREE.BufferGeometryUtils.mergeBufferGeometries(geos);
+  geos.forEach(function (g2) { g2.dispose(); });
+  if (!merged) return;
+  var mesh = new THREE.Mesh(merged, new THREE.MeshBasicMaterial({ vertexColors: true, depthWrite: true }));
+  mesh.renderOrder = -1;                       // with the ground, under the storm cells/halos
+  if (gen !== _AR_GROUND_GEN || !ar.active || ar.bldg) { merged.dispose(); mesh.material.dispose(); return; }
+  ar.bldg = mesh;
+  V3D.scene.add(mesh);
 }
 
 function _arHint(html, ms) {

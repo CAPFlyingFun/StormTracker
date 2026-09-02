@@ -2129,8 +2129,8 @@ function _arReveal() {
     v.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000';
     v.srcObject = ar.stream;
     container.insertBefore(v, cv || null);   // same z-index, earlier in DOM → behind the canvas
-    var p = v.play(); if (p && p.catch) p.catch(function () {});
     ar.video = v;
+    _arStartVideo(v, 0);
     var fadeEl = document.createElement('div');
     fadeEl.id = 'v3d-ar-fade';
     fadeEl.style.cssText = 'position:absolute;left:0;right:0;top:-100%;height:300%;z-index:0;pointer-events:none;will-change:transform;' +
@@ -2146,6 +2146,31 @@ function _arReveal() {
   if (V3D.terrainMesh) V3D.terrainMesh.visible = false;
   V3D.renderer.setClearColor(0x000000, 0);
 }
+// v7.20: the passthrough video is created long after the tap that started AR
+// (v7.01 delays it until the terrain lands), so iOS can refuse the autoplay —
+// and the old code swallowed that rejection, leaving AR looking live over a
+// black background. Retry, and verify a RESOLVED play actually produced frames:
+// a stalled track leaves the element paused at readyState 0 with no error.
+function _arStartVideo(v, tries) {
+  var ar = V3D.ar;
+  if (!ar.active || !v || ar.video !== v) return;
+  var again = function () {
+    if (!ar.active || ar.video !== v) return;
+    if ((tries || 0) >= 5) {
+      console.warn('[AR] camera video would not start after 5 attempts');
+      if (typeof toast === 'function') toast('📷 Camera did not start — tap AR again to retry');
+      return;
+    }
+    setTimeout(function () { _arStartVideo(v, (tries || 0) + 1); }, 400);
+  };
+  var p;
+  try { p = v.play(); } catch (e) { again(); return; }
+  if (p && p.catch) p.catch(again);
+  setTimeout(function () {
+    if (ar.active && ar.video === v && (v.paused || v.readyState < 2)) again();
+  }, 700);
+}
+
 function _arExit() {
   var ar = V3D.ar;
   if (!ar.active) return;
@@ -2342,7 +2367,19 @@ function _arApplyOrientation() {
       // it outright; a mild lean only disqualifies a reading that actually looks
       // reciprocal, and only once locked (during acquisition a large diff is
       // legitimate — it is the offset we are there to remove).
-      if (_dbgDot < 0.5 && (hm >= 0.45 || (ar.locked && Math.abs(diff) > 100))) servoOK = false;
+      if (_dbgDot < 0.5) {
+        // v7.20: v7.16 relaxed this to fix a frozen servo at ordinary holds, but
+        // it left a hole — while the heading is still ACQUIRING there is no
+        // reference to sanity-check against, so a reciprocal reading at a mild
+        // backward tilt was simply believed and the view locked on 180° wrong
+        // (owner: "camera 180° off, both AR and VR"). Once LOCKED we can tell a
+        // reciprocal from a drift, so a mild lean only rejects the reciprocal.
+        // While acquiring we cannot, so we only acquire from a near-upright
+        // hold — the pose his own recording proved the compass is accurate in.
+        if (hm >= 0.45) servoOK = false;                                    // strong lean: never trusted
+        else if (ar.locked) { if (Math.abs(diff) > 100) servoOK = false; }  // locked: reject a reciprocal
+        else if (hm >= 0.22) servoOK = false;                               // acquiring: hold it up (~13°)
+      }
     }
   }
   if (servoOK) {

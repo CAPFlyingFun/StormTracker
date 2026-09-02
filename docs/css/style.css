@@ -823,3 +823,7 @@ canvas.offscreen{display:none}
 .v3d-gbtn{background:rgba(0,200,255,0.07);border:1px solid rgba(0,200,255,0.22);border-radius:6px;color:#e8eef8;font-size:10px;padding:3px 9px;cursor:pointer;letter-spacing:.03em;font-family:inherit;transition:all .2s;line-height:1.4}
 .v3d-gbtn:active{background:rgba(0,200,255,0.2)}
 .v3d-gval{font-size:10px;color:#00c8ff;font-weight:700;letter-spacing:.03em;min-width:36px;text-align:center;line-height:1.4}
+
+/* v7.14: the 3D tab is a fixed viewport — its HUD is drawn inside the canvas
+   area, so the page must not scroll underneath it (GUI layer, not world layer) */
+.container.v3d-scroll-lock{overflow:hidden;padding-bottom:0;touch-action:pan-x}

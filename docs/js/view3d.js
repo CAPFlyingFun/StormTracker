@@ -468,15 +468,41 @@ function resize3DPage() {
   // tucked behind the nav (looked like the buttons vanished). getBoundingClientRect
   // handles ticker, safe-area and header size in one shot.
   var nav = document.querySelector('.bottom-nav');
-  var pgTop = pg.getBoundingClientRect().top;
-  var navTop = nav ? nav.getBoundingClientRect().top : (function () {
-    var hdr = document.querySelector('.app-header');
-    var hdrH = hdr ? hdr.offsetHeight : 0;
-    var navH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')) || 60;
-    return window.innerHeight - navH;
-  })();
+  var navRect = nav ? nav.getBoundingClientRect() : null;
+  // v7.14: on wide screens the nav is a full-height LEFT rail, so its top is 0 —
+  // the old math then handed every desktop 3D view the 200 px floor. Only trust
+  // the nav's top when it is actually the bottom bar.
+  var navTop = (navRect && navRect.height > 0 && navRect.height < window.innerHeight * 0.5)
+    ? navRect.top
+    : window.innerHeight - (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')) || 60);
+  // v7.14: clamp the top to the scroll container's visible top. Measuring the
+  // page's own rect while the list was scrolled produced a height TALLER than
+  // the screen, which pushed the HUD's bottom control groups under the nav —
+  // the owner had to swipe to reach the buttons.
+  var cont = document.querySelector('.container');
+  var visTop = cont ? cont.getBoundingClientRect().top : 0;
+  var pgTop = Math.max(pg.getBoundingClientRect().top, visTop);
   var h = Math.max(200, Math.round(navTop - pgTop));
   pg.style.height = h + 'px';
+}
+// v7.14: while the 3D tab is open the app must not scroll — every HUD control
+// is drawn INSIDE the 3D viewport, so a scrolling page slid the buttons and the
+// compass strip off-screen (owner: everything behaves like DRAW instead of
+// DRAW_GUI). Bring the 3D page to the top of the scroll area, then freeze it, so
+// the viewport is exactly the visible gap and nothing moves. Desktop keeps its
+// scroll — there every section is on one scrolling canvas by design.
+function _lock3DScroll(on) {
+  var cont = document.querySelector('.container');
+  var pg = document.getElementById('page-3d');
+  if (!cont || !pg) return;
+  var wide = (typeof _isDesktop === 'function') ? _isDesktop() : window.innerWidth >= 1024;
+  if (on && !wide) {
+    var d = pg.getBoundingClientRect().top - cont.getBoundingClientRect().top;
+    if (Math.abs(d) > 1) cont.scrollTop += d;
+    cont.classList.add('v3d-scroll-lock');
+  } else {
+    cont.classList.remove('v3d-scroll-lock');
+  }
 }
 
 function onResize3D() {
@@ -1778,7 +1804,8 @@ async function activate3DView() {
   syncTierButtons3D();
   var _camBtn = document.getElementById('v3d-cam-mode-btn');
   if (_camBtn) _camBtn.textContent = V3D._camMode === 'fixed' ? '📌 Fixed' : '🔓 Free';
-  requestAnimationFrame(function () { resize3DPage(); onResize3D(); });
+  _lock3DScroll(true);
+  requestAnimationFrame(function () { _lock3DScroll(true); resize3DPage(); onResize3D(); });
 
   if (!V3D.ready) {
     var loadEl = document.getElementById('v3d-loading');
@@ -1854,7 +1881,7 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
   progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '',
   loads: null, bldgAbort: null, groundKey: null, groundElev: null, groundDatum: 0,
-  servoFrames: 0, lastHdg: null, turnHoldUntil: 0, lastPose: null };
+  locked: false, settle: 0, bigErr: 0, lastHdg: null, turnHoldUntil: 0, lastPose: null };
 // v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
 var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
 try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
@@ -1945,13 +1972,13 @@ function _arEnter(stream, vr) {
   _setFov(64);                     // ≈ a phone main camera's vertical FOV in portrait; pinch to fine-tune
   ar.active = true; ar.stream = stream || null; ar.vr = !!vr;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
-  ar.servoFrames = 0; ar.lastHdg = null; ar.turnHoldUntil = 0;
+  ar.locked = false; ar.settle = 0; ar.bigErr = 0; ar.lastHdg = null; ar.turnHoldUntil = 0;
   // v7.13: a warm re-entry (AR↔VR switch, or back within a minute) keeps the
   // converged compass offset and the drag trim, so the view is right from the
   // first frame instead of re-locking — the "catches up when switching" the
   // owner saw was the servo re-converging from zero every time.
   if (ar.lastPose && Date.now() - ar.lastPose.ts < 60000) {
-    ar.yawFix = ar.lastPose.fix; ar.trim = ar.lastPose.trim; ar.servoFrames = 999;
+    ar.yawFix = ar.lastPose.fix; ar.trim = ar.lastPose.trim; ar.locked = true;
   }
   ar.lastPose = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
@@ -2205,6 +2232,19 @@ function _arApplyOrientation() {
   //   landscape it is ~90° off the view azimuth, and near the zenith/nadir its
   //   horizontal projection degenerates and can flip. Servo only in portrait
   //   with the view within ±55° of level; otherwise hold the converged yawFix.
+  // v7.14: track the turn rate on EVERY frame — when this lived inside the
+  // servo gate, lastHdg went stale while the gate was shut and the next open
+  // frame read a huge phantom "turn" that froze the servo all over again.
+  var _now = Date.now();
+  if (ar.lastHdg != null) {
+    var _turn = Math.abs(((rawHdg - ar.lastHdg + 540) % 360) - 180);
+    // Only a REAL swing (> ~90°/s at 60 fps) counts. v7.13 used 20°/s with a
+    // 700 ms hold — hand-held jitter tripped it constantly, so the servo sat
+    // frozen, burned its lock-on window and then crawled at drift gain forever:
+    // the owner's "off by 90°, catches up like a damper".
+    if (_turn > 1.5) ar.turnHoldUntil = _now + 250;
+  }
+  ar.lastHdg = rawHdg;
   var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
   if (servoOK) {
     // physical-attitude gate (v7.00): the compass reference follows the device
@@ -2227,25 +2267,26 @@ function _arApplyOrientation() {
   }
   if (servoOK) {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
-    // v7.13: the gyro is the truth while the phone is MOVING — iOS's compass
-    // heading lags the gyro by up to a second in a turn, and a fast servo
-    // chasing that lag dragged the view back behind the phone (owner: "doesn't
-    // follow the heading, catches up later"). So: lock on quickly for the first
-    // ~2.5 s of a session, then drop to a slow drift-trim; freeze the servo
-    // entirely during and just after a fast turn; and cap every correction.
-    var nowMs = Date.now();
-    if (ar.lastHdg != null) {
-      var turn = Math.abs(((rawHdg - ar.lastHdg + 540) % 360) - 180);
-      if (turn > 0.35) ar.turnHoldUntil = nowMs + 700;     // > ~20°/s at 60 fps: turning
+    // v7.14: ACQUIRE until converged, then trim. The gyro still leads through a
+    // turn (frozen above), but convergence is now a STATE, not a 2.5 s stopwatch
+    // that could expire while frozen and strand the view at its start offset.
+    // A large offset that persists across settled frames — a fresh session, or a
+    // magnetic disturbance that has passed — drops it back into acquire, so the
+    // compass can never be minutes behind the phone again.
+    if (_now >= ar.turnHoldUntil) {
+      var adiff = Math.abs(diff);
+      if (adiff > 12) { if (++ar.bigErr > 20) { ar.locked = false; ar.bigErr = 0; } }
+      else ar.bigErr = 0;
+      if (!ar.locked) {
+        ar.yawFix += diff * 0.08;                        // ~0.5 s to swing onto heading
+        ar.settle = (adiff < 2.5) ? ar.settle + 1 : 0;
+        if (ar.settle > 10) { ar.locked = true; ar.settle = 0; }
+      } else {
+        var step = diff * 0.01;                          // slow drift trim, never a yank
+        if (step > 0.4) step = 0.4; else if (step < -0.4) step = -0.4;
+        ar.yawFix += step;
+      }
     }
-    ar.lastHdg = rawHdg;
-    ar.servoFrames++;
-    if (nowMs < ar.turnHoldUntil) diff = 0;
-    var lockOn = ar.servoFrames < 150;
-    var step = diff * (lockOn ? 0.05 : 0.004);
-    var cap = lockOn ? 4 : 0.25;
-    if (step > cap) step = cap; else if (step < -cap) step = -cap;
-    ar.yawFix += step;
   }
   // rebuild: heading = extracted yaw + compass servo + drag trim, applied about
   // world-Y FIRST, then the (clamped) pitch about the camera's own X. Roll = 0.
@@ -2608,6 +2649,7 @@ function deactivate3DView() {
   // leaving the tab must release the camera (kills the OS recording indicator)
   // and the orientation listener — unlike the gauges compass, AR really stops.
   try { if (V3D.ar && V3D.ar.active) _arExit(); } catch (e) {}
+  try { _lock3DScroll(false); } catch (e) {}
   V3D.active = false;
   if (V3D._markerRAF) { cancelAnimationFrame(V3D._markerRAF); V3D._markerRAF = null; }
   if (V3D._etaInterval) { clearInterval(V3D._etaInterval); V3D._etaInterval = null; }

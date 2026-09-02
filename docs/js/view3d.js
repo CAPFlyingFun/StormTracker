@@ -2250,7 +2250,9 @@ function _arApplyOrientation() {
     if (_turn > 1.5) ar.turnHoldUntil = _now + 250;
   }
   ar.lastHdg = rawHdg;
-  var _dbgDiff = null, _dbgHm = null, _dbgDot = null, _dbgFrozen = (_now < ar.turnHoldUntil);
+  var _dbgHm = null, _dbgDot = null, _dbgFrozen = (_now < ar.turnHoldUntil);
+  var diff = (ar.compass != null) ? (((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180) : 0;
+  var _dbgDiff = (ar.compass != null) ? diff : null;
   var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
   if (servoOK) {
     // physical-attitude gate (v7.00): the compass reference follows the device
@@ -2267,15 +2269,23 @@ function _arApplyOrientation() {
     // that is the normal upright hold where the compass is well-behaved.
     var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z);
     _dbgHm = hm;
-    if (hm >= 0.08) {
+    if (hm >= 0.10) {
       var fm = fhm || 1;
       _dbgDot = (_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm);
-      if (_dbgDot < 0.5) servoOK = false;
+      // v7.16, from the owner's own recording: the old 0.08 floor (a 4.6° lean)
+      // shut the servo off for 21% of an AR run while the phone sat at beta
+      // 95-98° — a 5-8° backward tilt, i.e. a perfectly normal hold — and left a
+      // steady 8.6° heading error standing with no way to correct it. The
+      // compass was NOT reciprocal there (the log shows ~9°, not ~180°), so the
+      // gate was firing on geometry alone. Two tiers now: a STRONG backward lean
+      // (>~27°) is where iOS really does hand back the reciprocal, so distrust
+      // it outright; a mild lean only disqualifies a reading that actually looks
+      // reciprocal, and only once locked (during acquisition a large diff is
+      // legitimate — it is the offset we are there to remove).
+      if (_dbgDot < 0.5 && (hm >= 0.45 || (ar.locked && Math.abs(diff) > 100))) servoOK = false;
     }
   }
   if (servoOK) {
-    var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
-    _dbgDiff = diff;
     // v7.14: ACQUIRE until converged, then trim. The gyro still leads through a
     // turn (frozen above), but convergence is now a STATE, not a 2.5 s stopwatch
     // that could expire while frozen and strand the view at its start offset.

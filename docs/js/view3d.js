@@ -1984,6 +1984,8 @@ function _arEnter(stream, vr) {
   V3D.controls.enabled = false;    // sensors own the look direction now
   var altGrp = document.getElementById('v3d-alt-grp');
   if (altGrp) altGrp.style.display = '';
+  var dbgGrp = document.getElementById('v3d-dbg-grp');
+  if (dbgGrp) dbgGrp.style.display = '';
   _arAltLabel();
   if (stream) {
     // v7.01: NO video element yet, and no opacity games ever. On the owner's
@@ -2027,7 +2029,7 @@ function _arEnter(stream, vr) {
     // calibration) must not steer the view — keep the last trustworthy reading
     if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0 &&
         !(e.webkitCompassAccuracy != null && (e.webkitCompassAccuracy < 0 || e.webkitCompassAccuracy > 50)))
-      ar.compass = e.webkitCompassHeading;
+      { ar.compass = e.webkitCompassHeading; ar.compassAcc = (e.webkitCompassAccuracy != null) ? e.webkitCompassAccuracy : null; }
   };
   window.addEventListener('deviceorientation', ar.handler, true);
   window.addEventListener('deviceorientationabsolute', ar.handler, true);
@@ -2129,6 +2131,9 @@ function _arExit() {
   if (ar.fade) { try { ar.fade.remove(); } catch (e) {} ar.fade = null; }
   var altGrp = document.getElementById('v3d-alt-grp');
   if (altGrp) altGrp.style.display = 'none';
+  var dbgGrp = document.getElementById('v3d-dbg-grp');
+  if (dbgGrp) dbgGrp.style.display = 'none';
+  try { if (V3D.dbg && V3D.dbg.rec) _dbgStop(); } catch (e) {}
   ar.lastPose = { fix: ar.yawFix, trim: ar.trim, ts: Date.now() };   // v7.13: warm re-entry keeps the lock
   _arDisposeGround();
   if (ar.handler) {
@@ -2245,6 +2250,7 @@ function _arApplyOrientation() {
     if (_turn > 1.5) ar.turnHoldUntil = _now + 250;
   }
   ar.lastHdg = rawHdg;
+  var _dbgDiff = null, _dbgHm = null, _dbgDot = null, _dbgFrozen = (_now < ar.turnHoldUntil);
   var servoOK = ar.compass != null && !ar.hasAbs && Math.abs(fwdPitch) < 55;
   if (servoOK) {
     // physical-attitude gate (v7.00): the compass reference follows the device
@@ -2260,13 +2266,16 @@ function _arApplyOrientation() {
     // magnitude < ~5°) is measurement noise, not a lean: keep the servo, since
     // that is the normal upright hold where the compass is well-behaved.
     var hm = Math.sqrt(_AR_DTOP.x * _AR_DTOP.x + _AR_DTOP.z * _AR_DTOP.z);
+    _dbgHm = hm;
     if (hm >= 0.08) {
       var fm = fhm || 1;
-      if ((_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm) < 0.5) servoOK = false;
+      _dbgDot = (_AR_DTOP.x * _AR_FWD.x + _AR_DTOP.z * _AR_FWD.z) / (hm * fm);
+      if (_dbgDot < 0.5) servoOK = false;
     }
   }
   if (servoOK) {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
+    _dbgDiff = diff;
     // v7.14: ACQUIRE until converged, then trim. The gyro still leads through a
     // turn (frozen above), but convergence is now a STATE, not a 2.5 s stopwatch
     // that could expire while frozen and strand the view at its start offset.
@@ -2299,6 +2308,104 @@ function _arApplyOrientation() {
   _AR_FWD.set(0, 0, -1).applyQuaternion(q);
   V3D.controls.target.set(_AR_FWD.x * 0.05, aY + _AR_FWD.y * 0.05, _AR_FWD.z * 0.05);
   _arPlaceFade(_AR_FWD.y);
+  if (V3D.dbg && V3D.dbg.rec) _dbgSample(e, scr, rawHdg, fwdPitch, servoOK, _dbgFrozen, _dbgDiff, _dbgHm, _dbgDot);
+}
+
+// ═══ v7.15: heading recorder — 10 s of phone sensors vs the rendered camera ═══
+// Every number the pose pipeline uses, sampled together, so a constant offset
+// (frame-of-reference bug) can be told apart from a servo that never runs.
+V3D.dbg = { rec: false, t0: 0, rows: [], stopTimer: null, lblTimer: null, last: 0 };
+function _dbgSample(e, scr, rawHdg, fwdPitch, servoOK, frozen, diff, hm, dot) {
+  var d = V3D.dbg, now = Date.now();
+  if (now - d.last < 100) return;                 // ~10 Hz keeps the log readable
+  d.last = now;
+  var f = new THREE.Vector3(0, 0, -1).applyQuaternion(V3D.camera.quaternion);
+  var camHdg = (Math.atan2(f.x, -f.z) * 180 / Math.PI + 360) % 360;
+  var camPitch = Math.atan2(f.y, Math.sqrt(f.x * f.x + f.z * f.z)) * 180 / Math.PI;
+  var up = new THREE.Vector3(0, 1, 0).applyQuaternion(V3D.camera.quaternion);
+  var camRoll = Math.atan2(up.x * f.z - up.z * f.x, up.y) * 180 / Math.PI;
+  var n1 = function (v) { return v == null ? '' : (Math.round(v * 10) / 10); };
+  d.rows.push([
+    now - d.t0, n1(e.a), n1(e.b), n1(e.g),
+    V3D.ar.compass == null ? '' : n1(V3D.ar.compass), V3D.ar.compassAcc == null ? '' : n1(V3D.ar.compassAcc),
+    scr, V3D.ar.hasAbs ? 1 : 0,
+    n1(rawHdg), n1(V3D.ar.yawFix), n1(V3D.ar.trim),
+    n1(camHdg), n1(camPitch), n1(camRoll),
+    V3D.ar.compass == null ? '' : n1(((V3D.ar.compass - camHdg + 540) % 360) - 180),
+    servoOK ? 1 : 0, frozen ? 1 : 0, V3D.ar.locked ? 1 : 0,
+    diff == null ? '' : n1(diff), hm == null ? '' : (Math.round(hm * 100) / 100), dot == null ? '' : (Math.round(dot * 100) / 100)
+  ].join(','));
+}
+var _DBG_COLS = 't_ms,phone_alpha_z,phone_beta_x,phone_gamma_y,compass,cmp_acc,screen_angle,absolute,' +
+  'raw_gyro_hdg,yawFix,trim,cam_hdg,cam_pitch,cam_roll,compass_minus_cam,servoOK,frozen,locked,servo_diff,lean_mag,lean_dot';
+function toggleDbgRec3D() {
+  var d = V3D.dbg;
+  if (d.rec) { _dbgStop(); return; }
+  d.rows = []; d.rec = true; d.t0 = Date.now(); d.last = 0;
+  d.stopTimer = setTimeout(_dbgStop, 10000);
+  d.lblTimer = setInterval(_dbgLabel, 200);
+  _dbgLabel();
+  if (typeof toast === 'function') toast('⏺ Recording 10 s — sweep W → S → N → W, hold each a beat');
+}
+function _dbgLabel() {
+  var b = document.getElementById('v3d-dbg-btn'), d = V3D.dbg;
+  if (!b) return;
+  if (d.rec) {
+    var left = Math.max(0, 10 - (Date.now() - d.t0) / 1000);
+    b.textContent = '⏹ ' + left.toFixed(1) + 's';
+    b.style.color = '#ff5a6a'; b.style.borderColor = '#ff5a6a';
+  } else { b.textContent = '⏺ REC'; b.style.color = ''; b.style.borderColor = ''; }
+}
+function _dbgStop() {
+  var d = V3D.dbg;
+  if (d.stopTimer) { clearTimeout(d.stopTimer); d.stopTimer = null; }
+  if (d.lblTimer) { clearInterval(d.lblTimer); d.lblTimer = null; }
+  if (!d.rec) return;
+  d.rec = false; _dbgLabel(); _dbgPanel();
+}
+// median offset is the headline: a steady ±90 means a frame-of-reference bug,
+// a value that drifts toward 0 means the servo is simply slow
+function _dbgSummary() {
+  var offs = [], servo = 0, froz = 0, n = V3D.dbg.rows.length;
+  V3D.dbg.rows.forEach(function (r) {
+    var c = r.split(',');
+    if (c[14] !== '') offs.push(parseFloat(c[14]));
+    if (c[15] === '1') servo++;
+    if (c[16] === '1') froz++;
+  });
+  if (!offs.length) return 'No compass samples — webkitCompassHeading never arrived (motion permission or an unsupported browser).';
+  var sorted = offs.slice().sort(function (a, b) { return a - b; });
+  var med = sorted[Math.floor(sorted.length / 2)];
+  var first = offs[0], last = offs[offs.length - 1];
+  return 'samples ' + n + ' · compass−camera: median ' + med.toFixed(1) + '° (start ' + first.toFixed(1) + '° → end ' + last.toFixed(1) + '°)'
+    + ' · servo ran ' + Math.round(servo / n * 100) + '% of frames · frozen ' + Math.round(froz / n * 100) + '%';
+}
+function _dbgPanel() {
+  var old = document.getElementById('v3d-dbg-panel');
+  if (old) { try { old.remove(); } catch (e) {} }
+  var container = document.getElementById('view3d-container') || document.body;
+  var csv = _DBG_COLS + '\n' + V3D.dbg.rows.join('\n');
+  var el = document.createElement('div');
+  el.id = 'v3d-dbg-panel';
+  el.style.cssText = 'position:absolute;inset:8px;z-index:40;transform:translateZ(0);background:rgba(5,10,20,0.96);backdrop-filter:blur(10px);border:1px solid rgba(0,200,255,0.35);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;pointer-events:auto';
+  el.innerHTML = '<div style="font-size:11px;font-weight:700;color:#00c8ff;letter-spacing:.06em">HEADING LOG</div>'
+    + '<div id="v3d-dbg-sum" style="font-size:10px;line-height:1.5;color:#e8eef8"></div>'
+    + '<textarea id="v3d-dbg-txt" readonly style="flex:1;min-height:0;width:100%;box-sizing:border-box;font-family:ui-monospace,Menlo,monospace;font-size:9px;line-height:1.35;color:#cfe6ff;background:rgba(0,0,0,0.45);border:1px solid rgba(0,200,255,0.2);border-radius:8px;padding:6px;resize:none"></textarea>'
+    + '<div style="display:flex;gap:6px"><button id="v3d-dbg-copy" class="v3d-gbtn" style="flex:1">📋 Copy</button>'
+    + '<button id="v3d-dbg-close" class="v3d-gbtn" style="flex:1">Close</button></div>';
+  container.appendChild(el);
+  el.querySelector('#v3d-dbg-sum').textContent = _dbgSummary();
+  var ta = el.querySelector('#v3d-dbg-txt');
+  ta.value = csv;
+  el.querySelector('#v3d-dbg-copy').addEventListener('click', function () {
+    var done = function () { var b = el.querySelector('#v3d-dbg-copy'); b.textContent = '✓ Copied'; setTimeout(function () { b.textContent = '📋 Copy'; }, 1500); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(csv).then(done, function () { ta.select(); }); return; }
+    } catch (e) {}
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {}
+  });
+  el.querySelector('#v3d-dbg-close').addEventListener('click', function () { try { el.remove(); } catch (e) {} });
 }
 
 // v6.96: slide the horizon fade so its midpoint tracks where level (pitch 0)

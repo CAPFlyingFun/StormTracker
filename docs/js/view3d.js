@@ -1853,7 +1853,8 @@ V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
   progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '',
-  loads: null, bldgAbort: null, groundKey: null, groundElev: null, groundDatum: 0 };
+  loads: null, bldgAbort: null, groundKey: null, groundElev: null, groundDatum: 0,
+  servoFrames: 0, lastHdg: null, turnHoldUntil: 0, lastPose: null };
 // v7.04: AR eye altitude above the user's ground level, preset-cycled and remembered
 var _AR_ALTS = [2, 5, 10, 20, 50, 100, 200, 350, 500];
 try { var _aAlt = parseFloat(localStorage.getItem('v3d_ar_alt')); if (_AR_ALTS.indexOf(_aAlt) >= 0) V3D.ar.altM = _aAlt; } catch (e) {}
@@ -1944,6 +1945,15 @@ function _arEnter(stream, vr) {
   _setFov(64);                     // ≈ a phone main camera's vertical FOV in portrait; pinch to fine-tune
   ar.active = true; ar.stream = stream || null; ar.vr = !!vr;
   ar.yawFix = 0; ar.trim = 0; ar.compass = null; ar.evt = null; ar.hasAbs = false; ar.yawRaw = null;
+  ar.servoFrames = 0; ar.lastHdg = null; ar.turnHoldUntil = 0;
+  // v7.13: a warm re-entry (AR↔VR switch, or back within a minute) keeps the
+  // converged compass offset and the drag trim, so the view is right from the
+  // first frame instead of re-locking — the "catches up when switching" the
+  // owner saw was the servo re-converging from zero every time.
+  if (ar.lastPose && Date.now() - ar.lastPose.ts < 60000) {
+    ar.yawFix = ar.lastPose.fix; ar.trim = ar.lastPose.trim; ar.servoFrames = 999;
+  }
+  ar.lastPose = null;
   V3D.controls.enabled = false;    // sensors own the look direction now
   var altGrp = document.getElementById('v3d-alt-grp');
   if (altGrp) altGrp.style.display = '';
@@ -1986,7 +1996,11 @@ function _arEnter(stream, vr) {
     if (e.alpha == null && e.beta == null) return;
     if (e.absolute) { ar.hasAbs = true; ar.evt = { a: e.alpha, b: e.beta, g: e.gamma }; ar.compass = (360 - e.alpha) % 360; return; }
     if (!ar.hasAbs) ar.evt = { a: e.alpha, b: e.beta, g: e.gamma };
-    if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) ar.compass = e.webkitCompassHeading;
+    // v7.13: an unreliable magnetometer (accuracy < 0 = invalid, > 50° = needs
+    // calibration) must not steer the view — keep the last trustworthy reading
+    if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0 &&
+        !(e.webkitCompassAccuracy != null && (e.webkitCompassAccuracy < 0 || e.webkitCompassAccuracy > 50)))
+      ar.compass = e.webkitCompassHeading;
   };
   window.addEventListener('deviceorientation', ar.handler, true);
   window.addEventListener('deviceorientationabsolute', ar.handler, true);
@@ -2088,6 +2102,7 @@ function _arExit() {
   if (ar.fade) { try { ar.fade.remove(); } catch (e) {} ar.fade = null; }
   var altGrp = document.getElementById('v3d-alt-grp');
   if (altGrp) altGrp.style.display = 'none';
+  ar.lastPose = { fix: ar.yawFix, trim: ar.trim, ts: Date.now() };   // v7.13: warm re-entry keeps the lock
   _arDisposeGround();
   if (ar.handler) {
     window.removeEventListener('deviceorientation', ar.handler, true);
@@ -2212,7 +2227,25 @@ function _arApplyOrientation() {
   }
   if (servoOK) {
     var diff = ((ar.compass - (rawHdg + ar.yawFix) + 540) % 360) - 180;
-    ar.yawFix += diff * 0.04;
+    // v7.13: the gyro is the truth while the phone is MOVING — iOS's compass
+    // heading lags the gyro by up to a second in a turn, and a fast servo
+    // chasing that lag dragged the view back behind the phone (owner: "doesn't
+    // follow the heading, catches up later"). So: lock on quickly for the first
+    // ~2.5 s of a session, then drop to a slow drift-trim; freeze the servo
+    // entirely during and just after a fast turn; and cap every correction.
+    var nowMs = Date.now();
+    if (ar.lastHdg != null) {
+      var turn = Math.abs(((rawHdg - ar.lastHdg + 540) % 360) - 180);
+      if (turn > 0.35) ar.turnHoldUntil = nowMs + 700;     // > ~20°/s at 60 fps: turning
+    }
+    ar.lastHdg = rawHdg;
+    ar.servoFrames++;
+    if (nowMs < ar.turnHoldUntil) diff = 0;
+    var lockOn = ar.servoFrames < 150;
+    var step = diff * (lockOn ? 0.05 : 0.004);
+    var cap = lockOn ? 4 : 0.25;
+    if (step > cap) step = cap; else if (step < -cap) step = -cap;
+    ar.yawFix += step;
   }
   // rebuild: heading = extracted yaw + compass servo + drag trim, applied about
   // world-Y FIRST, then the (clamped) pitch about the camera's own X. Roll = 0.

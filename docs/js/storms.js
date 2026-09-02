@@ -691,14 +691,31 @@ function _saveWindsAloft(aloftSpeeds,providerInfo,lat,lon){
   if(providerInfo&&/last session/.test(providerInfo.label||''))return;   // don't re-save a restore under a new timestamp
   try{localStorage.setItem('st_windAloft',JSON.stringify({ts:Date.now(),lat,lon,aloftSpeeds,provider:providerInfo.provider,host:providerInfo.host||null,label:providerInfo.label||providerInfo.provider}))}catch(e){}
 }
-function _loadSavedWindsAloft(lat,lon){
+function _loadSavedWindsAloft(lat,lon,maxAgeMs){
   try{
     const c=JSON.parse(localStorage.getItem('st_windAloft')||'null');
     if(!c||!c.ts||!Array.isArray(c.aloftSpeeds)||c.aloftSpeeds.length<2)return null;
-    if(Date.now()-c.ts>=30*60000)return null;
+    if(Date.now()-c.ts>=(maxAgeMs||30*60000))return null;
     if(haversine(lat,lon,c.lat,c.lon)>=100)return null;
     return c;
   }catch(e){return null}
+}
+// v7.19: STALE last resort. Steering winds turn slowly — a couple of hours old
+// is a usable bearing, and vastly better than "steering unknown" with storms on
+// the dial. Used only after every provider has failed, labelled as such, and it
+// does NOT stop the retry loop: the moment a live profile lands it takes over.
+const _ALOFT_STALE_MAX_MS=3*3600000;
+function _useStaleWindsAloft(lat,lon){
+  const c=_loadSavedWindsAloft(lat,lon,_ALOFT_STALE_MAX_MS);
+  if(!c)return false;
+  const ageMin=Math.round((Date.now()-c.ts)/60000);
+  const ageTxt=ageMin>=60?(Math.round(ageMin/6)/10)+'h':ageMin+'m';
+  _applyAloftData(c.aloftSpeeds,{provider:c.provider,host:c.host||null,label:(c.label||c.provider)+' · last session ('+ageTxt+' old)'},lat,lon);
+  if(S._windCache)S._windCache.ts=c.ts;
+  S._aloftStale=true;
+  console.log('Winds aloft: every provider failed — falling back to the last session\'s profile ('+ageTxt+' old)');
+  if(typeof toast==='function')toast('💨 Using last session\'s winds ('+ageTxt+' old) — still retrying for live data');
+  return true;
 }
 function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   // v6.63: remember whether steering was already known — if this call is the
@@ -745,7 +762,7 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
   S.stormMovement={direction:Math.round(dir),speed:spdMph};
   S._windCache={lat,lon,ts:Date.now(),dir:Math.round(dir),speed:spdMph,provider:providerInfo.provider,host:providerInfo.host||null};
   _saveWindsAloft(aloftSpeeds,providerInfo,lat,lon);   // v7.09: survives a relaunch
-  S._aloftRetryN=0;S._aloftLastErr=null;
+  if(!/last session/.test(providerInfo.label||'')){S._aloftStale=false;S._aloftRetryN=0;S._aloftLastErr=null}
   console.log('[WindsAloft] Per-level: '+aloftSpeeds.map(a=>a.p+'hPa='+a.rawMs.toFixed(1)+'m/s@'+a.dir+'°').join(', '));
   console.log('[WindsAloft] Steering ('+providerInfo.provider+(providerInfo.host?'/'+providerInfo.host:'')+'): '+steering.map(a=>a.p+'hPa').join(',')+' Vx='+ax.toFixed(2)+' Vy='+ay.toFixed(2)+' → '+spdKt.toFixed(1)+'kt '+Math.round(dir)+'° → '+spdMph+' mph');
   if(S.map&&S._showPathArrows)buildPathArrows(S.map);
@@ -820,7 +837,7 @@ async function fetchWindsAloft(overrideLat,overrideLon){
   // rules as the in-memory cache, keeping its ORIGINAL timestamp so it still
   // expires on schedule and the next scan refreshes it.
   if(!cache){
-    const saved=_loadSavedWindsAloft(lat,lon);
+    const saved=_loadSavedWindsAloft(lat,lon,30*60000);
     if(saved){
       _applyAloftData(saved.aloftSpeeds,{provider:saved.provider,host:saved.host||null,label:(saved.label||saved.provider)+' · last session'},lat,lon);
       if(S._windCache)S._windCache.ts=saved.ts;
@@ -866,10 +883,17 @@ async function fetchWindsAloft(overrideLat,overrideLon){
       try{
         const rr=await fetch(_wUrl,{signal:AbortSignal.timeout(timeoutMs)});
         if(!rr.ok){
-          lastErr=new Error('HTTP '+rr.status);
+          lastErr=new Error(host.fqdn+' HTTP '+rr.status);
           console.log('Winds aloft: '+host.fqdn+' returned HTTP '+rr.status);
-          // Only fall over on 5xx — 4xx is a bad-request signal the sibling host would also reject.
-          if(rr.status>=500&&rr.status<600&&i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
+          // v7.19: 401/403/408/429 are EDGE answers — a WAF challenge, a
+          // per-IP rate limit, an auth hiccup at one point of presence. They
+          // say nothing about the request, so the sibling host is worth a try;
+          // the owner hit a 401 from api.open-meteo.com and the old rule
+          // ("4xx = bad request, the sibling would reject it too") skipped
+          // customer-api entirely and went straight to failure. Only a genuine
+          // request error (400/404/410/422…) still ends the loop.
+          var _edge=(rr.status>=500&&rr.status<600)||rr.status===401||rr.status===403||rr.status===408||rr.status===429;
+          if(_edge&&i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
           break;
         }
         // v7.12: parse HERE. A 200 with a non-JSON body (edge/challenge page,
@@ -935,6 +959,7 @@ async function fetchWindsAloft(overrideLat,overrideLon){
       const msg=lastErr?lastErr.message:'all providers failed';
       console.log('Winds aloft: all providers failed ('+msg+')');
       S._aloftLastErr=msg;
+      if(!S._aloftStale&&_useStaleWindsAloft(lat,lon)){_scheduleWindsAloftRetry(lat,lon,0);return}
       if(typeof _bootStepFail==='function')_bootStepFail('wind','Winds aloft failed ('+msg+')');
       _scheduleWindsAloftRetry(lat,lon,0);
       return;
@@ -963,14 +988,14 @@ function _scheduleWindsAloftRetry(lat,lon,attempt){
     S._aloftRetryTimer=null;
     // Bail if the user has moved or the cache filled in via some other path.
     if(S.lat!==lat||S.lon!==lon)return;
-    if(S._aloftData&&S._aloftData.length>=2)return;
+    if(S._aloftData&&S._aloftData.length>=2&&!S._aloftStale)return;
     if(typeof document!=='undefined'&&document.hidden){_scheduleWindsAloftRetry(lat,lon,attempt);return}   // resume when visible
     if(S._waGatePromise){_scheduleWindsAloftRetry(lat,lon,attempt);return}                                  // the gate is driving right now
     const n=(S._aloftRetryN||0)+1;S._aloftRetryN=n;
     console.log('Winds aloft retry '+n+'…');
     try{await fetchWindsAloft(lat,lon)}catch(e){}
     if(S.lat!==lat||S.lon!==lon)return;
-    if(S._aloftData&&S._aloftData.length>=2){
+    if(S._aloftData&&S._aloftData.length>=2&&!S._aloftStale){
       console.log('Winds aloft retry '+n+' succeeded — refreshing ALL storm surfaces');
       if(typeof toast==='function')toast('💨 Winds aloft back (retry '+n+') — storm motion & ETAs updated');
       S._aloftRetryN=0;

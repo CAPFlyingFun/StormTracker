@@ -500,13 +500,16 @@ function _lock3DScroll(on) {
     var d = pg.getBoundingClientRect().top - cont.getBoundingClientRect().top;
     if (Math.abs(d) > 1) cont.scrollTop += d;
     cont.classList.add('v3d-scroll-lock');
+    document.body.classList.add('v3d-immersive');
   } else {
     cont.classList.remove('v3d-scroll-lock');
+    document.body.classList.remove('v3d-immersive');
   }
 }
 
 function onResize3D() {
   if (!V3D.ready || !V3D.active) return;
+  _lock3DScroll(true);          // v7.18: re-apply on rotate, then measure the new box
   resize3DPage();
   var container = document.getElementById('view3d-container');
   if (!container) return;
@@ -2132,6 +2135,7 @@ function _arReveal() {
     fadeEl.id = 'v3d-ar-fade';
     fadeEl.style.cssText = 'position:absolute;left:0;right:0;top:-100%;height:300%;z-index:0;pointer-events:none;will-change:transform;' +
       'background:linear-gradient(to bottom,rgba(5,10,20,0) 44%,rgba(5,10,20,0.55) 50%,rgba(5,10,20,0.94) 56%,rgba(5,10,20,0.96) 100%)';
+    fadeEl.style.left = '-60%'; fadeEl.style.right = 'auto'; fadeEl.style.width = '220%';   // v7.18: room to rotate
     container.insertBefore(fadeEl, cv || null);   // above the video, below the canvas
     ar.fade = fadeEl;
   }
@@ -2192,6 +2196,34 @@ function _arExit() {
 
 // scratch objects — loop3D calls this every frame, so no per-frame allocation
 var _AR_EUL = null, _AR_Q0 = null, _AR_QS = null, _AR_FWD = null, _AR_ZEE = null, _AR_UP = null, _AR_DTOP = null;
+var _AR_UPV = null, _AR_RGT = null;
+// v7.18: how far the phone is banked, measured about the direction it is
+// LOOKING (so it is independent of heading and pitch). Positive = right edge
+// down. Returns 0 near the zenith/nadir where "level" has no meaning.
+function _arDeviceRoll(q, fwd, fhm) {
+  if (fhm < 1e-3) return 0;
+  if (!_AR_UPV) { _AR_UPV = new THREE.Vector3(); _AR_RGT = new THREE.Vector3(); }
+  _AR_UPV.set(0, 1, 0).applyQuaternion(q);                 // where the camera's own up points
+  var rx = -fwd.z / fhm, rz = fwd.x / fhm;                 // level right of the view
+  var ulx = -rz * fwd.y, uly = rz * fwd.x - rx * fwd.z, ulz = rx * fwd.y;   // level up  = right × forward
+  return Math.atan2(_AR_UPV.x * rx + _AR_UPV.z * rz,
+                    _AR_UPV.x * ulx + _AR_UPV.y * uly + _AR_UPV.z * ulz) * 180 / Math.PI;
+}
+// On-screen angle of the world horizon, read back from the FINAL camera — the
+// horizon fade is a DOM element, so it has to be rotated to match by hand.
+function _arHorizonRollDeg() {
+  var q = V3D.camera.quaternion;
+  if (!_AR_UPV) { _AR_UPV = new THREE.Vector3(); _AR_RGT = new THREE.Vector3(); }
+  _AR_RGT.set(0, 0, -1).applyQuaternion(q);
+  var fx = _AR_RGT.x, fz = _AR_RGT.z, m = Math.sqrt(fx * fx + fz * fz);
+  if (m < 1e-3) return 0;
+  var hx = -fz / m, hz = fx / m;                            // world-horizontal, across the view
+  _AR_RGT.set(1, 0, 0).applyQuaternion(q);
+  _AR_UPV.set(0, 1, 0).applyQuaternion(q);
+  var sx = hx * _AR_RGT.x + hz * _AR_RGT.z;
+  var sy = hx * _AR_UPV.x + hz * _AR_UPV.z;
+  return Math.atan2(-sy, sx) * 180 / Math.PI;               // CSS rotate: clockwise positive, y down
+}
 function _arApplyOrientation() {
   var ar = V3D.ar, e = ar.evt;
   var aY = (ar.altM || 100) * 0.001;             // v7.04: preset eye altitude, km units
@@ -2242,6 +2274,14 @@ function _arApplyOrientation() {
   _AR_FWD.set(0, 0, -1).applyQuaternion(q);
   var R2D = 180 / Math.PI;
   var fhm = Math.sqrt(_AR_FWD.x * _AR_FWD.x + _AR_FWD.z * _AR_FWD.z);
+  // v7.18: bank angle, captured from the RAW pose before the rebuild. v7.02
+  // threw roll away to kill the 180° flip, which left the rendered ground glued
+  // to the screen while the real ground tilted behind it (owner: "the ground
+  // didn't stay world level"). Roll is about the view axis, so it cannot move
+  // where the camera points — heading and pitch are still extracted above,
+  // untouched — it only decides how level the world looks. Clamped to ±45°.
+  var rollDeg = _arDeviceRoll(q, _AR_FWD, fhm);
+  if (rollDeg > 45) rollDeg = 45; else if (rollDeg < -45) rollDeg = -45;
   var fwdPitch = Math.atan2(_AR_FWD.y, fhm) * R2D;      // ±90, never wraps
   if (fhm >= 0.15 || ar.yawRaw == null)
     ar.yawRaw = Math.atan2(_AR_FWD.x, -_AR_FWD.z) * R2D;
@@ -2330,7 +2370,10 @@ function _arApplyOrientation() {
   // rebuild: heading = extracted yaw + compass servo + drag trim, applied about
   // world-Y FIRST, then the (clamped) pitch about the camera's own X. Roll = 0.
   var pc = Math.max(-89, Math.min(89, fwdPitch));
-  _AR_EUL.set(pc * D2R, -(ar.yawRaw + ar.yawFix + ar.trim) * D2R, 0, 'YXZ');
+  // roll is negated: the euler's z turns the camera the opposite way to the
+  // bank measured off the pose, and the camera's up must end up ON the phone's
+  // screen-up for the render to sit level with the real world behind it.
+  _AR_EUL.set(pc * D2R, -(ar.yawRaw + ar.yawFix + ar.trim) * D2R, -rollDeg * D2R, 'YXZ');
   q.setFromEuler(_AR_EUL);
   V3D.camera.position.set(0, aY, 0);
   // keep controls.target just ahead so the compass tape (which reads target),
@@ -2460,7 +2503,13 @@ function _arPlaceFade(fwdY) {
   // fade element spans -H..+2H with its gradient midpoint at its centre (H/2
   // into the container when untranslated) → translate by (yH − H/2)
   var ty = Math.round(yH - H / 2);
-  if (ty !== ar._fadeTy) { ar._fadeTy = ty; ar.fade.style.transform = 'translateY(' + ty + 'px)'; }
+  // v7.18: rotate FIRST so the offset is measured perpendicular to the banked
+  // horizon, exactly as a real camera sees it.
+  var rot = Math.round(_arHorizonRollDeg() * 10) / 10;
+  if (ty !== ar._fadeTy || rot !== ar._fadeRot) {
+    ar._fadeTy = ty; ar._fadeRot = rot;
+    ar.fade.style.transform = 'rotate(' + rot + 'deg) translateY(' + ty + 'px)';
+  }
 }
 
 

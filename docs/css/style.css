@@ -827,3 +827,14 @@ canvas.offscreen{display:none}
 /* v7.14: the 3D tab is a fixed viewport — its HUD is drawn inside the canvas
    area, so the page must not scroll underneath it (GUI layer, not world layer) */
 .container.v3d-scroll-lock{overflow:hidden;padding-bottom:0;touch-action:pan-x}
+
+/* v7.18: a landscape phone has ~430px of height and the chrome above the 3D
+   view (tropical banner, header, ticker) ate most of it. While the 3D tab is
+   open on a short screen, reclaim it — portrait and desktop are untouched. */
+@media (orientation:landscape) and (max-height:560px){
+  body.v3d-immersive #nhc-prox-banner,
+  body.v3d-immersive #threat-ticker{display:none!important}
+  body.v3d-immersive .app-header{padding:3px 10px 4px}
+  body.v3d-immersive .app-header h1{font-size:0.9em}
+  body.v3d-immersive .header-loc-btn{width:28px;height:28px;font-size:0.85em;border-radius:8px}
+}

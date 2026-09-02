@@ -1896,7 +1896,7 @@ function _initLightingBtn() {
 // ═══════════════════════════════════════════════════════════════════════════
 V3D.ar = { active: false, stream: null, video: null, handler: null, evt: null,
   compass: null, hasAbs: false, yawFix: 0, trim: 0, yawRaw: null, hint: null, hintTimer: null,
-  dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null,
+  dragX: null, dragged: false, ts: null, tm: null, te: null, vis: null, hide: null,
   pending: false, vtrack: null, trackEnd: null, sensorTimer: null, noSensor: false,
   prevFov: null, fade: null, ground: null, bldg: null, revealed: false, revealTimer: null,
   progress: null, groundPending: false, altM: 100, vr: false, prevTouchAction: '',
@@ -1952,30 +1952,43 @@ function toggleARMode3D() {
   if (!V3D.ready || V3D.ar.pending) return;
   if (V3D.ar.active) _arExit();                    // v7.07: in VR → switch straight to AR, one tap
   V3D.ar.pending = true;
-  // iOS choreography: DeviceOrientationEvent.requestPermission() must run
-  // SYNCHRONOUSLY inside the tap gesture — so it goes first; getUserMedia
-  // tolerates being past the await.
+  // v7.21: BOTH permission requests start SYNCHRONOUSLY inside this tap. iOS
+  // requires DeviceOrientationEvent.requestPermission() to run in a user
+  // gesture, and the old code honoured that but then called getUserMedia from
+  // inside its .then() — by which time the tap's activation had expired, so
+  // Safari could skip the camera prompt entirely and AR fell to ghost mode
+  // with no explanation (owner: "the prompt to allow camera access didn't
+  // show"). Fired together, one tap produces both prompts back to back.
+  // (They cannot be merged into a single dialog — motion and camera are
+  // separate OS permissions and iOS always asks for them separately.)
+  var gumP = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+    ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+        .then(function (s) { return { stream: s }; }, function (e) { return { err: e }; })
+    : Promise.resolve({ err: new Error('mediaDevices unavailable') });
   var motionP;
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     motionP = DeviceOrientationEvent.requestPermission().then(function (r) { return r === 'granted'; }).catch(function () { return false; });
   } else {
     motionP = Promise.resolve(true);
   }
-  motionP.then(function (motion) {
-    if (!motion) { V3D.ar.pending = false; _arHint('Motion access was denied — AR needs the compass/gyro to aim the view. Close and reopen the app (or this tab) to be asked again.', 6000); return; }
-    var gum = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
-      ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
-      : Promise.reject(new Error('mediaDevices unavailable'));
-    gum.then(function (stream) { _arEnter(stream); })
-      .catch(function (err) {
-        // camera refused or absent → ghost mode: sensors aim the virtual scene.
-        // (Installed iOS web apps re-ask for the camera each cold launch, and a
-        // denial there is sticky — hence the explicit hint.)
-        _arEnter(null);
-        _arHint((err && err.name === 'NotAllowedError')
-          ? 'Camera blocked — AR is running against the virtual sky instead. To get passthrough in the installed app, remove and re-add it, or use Safari directly.'
-          : 'No rear camera found — AR is running against the virtual sky instead.', 7000);
-      });
+  Promise.all([motionP, gumP]).then(function (res) {
+    var motion = res[0], g = res[1] || {};
+    if (!motion) {
+      V3D.ar.pending = false;
+      // the camera may already have been granted — never leave it held open
+      if (g.stream) { try { g.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+      _arHint('Motion access was denied — AR needs the compass/gyro to aim the view. Close and reopen the app (or this tab) to be asked again.', 6000);
+      return;
+    }
+    if (g.stream) { _arEnter(g.stream); return; }
+    // camera refused or absent → ghost mode: sensors aim the virtual scene.
+    // (Installed iOS web apps re-ask for the camera each cold launch, and a
+    // denial there is sticky — hence the explicit hint.)
+    _arEnter(null);
+    var err = g.err;
+    _arHint((err && err.name === 'NotAllowedError')
+      ? 'Camera blocked — AR is running against the virtual sky instead. To get passthrough in the installed app, remove and re-add it, or use Safari directly.'
+      : 'No rear camera found — AR is running against the virtual sky instead.', 7000);
   });
 }
 
@@ -2095,6 +2108,13 @@ function _arEnter(stream, vr) {
   // (re-entering is one tap, and a stale sensor/camera session isn't worth it)
   ar.vis = function () { if (document.hidden) _arExit(); };
   document.addEventListener('visibilitychange', ar.vis, true);
+  // v7.21: visibilitychange covers backgrounding, and leaving the 3D tab goes
+  // through deactivate3DView — but a hard close, a navigation, or iOS freezing
+  // the page can skip both and leave the camera indicator lit. pagehide/freeze
+  // are the reliable last word on iOS, so release there too.
+  ar.hide = function () { _arExit(); };
+  window.addEventListener('pagehide', ar.hide, true);
+  window.addEventListener('freeze', ar.hide, true);
   if (vr) {
     var vbtn = document.getElementById('v3d-vr-btn');
     if (vbtn) { vbtn.textContent = '🥽 Exit VR'; vbtn.style.borderColor = '#ffcc00'; vbtn.style.color = '#ffcc00'; }
@@ -2205,6 +2225,7 @@ function _arExit() {
   if (ar.progress) { try { ar.progress.remove(); } catch (e) {} ar.progress = null; }
   if (ar.prevFov != null) { _setFov(ar.prevFov); ar.prevFov = null; }
   if (ar.vis) { document.removeEventListener('visibilitychange', ar.vis, true); ar.vis = null; }
+  if (ar.hide) { window.removeEventListener('pagehide', ar.hide, true); window.removeEventListener('freeze', ar.hide, true); ar.hide = null; }
   if (V3D.skyDome) V3D.skyDome.visible = true;
   if (V3D.groundMesh) V3D.groundMesh.visible = true;
   if (V3D.terrainMesh) V3D.terrainMesh.visible = true;

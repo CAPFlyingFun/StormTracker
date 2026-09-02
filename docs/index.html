@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>StormTracker v7.16</title>
+<title>StormTracker v7.17</title>
 <meta name="description" content="Real-time storm detection with live radar, weather alerts, and storm tracking. No account required.">
 <meta name="theme-color" content="#0a1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="css/style.css?v=814">
+<link rel="stylesheet" href="css/style.css?v=815">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -34,7 +34,7 @@
     <span class="storm-count-badge" id="header-storm-count" onclick="switchPage('storms')"></span>
   </div>
   <div class="header-center">
-    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.16</span></h1>
+    <h1><span id="header-lightning">⚡</span> StormTracker <span style="font-size:0.45em;font-weight:500;color:var(--text-muted);vertical-align:middle">v7.17</span></h1>
     <div class="header-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Initializing...</span>
@@ -687,18 +687,17 @@
           <div id="v3d-compass-tape" style="position:absolute;top:0;height:28px;white-space:nowrap;will-change:transform"></div>
           <div id="v3d-compass-hdg" style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:700;color:#00e5ff;letter-spacing:.06em;z-index:2"></div>
         </div>
-        <div id="v3d-info-tl" style="position:absolute;top:44px;left:8px;transform:translateZ(0);background:rgba(5,10,20,0.78);backdrop-filter:blur(10px);border:1px solid rgba(0,200,255,0.1);border-radius:10px;padding:7px 10px;max-width:200px;pointer-events:none;font-size:10px">
-          <div style="font-size:11px;font-weight:600;color:#e8eef8;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="v3d-loc-name">—</div>
-          <div style="font-size:9px;color:rgba(255,255,255,0.45);margin-top:1px" id="v3d-loc-coords">—</div>
-          <div style="border-top:1px solid rgba(0,200,255,0.12);margin:4px 0 3px"></div>
-          <div style="font-size:11px;font-weight:600;color:#e8eef8;line-height:1.2" id="v3d-storm-count">—</div>
-          <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:1px" id="v3d-nearest-threat">—</div>
-          <div style="font-size:8px;color:rgba(255,255,255,0.35);margin-top:3px" id="v3d-steering-info">—</div>
-          <div style="font-size:8px;color:rgba(255,255,255,0.35);margin-top:1px" id="v3d-wind-info">—</div>
-          <div style="font-size:8px;color:rgba(255,255,255,0.35);margin-top:1px" id="v3d-cloud-base-info">—</div>
+        <div id="v3d-info-tl" style="position:absolute;top:36px;left:0;right:0;transform:translateZ(0);background:rgba(5,10,20,0.72);backdrop-filter:blur(10px);border-bottom:1px solid rgba(0,200,255,0.12);padding:3px 8px 4px;pointer-events:none;display:flex;flex-wrap:wrap;align-items:baseline;gap:1px 9px;line-height:1.35">
+          <span id="v3d-loc-name" style="font-size:11px;font-weight:600;color:#e8eef8;max-width:56%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</span>
+          <span id="v3d-storm-count" style="font-size:11px;font-weight:600;color:#e8eef8;white-space:nowrap">—</span>
+          <span id="v3d-nearest-threat" style="font-size:9px;color:rgba(255,255,255,0.55);white-space:nowrap">—</span>
+          <span id="v3d-steering-info" style="font-size:8px;color:rgba(255,255,255,0.4);white-space:nowrap">—</span>
+          <span id="v3d-wind-info" style="font-size:8px;color:rgba(255,255,255,0.4);white-space:nowrap">—</span>
+          <span id="v3d-cloud-base-info" style="font-size:8px;color:rgba(255,255,255,0.4);white-space:nowrap">—</span>
+          <span id="v3d-loc-coords" style="font-size:8px;color:rgba(255,255,255,0.3);white-space:nowrap">—</span>
         </div>
       </div>
-      <div id="v3d-popup" style="transform:translateZ(0);position:absolute;z-index:20;background:rgba(5,10,20,0.93);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:16px 18px;min-width:210px;pointer-events:all;display:none;box-shadow:0 8px 40px rgba(0,0,0,0.7)">
+      <div id="v3d-popup" style="transform:translateZ(0);position:absolute;z-index:20;background:rgba(5,10,20,0.93);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:11px 13px;min-width:190px;max-width:calc(100% - 20px);pointer-events:all;display:none;box-shadow:0 8px 40px rgba(0,0,0,0.7)">
         <span id="v3d-pop-close" onclick="document.getElementById('v3d-popup').style.display='none'" style="position:absolute;top:10px;right:12px;color:rgba(255,255,255,0.35);cursor:pointer;font-size:16px;line-height:1">✕</span>
         <div class="pop-cat" id="v3d-pop-cat">—</div>
         <div class="pop-dbz" id="v3d-pop-dbz">— dBZ</div>
@@ -771,25 +770,25 @@
   </div>
 </div>
 
-<script src="js/radar-shared.js?v=814" defer></script>
-<script src="js/core.js?v=814" defer></script>
-<script src="js/gauges.js?v=814" defer></script>
-<script src="js/icons.js?v=814" defer></script>
-<script src="js/geo.js?v=814" defer></script>
-<script src="js/settings.js?v=814" defer></script>
-<script src="js/thresholds.js?v=814" defer></script>
-<script src="js/weather.js?v=814" defer></script>
-<script src="js/radar.js?v=814" defer></script>
-<script src="js/tropical-model.js?v=814" defer></script>
-<script src="js/storms.js?v=814" defer></script>
-<script src="js/station.js?v=814" defer></script>
-<script src="js/alerts.js?v=814" defer></script>
-<script src="js/briefingEngine.js?v=814" defer></script>
-<script src="js/ai.js?v=814" defer></script>
-<script src="js/push.js?v=814" defer></script>
-<script src="js/qrcode.js?v=814" defer></script>
-<script src="js/devicelink.js?v=814" defer></script>
-<script src="js/init.js?v=814" defer></script>
+<script src="js/radar-shared.js?v=815" defer></script>
+<script src="js/core.js?v=815" defer></script>
+<script src="js/gauges.js?v=815" defer></script>
+<script src="js/icons.js?v=815" defer></script>
+<script src="js/geo.js?v=815" defer></script>
+<script src="js/settings.js?v=815" defer></script>
+<script src="js/thresholds.js?v=815" defer></script>
+<script src="js/weather.js?v=815" defer></script>
+<script src="js/radar.js?v=815" defer></script>
+<script src="js/tropical-model.js?v=815" defer></script>
+<script src="js/storms.js?v=815" defer></script>
+<script src="js/station.js?v=815" defer></script>
+<script src="js/alerts.js?v=815" defer></script>
+<script src="js/briefingEngine.js?v=815" defer></script>
+<script src="js/ai.js?v=815" defer></script>
+<script src="js/push.js?v=815" defer></script>
+<script src="js/qrcode.js?v=815" defer></script>
+<script src="js/devicelink.js?v=815" defer></script>
+<script src="js/init.js?v=815" defer></script>
 <script>
 // Clean service-worker registration. sw.js calls skipWaiting() on install and
 // clients.claim() on activate (and its activate handler prunes old caches), so a
@@ -799,7 +798,7 @@
 // background-notification connection on each app open and forced a fragile rebuild.
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){
-    navigator.serviceWorker.register('sw.js?v=814')
+    navigator.serviceWorker.register('sw.js?v=815')
       .then(function(reg){try{reg.update();}catch(e){}})
       .catch(function(e){console.log('SW register failed:',e);});
   });

@@ -1684,9 +1684,26 @@ function openPopup3D(cell, cx, cy) {
   }
   rows += '<div class="pop-row"><span class="pop-k">Lat / Lon</span><span class="pop-v">' + cell.lat.toFixed(3) + '\u00b0, ' + (cell.lon || cell.lng).toFixed(3) + '\u00b0</span></div>';
   document.getElementById('v3d-pop-rows').innerHTML = rows;
-  popup.style.left = Math.min(cx, window.innerWidth - 230) + 'px';
-  popup.style.top = Math.min(cy, window.innerHeight - 200) + 'px';
+  // v7.17: the old placement wrote VIEWPORT coordinates into a box positioned
+  // inside the 3D container, so every popup landed pushed down by the height of
+  // the header/banner/ticker above the view — the lower you tapped, the further
+  // off the bottom it went (owner report). Anchor it on the tapped cell in the
+  // container's own space, sit it just ABOVE the cell like a label, flip below
+  // when there is no room, and clamp so the whole box is always readable.
   popup.style.display = 'block';
+  popup.style.visibility = 'hidden';
+  var host = popup.offsetParent || document.getElementById('view3d-container');
+  var hr = host.getBoundingClientRect();
+  var w = popup.offsetWidth, h = popup.offsetHeight, M = 8, GAP = 14;
+  var ax = cx - hr.left, ay = cy - hr.top;
+  var left = ax - w / 2;
+  var top = ay - h - GAP;
+  if (top < M) top = ay + GAP;                       // no room above → below the cell
+  left = Math.max(M, Math.min(left, hr.width - w - M));
+  top = Math.max(M, Math.min(top, hr.height - h - M));
+  popup.style.left = Math.round(left) + 'px';
+  popup.style.top = Math.round(top) + 'px';
+  popup.style.visibility = '';
 }
 
 function onClick3D(e) {
@@ -1984,8 +2001,11 @@ function _arEnter(stream, vr) {
   V3D.controls.enabled = false;    // sensors own the look direction now
   var altGrp = document.getElementById('v3d-alt-grp');
   if (altGrp) altGrp.style.display = '';
+  // v7.17: the heading recorder did its job — the button stays out of the way
+  // now. Run showHeadingDebug() from the console (or set st_headingDebug=1) to
+  // bring it back for another capture.
   var dbgGrp = document.getElementById('v3d-dbg-grp');
-  if (dbgGrp) dbgGrp.style.display = '';
+  if (dbgGrp) dbgGrp.style.display = _dbgEnabled() ? '' : 'none';
   _arAltLabel();
   if (stream) {
     // v7.01: NO video element yet, and no opacity games ever. On the owner's
@@ -2348,6 +2368,14 @@ function _dbgSample(e, scr, rawHdg, fwdPitch, servoOK, frozen, diff, hm, dot) {
 }
 var _DBG_COLS = 't_ms,phone_alpha_z,phone_beta_x,phone_gamma_y,compass,cmp_acc,screen_angle,absolute,' +
   'raw_gyro_hdg,yawFix,trim,cam_hdg,cam_pitch,cam_roll,compass_minus_cam,servoOK,frozen,locked,servo_diff,lean_mag,lean_dot';
+function _dbgEnabled() { try { return localStorage.getItem('st_headingDebug') === '1'; } catch (e) { return false; } }
+function showHeadingDebug(on) {
+  var v = (on === false) ? null : '1';
+  try { if (v) localStorage.setItem('st_headingDebug', v); else localStorage.removeItem('st_headingDebug'); } catch (e) {}
+  var g = document.getElementById('v3d-dbg-grp');
+  if (g) g.style.display = (v && V3D.ar.active) ? '' : 'none';
+  return 'heading debug ' + (v ? 'ON — start AR or VR and the DEBUG group appears' : 'off');
+}
 function toggleDbgRec3D() {
   var d = V3D.dbg;
   if (d.rec) { _dbgStop(); return; }

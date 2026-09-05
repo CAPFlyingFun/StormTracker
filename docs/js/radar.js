@@ -415,26 +415,61 @@ function showRadarLayer(map){
   if(S.nexradLayer){map.removeLayer(S.nexradLayer);S.nexradLayer=null}
   const lbl=document.getElementById('radar-source-label');
   const btn=document.getElementById('radar-toggle-src');
+  // v7.22: the overlay follows the same bench as the scan, so a NEXRAD outage
+  // never leaves the map blank under the lightning strikes
+  if(S.radarSource==='nexrad'&&nexradBenched()){
+    if(!S.radarFrames||!S.radarFrames.length){
+      fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json()).then(rv=>{
+        const past=rv.radar?.past||[],now=rv.radar?.nowcast||[];
+        S.radarFrames=past.concat(now);
+        _showRvLayer(map,lbl,btn,true);
+      }).catch(()=>{if(lbl)lbl.textContent='Radar unavailable — NEXRAD and RainViewer both unreachable'});
+      return;
+    }
+    _showRvLayer(map,lbl,btn,true);
+    return;
+  }
   if(S.radarSource==='nexrad'){
+    let _nexErrs=0;
     S.radarLayer=L.tileLayer(`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=${Date.now()}`,{opacity:0.7,maxZoom:11,maxNativeZoom:8}).addTo(map);
+    // v7.22: a handful of tile errors means the composite is down, not that one
+    // tile is missing — bench it and re-render through RainViewer.
+    S.radarLayer.on('tileerror',()=>{
+      if(S.radarSource!=='nexrad'||nexradBenched())return;
+      if(++_nexErrs<4)return;
+      try{S.radarLayer.off('tileerror')}catch(e){}
+      _markNexradBad();
+      if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
+        S._srcFallbackToastAt=Date.now();
+        toast('📡 NEXRAD unreachable — switched to RainViewer');
+      }
+      showRadarLayer(map);
+    });
     if(btn){_ris('radar-toggle-src','source-nex');btn.style.background='var(--accent-blue)'}
     if(lbl)lbl.textContent='NEXRAD (US) \u00B7 📍 Home \u00B7 🔍 Scan here \u00B7 🔦 HD Scan';
     const t=new Date();
     const el=document.getElementById('radar-time');
     if(el)el.textContent=fmtClock(t);
   }else{
-    if(S.radarFrames.length){
-      S.radarIdx=S.radarFrames.length-1;
-      const frame=S.radarFrames[S.radarIdx];
-      S.radarLayer=L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,{opacity:0.7,maxZoom:11,maxNativeZoom:7}).addTo(map);
-      const t=new Date(frame.time*1000);
-      const el=document.getElementById('radar-time');
-      if(el)el.textContent=fmtClock(t);
-    }
-    if(btn){_ris('radar-toggle-src','source-rv');btn.style.background=''}
-    if(lbl)lbl.textContent='RainViewer \u00B7 Updated every 10 min \u00B7 📍 Home \u00B7 🔍 Scan here \u00B7 🔦 HD Scan';
+    _showRvLayer(map,lbl,btn,false);
   }
   if(S._showZones&&S._rawScanPts&&S._rawScanPts.length>0&&!S._radarOverlayVisible&&S._zoneOverlays&&S._zoneOverlays.length>0&&_shouldAutoHideRadar()&&S.radarLayer&&map.hasLayer(S.radarLayer)){try{map.removeLayer(S.radarLayer)}catch(e){}}
+}
+
+// v7.22: the RainViewer overlay, shared by the normal path and the NEXRAD-down
+// fallback so both render and label identically.
+function _showRvLayer(map,lbl,btn,isFallback){
+  if(S.radarFrames&&S.radarFrames.length){
+    S.radarIdx=S.radarFrames.length-1;
+    const frame=S.radarFrames[S.radarIdx];
+    if(S.radarLayer){try{map.removeLayer(S.radarLayer)}catch(e){}S.radarLayer=null}
+    S.radarLayer=L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,{opacity:0.7,maxZoom:11,maxNativeZoom:7}).addTo(map);
+    const t=new Date(frame.time*1000);
+    const el=document.getElementById('radar-time');
+    if(el)el.textContent=fmtClock(t);
+  }
+  if(btn){_ris('radar-toggle-src','source-rv');btn.style.background=''}
+  if(lbl)lbl.textContent=(isFallback?'RainViewer \u00B7 NEXRAD unreachable, retrying':'RainViewer')+' \u00B7 📍 Home \u00B7 🔍 Scan here \u00B7 🔦 HD Scan';
 }
 
 function toggleRadarSource(map){
@@ -443,6 +478,7 @@ function toggleRadarSource(map){
     toast('Switched to RainViewer (global)');
   }else{
     if(!isUSLocation(S.lat,S.lon)){toast('NEXRAD only available for US locations');return}
+    clearRadarSourceBench();   // v7.22: an explicit pick overrides the outage bench
     S.radarSource='nexrad';
     toast('Switched to NEXRAD (US)');
   }
@@ -712,6 +748,16 @@ function showViewScanCircle(map,lat,lng,radiusMi,count){
 //   Returns null when RainViewer is selected but no usable tile path exists
 //   (caller runs its own "no radar data" fallback).
 // ==========================================
+// v7.22: NEXRAD outage bench. The Iowa State composite is the US default, and
+// when it goes down the app used to render nothing but lightning — the scan
+// reported failed tiles, kept the last good picture and stopped there. Now a
+// dead NEXRAD benches itself for 10 minutes and everything falls through to
+// RainViewer, which is global and independent. The bench expires on its own so
+// NEXRAD comes straight back; picking a source by hand clears it immediately.
+let _nexradBadUntil=0;
+function _markNexradBad(){_nexradBadUntil=Date.now()+10*60000}
+function nexradBenched(){return Date.now()<_nexradBadUntil}
+function clearRadarSourceBench(){_nexradBadUntil=0}
 let _rvScanFramesCache={ts:0,frames:null,tilePath:null};
 const _RV_SCAN_FRAMES_TTL_MS=60000;
 async function _fetchRvScanFrames(forceRefresh){
@@ -741,7 +787,7 @@ async function runRadarScan(opts){
   const lat=opts.lat,lon=opts.lon;
   const radiusMi=opts.radiusMi!=null?opts.radiusMi:80;
   const source=opts.source||'nexrad';
-  const useNexrad=source==='nexrad';
+  const useNexrad=source==='nexrad'&&!nexradBenched();   // v7.22: a benched NEXRAD routes to RainViewer
   const minDbz=opts.minDbz!=null?opts.minDbz:15;
   const step=opts.step; // undefined => scanTileForPoints falls back to S._scanStep
   const forceRVRefresh=!!opts.forceRVRefresh;
@@ -801,6 +847,23 @@ async function runRadarScan(opts){
     for(const p of r)points.push(p);
   }
   if(failedTiles)console.warn('[SCAN] '+failedTiles+'/'+tileResults.length+' tiles failed to load');
+  // v7.22: NEXRAD produced nothing usable — every tile failed (each waits up to
+  // 15 s), or they resolved with no data at all. Bench it and run the SAME scan
+  // against RainViewer rather than handing the caller an empty picture.
+  if(useNexrad&&!opts._srcFallback&&tileResults.length&&(failedTiles>=tileResults.length||(failedTiles>0&&!points.length))){
+    console.warn('[SCAN] NEXRAD unusable ('+failedTiles+'/'+tileResults.length+' tiles) — falling back to RainViewer');
+    _markNexradBad();
+    const _alt=await runRadarScan(Object.assign({},opts,{source:'rainviewer',zoom:undefined,_srcFallback:true}));
+    if(_alt&&_alt.points){
+      S.radarFrames=_alt.frames||S.radarFrames;   // callers skip this when they think they are on NEXRAD
+      _alt.fellBackTo='rainviewer';
+      if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
+        S._srcFallbackToastAt=Date.now();
+        toast('📡 NEXRAD unreachable — switched to RainViewer');
+      }
+      return _alt;
+    }
+  }
   // v6.83: corrupted tiles are counted inside failedTiles (they return null),
   // but get their own message — this is a data-provider problem, not network,
   // and the user staring at a garbled sector deserves to know the app saw it

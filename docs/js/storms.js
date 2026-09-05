@@ -138,7 +138,12 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
   const ctx=c.getContext('2d',{willReadFrequently:true});
   ctx.drawImage(img,0,0);
   let data;
-  try{data=ctx.getImageData(0,0,tileSize,tileSize).data}catch(e){return[]}
+  // v7.25: an unreadable canvas is a FAILURE, not a dry tile. This returned []
+  // — the same value a genuinely clear tile returns — so if the provider ever
+  // dropped its CORS header (or answered an error page without one) every tile
+  // reported "no rain here", failedTiles stayed 0, and every outage test built
+  // on failed tiles passed a completely blank radar as clear skies.
+  try{data=ctx.getImageData(0,0,tileSize,tileSize).data}catch(e){return null}
   const pts=[];
   for(let x=0;x<tileSize;x+=step){
     for(let y=0;y<tileSize;y+=step){
@@ -430,6 +435,11 @@ function _ltgApplyFlashes(j,src,ts,sat){
   }
   S._ltgStrikes={ts:ts||Date.now(),flashes,src:src,sat:sat||null};
   _ltgSetStatus();
+  // v7.25: fresh observed strikes are the moment to re-ask whether the radar
+  // picture is believable — the boot scan almost always commits before the
+  // first lightning fetch lands, so this is the only place the contradiction
+  // can be caught on a cold start.
+  if(typeof maybeRadarContradicted==='function'){try{maybeRadarContradicted()}catch(e){console.warn('[RADAR] contradiction check failed',e)}}
   if(S.map&&typeof plotLightningStrikes==='function')plotLightningStrikes(S.map);
   if(typeof drawMiniSonar==='function')drawMiniSonar();
   // v5.77: in-app lightning proximity alert (browser notification while the app

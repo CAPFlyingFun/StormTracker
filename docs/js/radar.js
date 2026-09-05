@@ -824,6 +824,10 @@ function _clearRadarWatchdog(){
 }
 function radarWatchdogPending(){return !!_radarWatchdogTimer}
 function _radarSourceProved(src){
+  // v7.25: imagery loading is not proof of life while live lightning says the
+  // field it drew is wrong. Without this the map overlay's own 'load' event
+  // disarms the watchdog a second into the boot and the 10 s clock never runs.
+  if(S._radarContradictedSrc===src&&Date.now()-(S._radarContradictedAt||0)<LTG_CONTRADICT_HOLD_MS)return;
   if(src==='nexrad'){S._nexradProvenAt=Date.now();_clearRadarWatchdog()}
   else if(src==='noaa'){S._noaaProvenAt=Date.now();_clearRadarWatchdog()}
   else S._rvProvenAt=Date.now();
@@ -864,7 +868,7 @@ function _radarWatchdogFire(){
   // this is exactly the v7.23 behaviour and RainViewer takes over.
   const next=(typeof noaaReady==='function'&&noaaReady())?'noaa':'rainviewer';
   console.warn('[RADAR] no NEXRAD imagery '+(RADAR_WATCHDOG_MS/1000)+' s after the location fix \u2014 forcing '+radarSrcLabel(next));
-  S.radarSource=next;
+  S.radarSource=next;S._radarSrcSwitchedAt=Date.now();
   if(typeof toast==='function')toast('\uD83D\uDCE1 NEXRAD not responding \u2014 switched to '+radarSrcLabel(next));
   if(S.map&&typeof showRadarLayer==='function')showRadarLayer(S.map);
   _rescanWhenIdle(0);
@@ -969,11 +973,99 @@ async function probeNoaaRadar(force){
   })();
   return _noaaProbeInFlight;
 }
+// ==========================================================================
+// v7.25: OBSERVED LIGHTNING AS AN INDEPENDENT WITNESS.
+//
+// Every outage test up to v7.24 asked the radar about itself: did its tiles
+// fail, did they decode, did they time out. A source that answers 200 with
+// valid but empty imagery passes all of those and reports clear skies, and the
+// watchdog counts a decoded tile as proof of life and disarms. That is the case
+// that kept showing a blank map with lightning all over it.
+//
+// Real lightning is the check that does not come from the radar. A cloud-to-
+// ground strike cannot happen without a convective core, so observed strikes
+// inside the scan radius while the reflectivity field came back COMPLETELY
+// empty is a contradiction, and the radar is the one that is wrong. Radar-
+// derived lightning estimates are excluded by ltgLive() — those are computed
+// FROM reflectivity, so they could never disagree with it.
+//
+// Three strikes minimum, so one stray geolocated flash can never flip sources.
+const LTG_CONTRADICT_MIN=3;        // total blank: 3 strikes in range is enough
+const LTG_CONTRADICT_STRONG=5;     // partial blank: needs a clearer signal
+const LTG_SAMPLE_MAX=40;           // strikes examined, so this stays cheap on mobile
+const LTG_ECHO_NEAR_MI=15;         // an echo this close to a strike vindicates the radar
+const LTG_CONTRADICT_HOLD_MS=5*60000;
+// Only these two feeds are OBSERVED strikes. The third lightning source is a
+// radar-derived estimate (cells >=48 dBZ) — it is computed FROM reflectivity,
+// so letting it near this check would make the radar its own witness and the
+// contradiction could never fire. ltgLive() is already false for it today; this
+// guard makes that a rule rather than a coincidence a later edit could undo.
+const LTG_OBSERVED_SRC={warpulse:1,glm:1};
+function lightningContradictsRadar(points,lat,lon,radiusMi){
+  if(typeof ltgLive!=='function'||!ltgLive())return 0;
+  if(!S._ltgStrikes||!LTG_OBSERVED_SRC[S._ltgStrikes.src])return 0;
+  const fl=S._ltgStrikes.flashes||[];
+  if(fl.length<LTG_CONTRADICT_MIN)return 0;
+  const atHome=(lat===S.lat&&lon===S.lon);
+  const inRange=[];
+  for(const f of fl){
+    const d=(atHome&&f.distMi!=null)?f.distMi:haversine(lat,lon,f.lat,f.lon);
+    if(d<=radiusMi){inRange.push(f);if(inRange.length>=LTG_SAMPLE_MAX)break}
+  }
+  if(inRange.length<LTG_CONTRADICT_MIN)return 0;
+  if(!points||!points.length)return inRange.length;   // the observed case: a wholly empty field
+  // Partial breakage: echoes exist somewhere, but not one of them is anywhere
+  // near a strike. Held to a higher bar because a decaying cell can outlive its
+  // core briefly. A degree box costs a fraction of a haversine, and the loop
+  // exits on the first strike that HAS an echo beside it — the normal case.
+  if(inRange.length<LTG_CONTRADICT_STRONG)return 0;
+  const dLat=LTG_ECHO_NEAR_MI/69;
+  for(const f of inRange){
+    const dLon=LTG_ECHO_NEAR_MI/(69*Math.max(0.2,Math.cos(f.lat*Math.PI/180)));
+    for(const p of points){
+      if(Math.abs(p.lat-f.lat)<=dLat&&Math.abs(p.lng-f.lon)<=dLon)return 0;
+    }
+  }
+  return inRange.length;
+}
+// Called when observed strikes ARRIVE. The boot scan usually finishes before the
+// first lightning fetch lands, so the scan's own check can't see a contradiction
+// that only becomes visible seconds later — this is what re-opens the question.
+function maybeRadarContradicted(){
+  if(S.lat==null||!S.scanTime||S._fullScanActive)return false;
+  // Judge a source only on a scan it actually produced. Without this, the first
+  // strikes to arrive after a switch would convict the incoming source for the
+  // empty field the outgoing one left behind — and on the last rung that reads
+  // as "radar unreliable" a second after we just moved to it.
+  if(S._radarSrcSwitchedAt&&S.scanTime<=S._radarSrcSwitchedAt)return false;
+  const src=S.radarSource;
+  if(S._radarContradictedSrc===src&&Date.now()-(S._radarContradictedAt||0)<LTG_CONTRADICT_HOLD_MS)return false;
+  const n=lightningContradictsRadar(S._rawScanPts||[],S.lat,S.lon,S.scanRadius);
+  if(!n)return false;
+  S._radarContradictedSrc=src;S._radarContradictedAt=Date.now();
+  console.warn('[RADAR] '+radarSrcLabel(src)+' shows no echoes near '+n+' observed strikes inside '+S.scanRadius+' mi');
+  if(src==='rainviewer'){
+    // Last rung — there is nowhere left to go, so say the honest thing rather
+    // than let the map read as clear skies.
+    if(typeof toast==='function'&&(!S._ltgContradictToastAt||Date.now()-S._ltgContradictToastAt>600000)){
+      S._ltgContradictToastAt=Date.now();
+      toast('\u26A1 Lightning detected but the radar shows no echoes \u2014 radar data looks unreliable right now');
+    }
+    return false;
+  }
+  if(src==='noaa')_markNoaaBad('empty field contradicted by observed lightning');else _markNexradBad();
+  const next=(src==='nexrad'&&noaaReady())?'noaa':'rainviewer';
+  S.radarSource=next;S._radarSrcSwitchedAt=Date.now();
+  if(typeof toast==='function')toast('\u26A1 Radar showed nothing while lightning is striking \u2014 switched to '+radarSrcLabel(next));
+  if(S.map&&typeof showRadarLayer==='function')showRadarLayer(S.map);
+  _rescanWhenIdle(0);
+  return true;
+}
 function radarSrcLabel(src){
   src=src||S.radarSource;
   return src==='nexrad'?'NEXRAD':src==='noaa'?'NOAA MRMS':'RainViewer';
 }
-if(typeof window!=='undefined'){window.probeNoaaRadar=probeNoaaRadar;window.noaaProbeState=noaaProbeState;window.radarSrcLabel=radarSrcLabel;}
+if(typeof window!=='undefined'){window.probeNoaaRadar=probeNoaaRadar;window.noaaProbeState=noaaProbeState;window.radarSrcLabel=radarSrcLabel;window.lightningContradictsRadar=lightningContradictsRadar;window.maybeRadarContradicted=maybeRadarContradicted;}
 let _rvScanFramesCache={ts:0,frames:null,tilePath:null};
 const _RV_SCAN_FRAMES_TTL_MS=60000;
 async function _fetchRvScanFrames(forceRefresh){
@@ -1073,7 +1165,13 @@ async function runRadarScan(opts){
   // v7.23: a single decoded tile proves the source is alive — that is what
   // disarms the watchdog. Deliberately NOT gated on finding echoes: a clear
   // sky is a working radar, not an outage.
-  if(tileResults.length&&failedTiles<tileResults.length)_radarSourceProved(useNoaa?'noaa':useNexrad?'nexrad':'rainviewer');
+  const _srcNow=useNoaa?'noaa':useNexrad?'nexrad':'rainviewer';
+  const _ltgSays=lightningContradictsRadar(points,lat,lon,radiusMi);
+  if(_ltgSays){
+    S._radarContradictedSrc=_srcNow;S._radarContradictedAt=Date.now();
+    console.warn('[SCAN] '+radarSrcLabel(_srcNow)+' returned an empty field while '+_ltgSays+' observed strikes are inside '+radiusMi+' mi — treating the radar as wrong');
+  }else if(S._radarContradictedSrc===_srcNow&&points.length){S._radarContradictedSrc=null}
+  if(tileResults.length&&failedTiles<tileResults.length&&!_ltgSays)_radarSourceProved(_srcNow);
   else if(!useHiPal&&tileResults.length&&failedTiles>=tileResults.length&&(nexradBenched()||opts._srcLevel||(typeof isUSLocation==='function'&&!isUSLocation(lat,lon))))radarUnavailable();
   // v7.22: NEXRAD produced nothing usable — every tile failed (each waits up to
   // 15 s), or they resolved with no data at all. Bench it and run the SAME scan
@@ -1081,11 +1179,12 @@ async function runRadarScan(opts){
   // v7.24: the ladder is NEXRAD → NOAA → RainViewer, and NOAA is only a rung on
   // it when its probe passed. _srcLevel bounds the recursion at two hops.
   const _lvl=opts._srcLevel||0;
-  if(useHiPal&&_lvl<2&&tileResults.length&&(failedTiles>=tileResults.length||(failedTiles>0&&!points.length))){
+  if(useHiPal&&_lvl<2&&tileResults.length&&(failedTiles>=tileResults.length||(failedTiles>0&&!points.length)||_ltgSays)){
     const _srcName=useNoaa?'NOAA':'NEXRAD';
-    if(useNoaa)_markNoaaBad('every tile failed during a scan');else _markNexradBad();
+    const _why=_ltgSays?('an empty field with '+_ltgSays+' observed strikes in range'):(failedTiles+'/'+tileResults.length+' tiles');
+    if(useNoaa)_markNoaaBad(_ltgSays?'empty field contradicted by observed lightning':'every tile failed during a scan');else _markNexradBad();
     const _next=(useNexrad&&_lvl===0&&noaaReady())?'noaa':'rainviewer';
-    console.warn('[SCAN] '+_srcName+' unusable ('+failedTiles+'/'+tileResults.length+' tiles) — falling back to '+radarSrcLabel(_next));
+    console.warn('[SCAN] '+_srcName+' unusable ('+_why+') — falling back to '+radarSrcLabel(_next));
     const _alt=await runRadarScan(Object.assign({},opts,{source:_next,zoom:undefined,_srcLevel:_lvl+1}));
     if(_alt&&_alt.points){
       S.radarFrames=_alt.frames||S.radarFrames;   // callers skip this when they think they are on NEXRAD

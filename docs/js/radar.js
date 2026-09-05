@@ -26,7 +26,7 @@ function initRadar(){
         <div class="map-ctrl-btn" id="radar-scan" title="Home location">${_ri('scan-home')}</div>
         <div class="map-ctrl-btn" id="radar-scan-view" title="Scan map center">${_ri('scan-view')}</div>
         <div class="map-ctrl-btn" id="radar-scan-hires" title="HD Scan — 15 mi, fine detail">${_ri('scan-hires')}</div>
-        <div class="map-ctrl-btn" id="radar-toggle-src" title="Toggle radar source">${_ri(S.radarSource==='nexrad'?'source-nex':'source-rv')}</div>
+        <div class="map-ctrl-btn" id="radar-toggle-src" title="Toggle radar source">${_ri(S.radarSource!=='rainviewer'?'source-nex':'source-rv')}</div>
         <div class="map-ctrl-btn" id="btn-radar-overlay" title="Radar overlay on/off" onclick="toggleRadarOverlay()" style="opacity:${S._radarOverlayVisible?1:0.4}">${_ri('radar-overlay')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-units" title="Toggle mi/km">${_ri(S.radarMetric?'units-km':'units')}</div>
         <div class="map-ctrl-btn" id="radar-toggle-airports" title="Toggle airports">${_ri('airports')}</div>
@@ -322,6 +322,14 @@ async function toggleRadarAnim(map){
   const btn=document.getElementById('radar-anim-btn');
   _ris('radar-anim-btn','anim-loading');
   let animFrames=[];
+  // v7.24: our NOAA WMS request carries no TIME dimension, so the fallback is a
+  // current-conditions layer only. Say so instead of silently playing a
+  // RainViewer loop over a NOAA still.
+  if(S.radarSource==='noaa'){
+    toast('Radar loop is not available on the NOAA fallback \u2014 showing current returns');
+    _ris('radar-anim-btn','play');
+    return;
+  }
   if(S.radarSource==='nexrad'){
     const center=map.getCenter();
     const aLat=center.lat,aLon=center.lng;
@@ -416,7 +424,10 @@ function showRadarLayer(map){
   const lbl=document.getElementById('radar-source-label');
   const btn=document.getElementById('radar-toggle-src');
   // v7.22: the overlay follows the same bench as the scan, so a NEXRAD outage
-  // never leaves the map blank under the lightning strikes
+  // never leaves the map blank under the lightning strikes.
+  // v7.24: with NEXRAD benched the overlay takes the same rung the scan takes —
+  // NOAA if its probe passed, RainViewer otherwise.
+  if(S.radarSource==='nexrad'&&nexradBenched()&&noaaReady())S.radarSource='noaa';
   if(S.radarSource==='nexrad'&&nexradBenched()){
     if(!S.radarFrames||!S.radarFrames.length){
       fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json()).then(rv=>{
@@ -429,7 +440,32 @@ function showRadarLayer(map){
     _showRvLayer(map,lbl,btn,true);
     return;
   }
-  if(S.radarSource==='nexrad'){
+  if(S.radarSource==='noaa'){
+    const ep=noaaEndpoint();
+    // The probe passed, but Leaflet still has to be able to draw a WMS layer.
+    // If either is missing, degrade to RainViewer rather than show nothing.
+    if(!ep||typeof L==='undefined'||!L.tileLayer||!L.tileLayer.wms){
+      _markNoaaBad('no WMS layer support in this build');
+      S.radarSource='rainviewer';
+      _showRvLayer(map,lbl,btn,true);
+    }else{
+      let _noaaErrs=0;
+      S.radarLayer=L.tileLayer.wms(ep.base,{layers:ep.layer,format:'image/png',transparent:true,version:'1.1.1',opacity:0.7,maxZoom:11,maxNativeZoom:8}).addTo(map);
+      S.radarLayer.on('load',()=>_radarSourceProved('noaa'));
+      S.radarLayer.on('tileerror',()=>{
+        if(S.radarSource!=='noaa')return;
+        if(++_noaaErrs<4)return;
+        try{S.radarLayer.off('tileerror')}catch(e){}
+        _markNoaaBad('overlay tiles failing');
+        S.radarSource='rainviewer';
+        showRadarLayer(map);
+      });
+      if(btn){_ris('radar-toggle-src','source-nex');btn.style.background='var(--accent-blue)'}
+      if(lbl)lbl.textContent='NOAA MRMS (US) \u00B7 NEXRAD unreachable \u00B7 \uD83D\uDCCD Home \u00B7 \uD83D\uDD0D Scan here \u00B7 \uD83D\uDD26 HD Scan';
+      const el=document.getElementById('radar-time');
+      if(el)el.textContent=fmtClock(new Date());
+    }
+  }else if(S.radarSource==='nexrad'){
     let _nexErrs=0;
     S.radarLayer=L.tileLayer(`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=${Date.now()}`,{opacity:0.7,maxZoom:11,maxNativeZoom:8}).addTo(map);
     // v7.22: a handful of tile errors means the composite is down, not that one
@@ -442,7 +478,7 @@ function showRadarLayer(map){
       _markNexradBad();
       if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
         S._srcFallbackToastAt=Date.now();
-        toast('📡 NEXRAD unreachable — switched to RainViewer');
+        toast('📡 NEXRAD unreachable — switched to '+radarSrcLabel(noaaReady()?'noaa':'rainviewer'));
       }
       showRadarLayer(map);
     });
@@ -475,7 +511,7 @@ function _showRvLayer(map,lbl,btn,isFallback){
 }
 
 function toggleRadarSource(map){
-  if(S.radarSource==='nexrad'){
+  if(S.radarSource!=='rainviewer'){        // v7.24: 'nexrad' or the auto-picked 'noaa'
     S.radarSource='rainviewer';
     _clearRadarWatchdog();
     toast('Switched to RainViewer (global)');
@@ -775,11 +811,21 @@ function clearRadarSourceBench(){_nexradBadUntil=0;S._nexradProvenAt=0}
 // finished a tile batch) — NOT that it found rain, because a genuinely clear
 // sky must not look like an outage.
 const RADAR_WATCHDOG_MS=10000;
-let _radarWatchdogTimer=null;
-function _clearRadarWatchdog(){if(_radarWatchdogTimer){clearTimeout(_radarWatchdogTimer);_radarWatchdogTimer=null}}
+// v7.24: NEXRAD normally proves itself in a second or two, so the NOAA probe is
+// only started at 6 s — and only if NEXRAD still has nothing to show. A healthy
+// boot therefore never touches NOAA at all, and a struggling one still has 4 s
+// to have a verified third source ready before the 10 s deadline. The fire path
+// never waits on the probe: whatever is proven at 10 s is what gets used.
+const RADAR_PROBE_AT_MS=6000;
+let _radarWatchdogTimer=null,_radarProbeTimer=null;
+function _clearRadarWatchdog(){
+  if(_radarWatchdogTimer){clearTimeout(_radarWatchdogTimer);_radarWatchdogTimer=null}
+  if(_radarProbeTimer){clearTimeout(_radarProbeTimer);_radarProbeTimer=null}
+}
 function radarWatchdogPending(){return !!_radarWatchdogTimer}
 function _radarSourceProved(src){
   if(src==='nexrad'){S._nexradProvenAt=Date.now();_clearRadarWatchdog()}
+  else if(src==='noaa'){S._noaaProvenAt=Date.now();_clearRadarWatchdog()}
   else S._rvProvenAt=Date.now();
   if(S._radarUnavailable){S._radarUnavailable=false;if(S.map&&typeof showRadarLayer==='function')showRadarLayer(S.map)}
 }
@@ -804,14 +850,22 @@ function armRadarWatchdog(lat,lon){
   if(typeof isUSLocation==='function'&&!isUSLocation(lat,lon))return;
   if(S.radarSource!=='nexrad')return;
   _radarWatchdogTimer=setTimeout(_radarWatchdogFire,RADAR_WATCHDOG_MS);
+  _radarProbeTimer=setTimeout(()=>{
+    _radarProbeTimer=null;
+    if(S.radarSource!=='nexrad'||S._nexradProvenAt)return;   // NEXRAD is fine — never bother NOAA
+    if(typeof probeNoaaRadar==='function')probeNoaaRadar().catch(()=>{});
+  },RADAR_PROBE_AT_MS);
 }
 function _radarWatchdogFire(){
   _radarWatchdogTimer=null;
   if(S.radarSource!=='nexrad'||S._nexradProvenAt)return;
-  console.warn('[RADAR] no NEXRAD imagery '+(RADAR_WATCHDOG_MS/1000)+' s after the location fix \u2014 forcing RainViewer');
   _markNexradBad();
-  S.radarSource='rainviewer';
-  if(typeof toast==='function')toast('\uD83D\uDCE1 NEXRAD not responding \u2014 switched to RainViewer');
+  // v7.24: NOAA only gets picked here if its probe actually passed; otherwise
+  // this is exactly the v7.23 behaviour and RainViewer takes over.
+  const next=(typeof noaaReady==='function'&&noaaReady())?'noaa':'rainviewer';
+  console.warn('[RADAR] no NEXRAD imagery '+(RADAR_WATCHDOG_MS/1000)+' s after the location fix \u2014 forcing '+radarSrcLabel(next));
+  S.radarSource=next;
+  if(typeof toast==='function')toast('\uD83D\uDCE1 NEXRAD not responding \u2014 switched to '+radarSrcLabel(next));
   if(S.map&&typeof showRadarLayer==='function')showRadarLayer(S.map);
   _rescanWhenIdle(0);
 }
@@ -822,6 +876,104 @@ function _rescanWhenIdle(tries){
   if(typeof scanRadarForStorms==='function')scanRadarForStorms();
 }
 if(typeof window!=='undefined'){window.armRadarWatchdog=armRadarWatchdog;window.radarUnavailable=radarUnavailable;window.radarWatchdogPending=radarWatchdogPending;}
+
+// ==========================================================================
+// v7.24: NOAA as a THIRD radar leg, and it has to earn its place at runtime.
+//
+// NOAA's own GeoServer serves the quality-controlled CONUS base-reflectivity
+// mosaic with no API key, which makes it a genuine third US source: NEXRAD →
+// NOAA → RainViewer. What it is NOT is verified — the exact service path has
+// moved before (nowCOAST was retired and folded into opengeo), the layer name
+// could change again, the response may or may not carry CORS headers, and the
+// default GeoServer style may or may not be the same reflectivity ramp our
+// nexradToDbz() converter is built around. Guessing wrong on any one of those
+// silently produces a blank radar or, worse, fictional storm cells.
+//
+// So nothing routes to NOAA until a probe proves the whole path end to end:
+//   1. a candidate endpoint actually returns a decodable image
+//   2. the canvas is readable (no CORS taint) so we can extract points at all
+//   3. the pixels it returns are recognised by the NEXRAD colour ramp
+// The probe insists on seeing REAL ECHOES before it passes — an empty frame
+// proves nothing (an unknown layer returns a transparent tile too), so it is
+// treated as a failure and retried later rather than accepted on faith. If no
+// candidate clears all three bars, NOAA is skipped entirely and the chain is
+// exactly the NEXRAD → RainViewer of v7.23. A wrong guess costs a single
+// 256 px request and nothing else.
+const NOAA_WMS_CANDIDATES=[
+  {base:'https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows',layer:'conus_bref_qcd'},
+  {base:'https://opengeo.ncep.noaa.gov/geoserver/conus/ows',layer:'conus_bref_qcd'},
+  {base:'https://opengeo.ncep.noaa.gov/geoserver/ows',layer:'conus:conus_bref_qcd'}
+];
+const _WM_R=20037508.342789244;      // Web Mercator half-extent, metres
+// WMS 1.1.1 + SRS=EPSG:3857 so the bbox is always minx,miny,maxx,maxy — 1.3.0
+// flips axis order per-CRS and is a needless way to get a mirrored tile.
+function _noaaWmsUrl(ep,z,x,y){
+  const span=2*_WM_R/Math.pow(2,z);
+  const minx=-_WM_R+x*span,maxx=minx+span,maxy=_WM_R-y*span,miny=maxy-span;
+  return ep.base+'?service=WMS&version=1.1.1&request=GetMap&layers='+encodeURIComponent(ep.layer)
+    +'&styles=&format=image%2Fpng&transparent=true&srs=EPSG%3A3857&width=256&height=256'
+    +'&bbox='+minx.toFixed(3)+','+miny.toFixed(3)+','+maxx.toFixed(3)+','+maxy.toFixed(3);
+}
+// z4/x3/y5 covers most of the central + eastern US in one 256 px tile, so the
+// odds of it holding some precipitation on any given day are very high.
+const NOAA_PROBE_TILE={z:4,x:3,y:5};
+const _NOAA_PROBE_OK_MS=30*60000,_NOAA_PROBE_BAD_MS=10*60000;
+let _noaaProbe={ts:0,ok:false,ep:null,why:'not probed yet'};
+let _noaaProbeInFlight=null;
+function noaaReady(){return !!(_noaaProbe.ok&&_noaaProbe.ep&&Date.now()-_noaaProbe.ts<_NOAA_PROBE_OK_MS)}
+function noaaEndpoint(){return noaaReady()?_noaaProbe.ep:null}
+function _markNoaaBad(why){_noaaProbe={ts:Date.now(),ok:false,ep:null,why:why||'scan failed'}}
+function noaaProbeState(){return{ok:noaaReady(),why:_noaaProbe.why,base:_noaaProbe.ep?_noaaProbe.ep.base:null,ts:_noaaProbe.ts}}
+async function _probeOneNoaa(ep){
+  if(typeof loadTileImage!=='function'||typeof document==='undefined')return{ok:false,why:'no tile loader in this context'};
+  const img=await loadTileImage(_noaaWmsUrl(ep,NOAA_PROBE_TILE.z,NOAA_PROBE_TILE.x,NOAA_PROBE_TILE.y));
+  if(!img)return{ok:false,why:'no decodable image returned'};
+  let data;
+  try{
+    const c=document.createElement('canvas');c.width=256;c.height=256;
+    const cx=c.getContext('2d',{willReadFrequently:true});
+    cx.drawImage(img,0,0);
+    data=cx.getImageData(0,0,256,256).data;
+  }catch(e){return{ok:false,why:'canvas tainted — no CORS header, pixels unreadable'}}
+  let colored=0,known=0;
+  for(let i=0;i<data.length;i+=16){          // every 4th pixel — 16k samples
+    if(data[i+3]<30)continue;
+    colored++;
+    if(nexradToDbz(data[i],data[i+1],data[i+2],data[i+3])>0)known++;
+  }
+  // An empty frame is indistinguishable from a wrong layer name answering with
+  // a transparent tile, so it is NOT a pass. Retry on the next outage instead.
+  if(colored<150)return{ok:false,why:'probe frame had no echoes — palette unverifiable'};
+  const pct=Math.round(known/colored*100);
+  if(pct<70)return{ok:false,why:'palette is not the NEXRAD ramp ('+pct+'% of pixels recognised)'};
+  return{ok:true,why:'palette matches ('+pct+'% of pixels recognised)'};
+}
+async function probeNoaaRadar(force){
+  const fresh=_noaaProbe.ts&&(Date.now()-_noaaProbe.ts)<(_noaaProbe.ok?_NOAA_PROBE_OK_MS:_NOAA_PROBE_BAD_MS);
+  if(!force&&fresh)return noaaReady();
+  if(_noaaProbeInFlight)return _noaaProbeInFlight;
+  _noaaProbeInFlight=(async()=>{
+    try{
+      for(const ep of NOAA_WMS_CANDIDATES){
+        const v=await _probeOneNoaa(ep);
+        if(v.ok){
+          _noaaProbe={ts:Date.now(),ok:true,ep:ep,why:v.why};
+          console.log('[RADAR] NOAA probe PASSED \u2014 '+ep.base+' ('+v.why+')');
+          return true;
+        }
+        console.warn('[RADAR] NOAA probe rejected '+ep.base+': '+v.why);
+      }
+      _noaaProbe={ts:Date.now(),ok:false,ep:null,why:'no candidate endpoint passed the probe'};
+      return false;
+    }finally{_noaaProbeInFlight=null}
+  })();
+  return _noaaProbeInFlight;
+}
+function radarSrcLabel(src){
+  src=src||S.radarSource;
+  return src==='nexrad'?'NEXRAD':src==='noaa'?'NOAA MRMS':'RainViewer';
+}
+if(typeof window!=='undefined'){window.probeNoaaRadar=probeNoaaRadar;window.noaaProbeState=noaaProbeState;window.radarSrcLabel=radarSrcLabel;}
 let _rvScanFramesCache={ts:0,frames:null,tilePath:null};
 const _RV_SCAN_FRAMES_TTL_MS=60000;
 async function _fetchRvScanFrames(forceRefresh){
@@ -851,7 +1003,11 @@ async function runRadarScan(opts){
   const lat=opts.lat,lon=opts.lon;
   const radiusMi=opts.radiusMi!=null?opts.radiusMi:80;
   const source=opts.source||'nexrad';
-  const useNexrad=source==='nexrad'&&!nexradBenched();   // v7.22: a benched NEXRAD routes to RainViewer
+  const useNexrad=source==='nexrad'&&!nexradBenched();   // v7.22: a benched NEXRAD routes onward
+  const useNoaa=source==='noaa'&&noaaReady();            // v7.24: only ever true once the probe passed
+  // Both US mosaics are read through the same NEXRAD reflectivity ramp and the
+  // same zoom ladder; RainViewer has its own palette and coarser native tiles.
+  const useHiPal=useNexrad||useNoaa;
   const minDbz=opts.minDbz!=null?opts.minDbz:15;
   const step=opts.step; // undefined => scanTileForPoints falls back to S._scanStep
   const forceRVRefresh=!!opts.forceRVRefresh;
@@ -861,7 +1017,7 @@ async function runRadarScan(opts){
   // >48-tile guard walks it down — the guard only runs in the auto path so it
   // matches storms/view exactly while hi-res/overhead keep their fixed zoom.
   const autoZoom=(opts.zoom==null);
-  let zoom=autoZoom?(useNexrad?(radiusMi<=15?11:radiusMi<=30?10:radiusMi<=50?9:8):(radiusMi<=30?8:7)):opts.zoom;
+  let zoom=autoZoom?(useHiPal?(radiusMi<=15?11:radiusMi<=30?10:radiusMi<=50?9:8):(radiusMi<=30?8:7)):opts.zoom;
   const radiusDeg=radiusMi/69.0;
   const northLat=lat+radiusDeg,southLat=lat-radiusDeg;
   const eastLon=lon+radiusDeg/Math.cos(lat*Math.PI/180);
@@ -869,13 +1025,13 @@ async function runRadarScan(opts){
   let minTX=lonToTileX(westLon,zoom),maxTX=lonToTileX(eastLon,zoom);
   let minTY=latToTileY(northLat,zoom),maxTY=latToTileY(southLat,zoom);
   if(autoZoom){
-    while((maxTX-minTX+1)*(maxTY-minTY+1)>48&&zoom>(useNexrad?8:7)){
+    while((maxTX-minTX+1)*(maxTY-minTY+1)>48&&zoom>(useHiPal?8:7)){
       zoom--;minTX=lonToTileX(westLon,zoom);maxTX=lonToTileX(eastLon,zoom);
       minTY=latToTileY(northLat,zoom);maxTY=latToTileY(southLat,zoom);
     }
   }
   let frames=S.radarFrames,tilePath=S._rvTilePath;
-  if(!useNexrad){
+  if(!useHiPal){
     const rvRes=await _fetchRvScanFrames(forceRVRefresh);
     if(rvRes&&rvRes.tilePath){
       frames=rvRes.frames;tilePath=rvRes.tilePath;S._rvTilePath=tilePath;
@@ -888,13 +1044,16 @@ async function runRadarScan(opts){
       if(!S._rvTilePath)return null;
     }
   }
-  const colorFn=useNexrad?nexradToDbz:rvToDbz;
+  const colorFn=useHiPal?nexradToDbz:rvToDbz;
+  const _noaaEp=useNoaa?noaaEndpoint():null;
   const ts=Date.now();
   S._corruptTiles=0;   // v6.83: scanTileForPoints bumps this per garbled tile
   const tilePromises=[];
   for(let tx=minTX;tx<=maxTX;tx++){
     for(let ty=minTY;ty<=maxTY;ty++){
-      const url=useNexrad
+      const url=useNoaa
+        ?_noaaWmsUrl(_noaaEp,zoom,tx,ty)
+        :useNexrad
         ?`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/${zoom}/${tx}/${ty}.png${cacheBustNexrad?`?t=${ts}`:''}`
         :`https://tilecache.rainviewer.com${tilePath}/256/${zoom}/${tx}/${ty}/2/1_1.png`;
       tilePromises.push(scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,radiusMi,step,lat,lon));
@@ -914,21 +1073,30 @@ async function runRadarScan(opts){
   // v7.23: a single decoded tile proves the source is alive — that is what
   // disarms the watchdog. Deliberately NOT gated on finding echoes: a clear
   // sky is a working radar, not an outage.
-  if(tileResults.length&&failedTiles<tileResults.length)_radarSourceProved(useNexrad?'nexrad':'rainviewer');
-  else if(!useNexrad&&tileResults.length&&failedTiles>=tileResults.length&&(nexradBenched()||opts._srcFallback||(typeof isUSLocation==='function'&&!isUSLocation(lat,lon))))radarUnavailable();
+  if(tileResults.length&&failedTiles<tileResults.length)_radarSourceProved(useNoaa?'noaa':useNexrad?'nexrad':'rainviewer');
+  else if(!useHiPal&&tileResults.length&&failedTiles>=tileResults.length&&(nexradBenched()||opts._srcLevel||(typeof isUSLocation==='function'&&!isUSLocation(lat,lon))))radarUnavailable();
   // v7.22: NEXRAD produced nothing usable — every tile failed (each waits up to
   // 15 s), or they resolved with no data at all. Bench it and run the SAME scan
   // against RainViewer rather than handing the caller an empty picture.
-  if(useNexrad&&!opts._srcFallback&&tileResults.length&&(failedTiles>=tileResults.length||(failedTiles>0&&!points.length))){
-    console.warn('[SCAN] NEXRAD unusable ('+failedTiles+'/'+tileResults.length+' tiles) — falling back to RainViewer');
-    _markNexradBad();
-    const _alt=await runRadarScan(Object.assign({},opts,{source:'rainviewer',zoom:undefined,_srcFallback:true}));
+  // v7.24: the ladder is NEXRAD → NOAA → RainViewer, and NOAA is only a rung on
+  // it when its probe passed. _srcLevel bounds the recursion at two hops.
+  const _lvl=opts._srcLevel||0;
+  if(useHiPal&&_lvl<2&&tileResults.length&&(failedTiles>=tileResults.length||(failedTiles>0&&!points.length))){
+    const _srcName=useNoaa?'NOAA':'NEXRAD';
+    if(useNoaa)_markNoaaBad('every tile failed during a scan');else _markNexradBad();
+    const _next=(useNexrad&&_lvl===0&&noaaReady())?'noaa':'rainviewer';
+    console.warn('[SCAN] '+_srcName+' unusable ('+failedTiles+'/'+tileResults.length+' tiles) — falling back to '+radarSrcLabel(_next));
+    const _alt=await runRadarScan(Object.assign({},opts,{source:_next,zoom:undefined,_srcLevel:_lvl+1}));
     if(_alt&&_alt.points){
       S.radarFrames=_alt.frames||S.radarFrames;   // callers skip this when they think they are on NEXRAD
-      _alt.fellBackTo='rainviewer';
-      if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
+      // A two-hop fall (NEXRAD → NOAA → RainViewer) resolves innermost first,
+      // so the rung that actually served the data must not be overwritten on
+      // the way back out — and only the outermost frame speaks, so the toast
+      // names the source the user really ended up on.
+      if(!_alt.fellBackTo)_alt.fellBackTo=_next;
+      if(_lvl===0&&typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
         S._srcFallbackToastAt=Date.now();
-        toast('📡 NEXRAD unreachable — switched to RainViewer');
+        toast('📡 '+_srcName+' unreachable — switched to '+radarSrcLabel(_alt.fellBackTo));
       }
       return _alt;
     }
@@ -942,10 +1110,10 @@ async function runRadarScan(opts){
     const nowMs=Date.now();
     if(typeof toast==='function'&&(!S._corruptToastAt||nowMs-S._corruptToastAt>600000)){
       S._corruptToastAt=nowMs;
-      toast('📡 '+S._corruptTiles+' garbled radar tile'+(S._corruptTiles>1?'s':'')+' ignored — '+(useNexrad?'NEXRAD composite':'RainViewer')+' is sending bad data in part of the area');
+      toast('📡 '+S._corruptTiles+' garbled radar tile'+(S._corruptTiles>1?'s':'')+' ignored — '+radarSrcLabel(source)+' is sending bad data in part of the area');
     }
   }
-  const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useNexrad,frames):RADAR_LATENCY_MS;
+  const radarAgeMs=(typeof computeRadarAgeMs==='function')?computeRadarAgeMs(useHiPal,frames):RADAR_LATENCY_MS;
   S._netBusyUntil=Date.now()+8000; // v6.87: short grace so a queued probe still waits out the tail
   return{points,frames,tilePath,radarAgeMs,zoom,failedTiles,totalTiles:tileResults.length};
 }
@@ -1073,9 +1241,9 @@ async function maybeRunOuterScan(){
     if(_outerScanBusy)return;
     if(S._outerScanTime&&(Date.now()-S._outerScanTime)<10*60000&&S._outerScanPts&&S._outerScanPts.length)return;
     _outerScanBusy=true;
-    const useNexrad=S.radarSource==='nexrad';
+    const useNexrad=S.radarSource!=='rainviewer';   // v7.24: 'nexrad' or the probed 'noaa'
     // coarse pass: wide radius, low zoom, big pixel step, ≥25 dBZ — cheap regional look.
-    const result=await runRadarScan({lat:S.lat,lon:S.lon,radiusMi:200,zoom:useNexrad?7:6,step:4,minDbz:25,source:useNexrad?'nexrad':'rainviewer'});
+    const result=await runRadarScan({lat:S.lat,lon:S.lon,radiusMi:200,zoom:useNexrad?7:6,step:4,minDbz:25,source:useNexrad?S.radarSource:'rainviewer'});
     _outerScanBusy=false;
     if(!result||!result.points)return;
     // keep ONLY the 80–200 mi annulus — the inner ≤80 mi is the detailed scan's job
@@ -1188,7 +1356,7 @@ async function scanRadarForView(){
   if(!S.map)return;
   const center=S.map.getCenter();
   const cLat=center.lat,cLng=center.lng;
-  const useNexrad=S.radarSource==='nexrad';
+  const useNexrad=S.radarSource!=='rainviewer';   // v7.24: 'nexrad' or the probed 'noaa'
   const radius=S.scanRadius;
   showScanOverlay();
   // v4.76: gate on winds aloft before scanning/rendering points.
@@ -1206,7 +1374,7 @@ async function scanRadarForView(){
       lat:cLat,lon:cLng,
       radiusMi:radius,
       minDbz:15,
-      source:useNexrad?'nexrad':'rainviewer'
+      source:useNexrad?S.radarSource:'rainviewer'
     });
     if(!result){hideScanOverlay();toast('No radar data');return}
     if(!useNexrad)S.radarFrames=result.frames;
@@ -1221,7 +1389,7 @@ async function scanRadarForView(){
       totalTiles:result.totalTiles,
       plotLabel:n=>`Plotting ${n.toLocaleString()} storm points...`
     });
-    const srcLabel=useNexrad?'NEXRAD':'RainViewer';
+    const srcLabel=radarSrcLabel(result.fellBackTo||S.radarSource);
     if(S.map)showViewScanCircle(S.map,cLat,cLng,radius,S.storms.length);
     if(typeof maybeRunOuterScan==='function')maybeRunOuterScan(); // v6.24: outer awareness on radar-tab scans too
     hideScanOverlay();
@@ -1247,7 +1415,7 @@ async function scanRadarHiRes(map,fromHome){
   if(!S._etaRescanInProgress)S._stormETAs={};
   const center=fromHome?{lat:S.lat,lng:S.lon}:map.getCenter();
   const cLat=center.lat,cLng=center.lng;
-  const useNexrad=S.radarSource==='nexrad';
+  const useNexrad=S.radarSource!=='rainviewer';   // v7.24: 'nexrad' or the probed 'noaa'
   const HIRES_RADIUS=15;
   const hiZoom=useNexrad?10:7;
   showScanOverlay();
@@ -1268,7 +1436,7 @@ async function scanRadarHiRes(map,fromHome){
       zoom:hiZoom,
       step:1,
       minDbz:10,
-      source:useNexrad?'nexrad':'rainviewer'
+      source:useNexrad?S.radarSource:'rainviewer'
     });
     if(!result){hideScanOverlay();toast('No radar data');return}
     if(!useNexrad)S.radarFrames=result.frames;
@@ -1287,7 +1455,7 @@ async function scanRadarHiRes(map,fromHome){
       map,
       plotLabel:n=>`Hi-Res: ${n.toLocaleString()} points in ${HIRES_RADIUS} mi`
     });
-    const srcLabel=useNexrad?'NEXRAD':'RainViewer';
+    const srcLabel=radarSrcLabel(result.fellBackTo||S.radarSource);
     showViewScanCircle(map,cLat,cLng,HIRES_RADIUS,S.storms.length);
     if(S.map&&S._showPathArrows)setTimeout(()=>buildPathArrows(S.map),150);
     map.setView([cLat,cLng],11,{animate:true,duration:0.5});
@@ -2069,7 +2237,7 @@ function _tickerWeatherPool(){
   }
   if(S.scanTime){
     const ago=Math.round((Date.now()-S.scanTime)/60000);
-    const src=S.radarSource==='nexrad'?'NEXRAD':'RainViewer';
+    const src=radarSrcLabel();
     const rad=S.radarMetric?Math.round(S.scanRadius*1.60934)+' km':S.scanRadius+' mi';
     pool.push(`📡 ${src} radar scan · ${rad} radius · Last update ${ago<1?'just now':ago+' min ago'}. Monitoring conditions. 🛰️`);
   }
@@ -2440,7 +2608,7 @@ async function pollOverheadRain(){
   S._overheadPollLast=Date.now();
   try{
     const cLat=S.lat,cLon=S.lon;
-    const useNexrad=S.radarSource==='nexrad'&&isUSLocation(cLat,cLon);
+    const useNexrad=S.radarSource!=='rainviewer'&&isUSLocation(cLat,cLon);   // v7.24
     const POLL_RADIUS_MI=3;
     // v5.44: thin wrapper over the unified runRadarScan engine — quick 3 mi
     // overhead check. forceRVRefresh (no-store) + cacheBustNexrad keep it fresh;
@@ -2451,7 +2619,7 @@ async function pollOverheadRain(){
       zoom:useNexrad?11:8,
       step:1,
       minDbz:5,
-      source:useNexrad?'nexrad':'rainviewer',
+      source:useNexrad?S.radarSource:'rainviewer',
       forceRVRefresh:true,
       keepStaleTilePath:true,
       cacheBustNexrad:true
@@ -2460,7 +2628,7 @@ async function pollOverheadRain(){
     if(S.lat!==cLat||S.lon!==cLon){console.log('[OverheadPoll] location changed mid-poll, discarding');return}
     const newPts=result.points;
     const maxDbz=newPts.reduce((m,p)=>p.dbz>m?p.dbz:m,-999);
-    console.log('[OverheadPoll]',useNexrad?'NEX':'RV','newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
+    console.log('[OverheadPoll]',useNexrad?radarSrcLabel():'RV','newPts=',newPts.length,'maxDbz=',maxDbz>-999?maxDbz:'none');
     // v5.46: splice-merge + hero/rain-clock refresh via the unified commit
     // pipeline (spliceRadiusMi mode) — no storm-list rebuild on quick polls.
     await commitScanResults(newPts,{spliceRadiusMi:POLL_RADIUS_MI,center:{lat:cLat,lon:cLon},failedTiles:result.failedTiles,totalTiles:result.totalTiles});

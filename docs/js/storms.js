@@ -1902,7 +1902,7 @@ async function scanRadarForStorms(){
   const reqId=S._locReqId;
   if(!S._etaRescanInProgress)S._stormETAs={};
   clearViewScanCircle();
-  const useNexrad=S.radarSource==='nexrad';
+  const useNexrad=S.radarSource!=='rainviewer';   // v7.24: 'nexrad' or the probed 'noaa'
   showScanOverlay();
   if(reqId!==S._locReqId){hideScanOverlay();return}
   S._fullScanActive=true;
@@ -1928,7 +1928,7 @@ async function scanRadarForStorms(){
       lat:S.lat,lon:S.lon,
       radiusMi:S.scanRadius,
       minDbz:(typeof STORM_MIN_DBZ!=='undefined')?STORM_MIN_DBZ:15,
-      source:useNexrad?'nexrad':'rainviewer'
+      source:useNexrad?S.radarSource:'rainviewer'
     });
     if(reqId!==S._locReqId){hideScanOverlay();return}
     const _waOk=await _waitWindsBounded(_waGateP,_waFirstPaintGrace());
@@ -1970,7 +1970,7 @@ async function scanRadarForStorms(){
       abortCheck:()=>reqId===S._locReqId
     });
     if(!committed){hideScanOverlay();return}
-    const srcLabel=useNexrad?'NEXRAD':'RainViewer';
+    const srcLabel=radarSrcLabel(result.fellBackTo||S.radarSource);
     if(S.map){plotSPCWatchPolygons(S.map);plotNWSWarningPolygons(S.map);plotSPCReports(S.map);plotNHCTracks(S.map)}
     // v6.23 (Stage 2): fire-and-forget the outer 80–200 mi awareness scan (gated to
     // tropical systems in range + zones on; throttled internally). Fully additive —
@@ -4906,7 +4906,7 @@ function _renderStormsCore(){
       <div class="alert-banner safe"><span class="alert-icon">✅</span><div class="alert-text"><span class="alert-title">All Clear</span><br>No storm cells detected within ${S.radarMetric?(S.scanRadius*1.60934).toFixed(0)+' km':S.scanRadius+' mi'}.</div></div>
       <div class="card"><div class="card-title"><span class="icon">🛰️</span> Radar Storm Scanner</div>
         <div class="empty-state"><div class="empty-icon">${neonWx(1,isCurrentlyDay(),48)}</div>
-          <p>Scans ${S.radarSource==='nexrad'?'NEXRAD':'RainViewer'} radar tiles for precipitation.<br>
+          <p>Scans ${radarSrcLabel()} radar tiles for precipitation.<br>
           Tap 📍 on the radar map to scan around your location.<br><br>
           <strong>Scan radius: ${S.scanRadius} mi</strong></p></div></div>`;
     return;

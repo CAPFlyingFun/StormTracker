@@ -827,6 +827,86 @@ function _steeringAt(field, lat, lon) {
   return best ? { dir: best.dir, speed: best.speed, sampleMi: bd } : null;
 }
 
+// ==========================================================================
+// v7.26: WINDS-ALOFT PROVIDERS RUN IN PARALLEL AFTER THE FIRST FAILURE.
+//
+// The chain was strictly sequential inside one fetch: api.open-meteo.com (5 s)
+// → 500 ms → customer-api (6 s) → NOAA GFS (8 s). So the alternate provider was
+// not asked for anything until ~11.5 s in — long past the first-paint grace and
+// often past the gate budget. The alternate existed, but it was almost never
+// the reason winds actually appeared, which is exactly what it looked like from
+// the outside.
+//
+// Now the primary host is tried alone (the happy path still costs one request),
+// and the moment it fails BOTH the sibling host and NOAA GFS run together, with
+// whichever returns usable levels first winning the race.
+//
+// The other half of the problem was reporting: the old code did
+// `lastErr = lastErr || e` for the alternate's error, so NOAA's failure reason
+// was discarded whenever Open-Meteo had also failed — which is the only case in
+// which NOAA ever ran. Every toast the user could ever see named Open-Meteo
+// alone. Errors are now collected per provider and reported together.
+async function _omAloftTry(host,params,timeoutMs){
+  const url='https://'+host.fqdn+'/v1/forecast?'+params;
+  try{
+    const rr=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
+    if(!rr.ok)return{err:new Error(host.fqdn+' HTTP '+rr.status),status:rr.status};
+    // v7.12: parse HERE. A 200 with a non-JSON body (edge challenge page,
+    // truncated reply) has to be THIS host's failure — thrown from below, it
+    // escaped past every remaining provider and killed the whole chain.
+    const txt=await rr.text();
+    let parsed=null;try{parsed=JSON.parse(txt)}catch(pe){parsed=null}
+    if(!parsed||typeof parsed!=='object'||!parsed.current){
+      console.log('Winds aloft: '+host.fqdn+' non-JSON body starts: '+JSON.stringify(String(txt).slice(0,100)));
+      return{err:new Error(host.fqdn+' returned '+(parsed?'no current block':'non-JSON')+' (HTTP '+rr.status+')')};
+    }
+    const c=parsed.current;
+    const levels=[
+      {p:1013,sk:'wind_speed_10m',dk:'wind_direction_10m',w:0.5,isSfc:true},
+      {p:925,sk:'wind_speed_925hPa',dk:'wind_direction_925hPa',w:0.8},
+      {p:850,sk:'wind_speed_850hPa',dk:'wind_direction_850hPa',w:1.5},
+      {p:700,sk:'wind_speed_700hPa',dk:'wind_direction_700hPa',w:2.5},
+      {p:500,sk:'wind_speed_500hPa',dk:'wind_direction_500hPa',w:1.5}
+    ];
+    const out=[];
+    levels.forEach(l=>{
+      const spd=c[l.sk],dir=c[l.dk];
+      if(spd==null||dir==null)return;
+      out.push({p:l.p,spd:spd*3.6,dir,rawMs:spd,isSfc:!!l.isSfc});
+    });
+    if(out.length<2)return{err:new Error(host.fqdn+' returned only '+out.length+' usable level(s)')};
+    return{levels:out,host:host.tag};
+  }catch(e){return{err:new Error(host.fqdn+' '+(e&&e.name==='TimeoutError'?'timed out':(e&&e.message)||'failed'))}}
+}
+// Resolves the instant ANY task yields usable levels. If they all fail it
+// resolves with EVERY error, so the user is told what each provider said
+// rather than only what the first one said.
+function _firstUsableAloft(tasks){
+  return new Promise(resolve=>{
+    let left=tasks.length;const errs=[];
+    if(!left){resolve({errs});return}
+    tasks.forEach(t=>{
+      const note=e=>{errs.push(t.label+': '+e);if(--left===0)resolve({errs})};
+      Promise.resolve(t.p).then(res=>{
+        if(res&&res.levels&&res.levels.length>=2){resolve({win:t,res});return}
+        note((res&&res.err&&res.err.message)||'no usable levels');
+      },e=>note((e&&e.message)||'failed'));
+    });
+  });
+}
+const _ALOFT_NOTICE_MS=60000;
+function _aloftAltNotice(why){
+  if(typeof toast!=='function')return;
+  if(S._aloftAltNoticeAt&&Date.now()-S._aloftAltNoticeAt<_ALOFT_NOTICE_MS)return;
+  S._aloftAltNoticeAt=Date.now();
+  toast('\u26A0\uFE0F Winds aloft: Open-Meteo failed ('+why+') \u2014 retrying and trying NOMADS GFS');
+}
+function _aloftAltWon(label){
+  if(typeof toast!=='function')return;
+  if(S._aloftAltWonAt&&Date.now()-S._aloftAltWonAt<_ALOFT_NOTICE_MS)return;
+  S._aloftAltWonAt=Date.now();
+  toast('\u2713 Winds aloft via '+label+' (Open-Meteo unavailable)');
+}
 async function fetchWindsAloft(overrideLat,overrideLon){
   const lat=overrideLat!=null?overrideLat:S.lat;
   const lon=overrideLon!=null?overrideLon:S.lon;
@@ -881,92 +961,57 @@ async function fetchWindsAloft(overrideLat,overrideLon){
         'wind_speed_500hPa','wind_direction_500hPa'].join(','),
       wind_speed_unit:'ms',forecast_days:'1',timezone:'auto'
     });
-    // v4.42: sibling-subdomain fallback. api.open-meteo.com sometimes
-    // returns HTTP 502 from nginx for stretches while customer-api stays up.
-    // Try main first, then fall over to customer-api on 5xx/timeout/network.
     const _hosts=[{tag:'api',fqdn:'api.open-meteo.com'},{tag:'customer-api',fqdn:'customer-api.open-meteo.com'}];
-    let r=null,usedHost=null,lastErr=null;
-    for(let i=0;i<_hosts.length;i++){
-      const host=_hosts[i];
-      const _wUrl='https://'+host.fqdn+'/v1/forecast?'+params;
-      const timeoutMs=i===0?5000:6000;
-      try{
-        const rr=await fetch(_wUrl,{signal:AbortSignal.timeout(timeoutMs)});
-        if(!rr.ok){
-          lastErr=new Error(host.fqdn+' HTTP '+rr.status);
-          console.log('Winds aloft: '+host.fqdn+' returned HTTP '+rr.status);
-          // v7.19: 401/403/408/429 are EDGE answers — a WAF challenge, a
-          // per-IP rate limit, an auth hiccup at one point of presence. They
-          // say nothing about the request, so the sibling host is worth a try;
-          // the owner hit a 401 from api.open-meteo.com and the old rule
-          // ("4xx = bad request, the sibling would reject it too") skipped
-          // customer-api entirely and went straight to failure. Only a genuine
-          // request error (400/404/410/422…) still ends the loop.
-          var _edge=(rr.status>=500&&rr.status<600)||rr.status===401||rr.status===403||rr.status===408||rr.status===429;
-          if(_edge&&i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
-          break;
-        }
-        // v7.12: parse HERE. A 200 with a non-JSON body (edge/challenge page,
-        // truncated reply) used to throw from r.json() BELOW the loop — past the
-        // sibling host and past the NOMADS fallback, straight into the outer
-        // catch. On Safari that surfaced as "The string did not match the
-        // expected pattern" (WebKit's wording for a failed .json()) and winds
-        // never recovered, even though NOMADS was fine. Now it's a host failure.
-        const txt=await rr.text();
-        let parsed=null;try{parsed=JSON.parse(txt)}catch(pe){parsed=null}
-        if(!parsed||typeof parsed!=='object'||!parsed.current){
-          lastErr=new Error(host.fqdn+' returned '+(parsed?'no current block':'non-JSON')+' (HTTP '+rr.status+')');
-          console.log('Winds aloft: '+lastErr.message+(parsed?'':' — body starts: '+JSON.stringify(String(txt).slice(0,100))));
-          if(i<_hosts.length-1){await new Promise(w=>setTimeout(w,500));continue}
-          break;
-        }
-        r=parsed;usedHost=host.tag;
-        if(i>0)console.log('Winds aloft: fell over to '+host.fqdn+' successfully');
-        break;
-      }catch(e){
-        // Network/timeout/abort — always retry on next host
-        lastErr=e;
-        console.log('Winds aloft: '+host.fqdn+' failed ('+e.message+')');
-        if(i<_hosts.length-1)await new Promise(w=>setTimeout(w,500));
-      }
-    }
+    const errs=[];
     let aloftSpeeds=null,provInfo=null;
-    if(r){
-      const d=r;                       // already parsed + validated in the loop
-      const c=d.current;
-      const levels=[
-        {p:1013,sk:'wind_speed_10m',dk:'wind_direction_10m',w:0.5,isSfc:true},
-        {p:925,sk:'wind_speed_925hPa',dk:'wind_direction_925hPa',w:0.8},
-        {p:850,sk:'wind_speed_850hPa',dk:'wind_direction_850hPa',w:1.5},
-        {p:700,sk:'wind_speed_700hPa',dk:'wind_direction_700hPa',w:2.5},
-        {p:500,sk:'wind_speed_500hPa',dk:'wind_direction_500hPa',w:1.5}
-      ];
-      aloftSpeeds=[];
-      levels.forEach(l=>{
-        const spd=c[l.sk],dir=c[l.dk];
-        if(spd==null||dir==null)return;
-        aloftSpeeds.push({p:l.p,spd:spd*3.6,dir,rawMs:spd,isSfc:!!l.isSfc});
-      });
-      provInfo={provider:'open-meteo',host:usedHost,label:usedHost==='customer-api'?'Open-Meteo (customer-api)':'Open-Meteo'};
-    }
-    // v4.43: NOMADS GFS fallback for US locations when every Open-Meteo
-    // subdomain failed (or returned too few usable levels). Operationally
-    // independent NOAA pipeline, key-less, browser-fetchable.
-    // v7.10: GFS is a global model and rucsoundings takes any lat,lon — the old
-    // US-only gate left every non-US user with NO winds fallback at all.
-    if(!aloftSpeeds||aloftSpeeds.length<2){
-      if(typeof _bootStep==='function')_bootStep('wind','Getting winds aloft… (NOMADS GFS)');
-      try{
-        aloftSpeeds=await fetchWindsAloftNOMADS(lat,lon);
-        provInfo={provider:'nomads-gfs',host:null,label:'NOMADS GFS'};
-        console.log('Winds aloft: NOMADS GFS ✓ ('+aloftSpeeds.length+' levels)');
-      }catch(e){
-        console.log('Winds aloft: NOMADS GFS failed ('+e.message+')');
-        lastErr=lastErr||e;
+    // 1) Primary host alone. When Open-Meteo is healthy this is still exactly
+    //    one request and nothing else is ever contacted.
+    const first=await _omAloftTry(_hosts[0],params,5000);
+    if(first.levels){
+      aloftSpeeds=first.levels;
+      provInfo={provider:'open-meteo',host:first.host,label:'Open-Meteo'};
+    }else{
+      errs.push('Open-Meteo: '+first.err.message);
+      // v7.19's edge/request-error split still holds. 5xx, 401, 403, 408 and 429
+      // are EDGE answers — a WAF challenge, a per-IP limit, an auth hiccup at one
+      // point of presence — and say nothing about the request, so the sibling is
+      // worth asking. A genuine request error (400/404/410/422…) would be
+      // rejected identically by the sibling, so don't waste the call on it; the
+      // alternate still runs, alone.
+      const _st=first.status;
+      const _edge=!_st||(_st>=500&&_st<600)||_st===401||_st===403||_st===408||_st===429;
+      console.log('Winds aloft: '+first.err.message+' — starting NOMADS GFS'+(_edge?' alongside the retry':' (sibling skipped: request error)'));
+      _aloftAltNotice(first.err.message);
+      if(typeof _bootStep==='function')_bootStep('wind','Winds aloft: '+(_edge?'retrying + NOMADS GFS…':'NOMADS GFS…'));
+      // 2) FIRST FAILURE => both remaining providers run TOGETHER. The sibling
+      //    host keeps its 500 ms courtesy pause; NOAA starts immediately.
+      //    v7.10: GFS is global and rucsoundings takes any lat/lon, so this is
+      //    not US-only — the old gate left non-US users with no alternate.
+      // If the alternate answers inside the sibling's courtesy pause we already
+      // have winds, so don't send Open-Meteo a request nobody will read.
+      let raceDone=false;
+      const sibP=_edge?(async()=>{
+        await new Promise(w=>setTimeout(w,500));
+        if(raceDone)return{err:new Error('skipped — another provider answered first')};
+        return _omAloftTry(_hosts[1],params,6000);
+      })():null;
+      const altP=fetchWindsAloftNOMADS(lat,lon).then(l=>({levels:l}),e=>({err:e}));
+      const _tasks=[{label:'NOMADS GFS',p:altP,prov:{provider:'nomads-gfs',host:null,label:'NOMADS GFS'}}];
+      if(_edge)_tasks.unshift({label:'Open-Meteo (customer-api)',p:sibP,prov:{provider:'open-meteo',host:'customer-api',label:'Open-Meteo (customer-api)'}});
+      const race=await _firstUsableAloft(_tasks);
+      raceDone=true;
+      if(race.win){
+        aloftSpeeds=race.res.levels;provInfo=race.win.prov;
+        console.log('Winds aloft: '+race.win.label+' \u2713 ('+aloftSpeeds.length+' levels)');
+        if(race.win.prov.provider!=='open-meteo')_aloftAltWon(race.win.label);
+      }else{
+        for(const m of race.errs)errs.push(m);
       }
     }
     if(!aloftSpeeds||aloftSpeeds.length<2){
-      const msg=lastErr?lastErr.message:'all providers failed';
+      // Every provider's own reason, joined — so "both failed" can actually be
+      // read as both, instead of hiding the alternate behind Open-Meteo's error.
+      const msg=errs.join(' \u00B7 ')||'all providers failed';
       console.log('Winds aloft: all providers failed ('+msg+')');
       S._aloftLastErr=msg;
       if(!S._aloftStale&&_useStaleWindsAloft(lat,lon)){_scheduleWindsAloftRetry(lat,lon,0);return}

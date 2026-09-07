@@ -320,6 +320,16 @@ async function _fetchMetNo(lat,lon){
   console.log('MET Norway ✓ '+om.hourly.time.length+' hourly steps, '+om.daily.time.length+' days');
   return{blended:om,host:'met.no',_met:true,gfs:null,hrrr:null};
 }
+// v7.31: the Open-Meteo query, extracted so the recovery sync below can
+// rebuild it without re-entering fetchWeather (which would re-run NWS/AWC and
+// repaint the whole tab).
+function _buildOmPath(lat,lon){
+  return `?latitude=${lat}&longitude=${lon}`
+    +`&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day`
+    +`&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,cloud_cover,visibility,is_day,cape,lifted_index,convective_inhibition,uv_index,freezing_level_height`
+    +`&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,sunrise,sunset,wind_speed_10m_max`
+    +`&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&timezone=auto&forecast_days=7&past_days=2`;
+}
 async function fetchWeather(){
   const reqId=S._locReqId;
   const el=document.getElementById('page-weather');
@@ -327,11 +337,7 @@ async function fetchWeather(){
   const _silentRefresh=S._lastWeatherData&&S._lastWeatherData._omPartial;
   if(!_silentRefresh)showSkel(el,6);
   if(typeof _bootStep==='function')_bootStep('wx','Fetching weather…');
-  const _omPath=`?latitude=${S.lat}&longitude=${S.lon}`
-    +`&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day`
-    +`&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,cloud_cover,visibility,is_day,cape,lifted_index,convective_inhibition,uv_index,freezing_level_height`
-    +`&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,sunrise,sunset,wind_speed_10m_max`
-    +`&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&timezone=auto&forecast_days=7&past_days=2`;
+  const _omPath=_buildOmPath(S.lat,S.lon);
   const _isUSLoc=isUSLocation(S.lat,S.lon);
   try{
     // v4.45: Fan out Open-Meteo + NWS + AWC in parallel — an Open-Meteo
@@ -485,7 +491,10 @@ async function fetchWeather(){
     }
     S.weather=omData.current;S._lastWeatherFetch=Date.now();S._lastWeatherData=omData;try{localStorage.setItem('st_lastWeather',JSON.stringify({ts:S._lastWeatherFetch,data:omData}))}catch(e){}_resetMinMax();renderWeather(omData);if(typeof updateThreatTicker==='function')updateThreatTicker();if(_curLang!=='en')setTimeout(quickTranslate,300);setTimeout(checkWeatherThresholds,500);if(typeof V3D!=='undefined'&&V3D.active&&typeof refreshSky3D==='function')refreshSky3D();
     if(typeof _bootStepDone==='function')_bootStepDone('wx',isPartial?'Weather partial (waiting on Open-Meteo)':'Weather data received');
-    if(isPartial)_scheduleOMRetry(reqId,_omPath,_isUSLoc,0);
+    if(isPartial){
+      if(!omData._omPartialSince)omData._omPartialSince=Date.now();
+      _scheduleOMRetry(reqId,_omPath,_isUSLoc,0);
+    }
     // v7.10: a partial render with NO forecast at all (US: NWS text only, or
     // non-US when MET was slow too) — fetch MET Norway now and back-fill the
     // hourly/daily cards in place; Open-Meteo still overrides it when it returns.
@@ -523,6 +532,7 @@ async function fetchWeather(){
 function _applyOMBackfill(r,why){
   const cached=S._lastWeatherData;
   if(!cached)return;
+  const wasPartial=cached._omPartial===true;
   const om=r.blended;
   const isMet=!!r._met;                 // v7.10: MET Norway fills the forecast but stays "partial" so Open-Meteo still overrides
   cached.hourly=om.hourly;
@@ -552,20 +562,51 @@ function _applyOMBackfill(r,why){
     cc._source=base||(_omHostLabel+_modelTag);
   }
   console.log((isMet?'MET Norway':'Open-Meteo')+' back-fill ('+(why||'background retry')+') via '+r.host+' — re-rendering');
+  // v7.31: a back-fill is a full SYNC, not just a repaint. Everything the
+  // Open-Meteo payload feeds gets refreshed, and the merged result is
+  // persisted — without this the next launch re-read the stale partial from
+  // st_lastWeather and went straight back to "waiting on Open-Meteo".
+  if(isMet){ if(!cached._omPartialSince)cached._omPartialSince=Date.now(); }
+  else { S._omPartialWasFor=wasPartial&&cached._omPartialSince?Date.now()-cached._omPartialSince:0; delete cached._omPartialSince; }
+  S.forecast=cached;
+  S._lastWeatherFetch=Date.now();
+  try{localStorage.setItem('st_lastWeather',JSON.stringify({ts:S._lastWeatherFetch,data:cached}))}catch(e){}
   try{renderWeather(cached)}catch(e){console.log('partial-retry render failed:',e.message)}
   if(typeof refreshRainClock==='function')refreshRainClock(true);
+  if(typeof updateThreatTicker==='function')try{updateThreatTicker()}catch(e){}
+  if(typeof V3D!=='undefined'&&V3D.active&&typeof refreshSky3D==='function')try{refreshSky3D()}catch(e){}
+  if(typeof _curLang!=='undefined'&&_curLang!=='en'&&typeof quickTranslate==='function')setTimeout(quickTranslate,300);
+  if(typeof checkWeatherThresholds==='function')setTimeout(function(){try{checkWeatherThresholds()}catch(e){}},500);
   if(typeof _bootStepDone==='function')_bootStepDone('wx',isMet?'Forecast filled in (MET Norway) — waiting on Open-Meteo':'Weather data filled in');
+  // Tell the user, but only when they actually sat through an outage — a
+  // back-fill 8 s into a slow boot needs no announcement.
+  if(!isMet&&wasPartial&&typeof toast==='function'&&(S._omPartialWasFor||0)>15000){
+    toast('\u2705 Open-Meteo is back \u2014 forecast, UV and freezing level updated');
+  }
 }
 const _OM_RETRY_DELAYS=[5000,10000,20000,45000,90000];
+// v7.31: after the fast chain the retry SLOWS to a 60 s keep-alive instead of
+// giving up. Giving up was the bug the owner hit: the chain expired, then
+// Open-Meteo came back and nothing asked it again, so the tab sat on "waiting
+// on Open-Meteo" indefinitely while winds aloft — which retries forever — was
+// already being served by Open-Meteo again.
+const _OM_KEEPALIVE_MS=60000;
+function _omRetryDelay(attempt){return attempt<_OM_RETRY_DELAYS.length?_OM_RETRY_DELAYS[attempt]:_OM_KEEPALIVE_MS}
 function _scheduleOMRetry(reqId,omPath,isUS,attempt){
-  if(attempt>=_OM_RETRY_DELAYS.length){console.log('OM background retry: giving up after '+_OM_RETRY_DELAYS.length+' attempts — autorefresh will retry');return}
   if(S._omRetryTimer){clearTimeout(S._omRetryTimer);S._omRetryTimer=null}
   S._omRetryTimer=setTimeout(async()=>{
     S._omRetryTimer=null;
     if(reqId!==S._locReqId)return;
-    if(!S._lastWeatherData||!S._lastWeatherData._omPartial)return;
-    console.log('OM background retry '+(attempt+1)+'/'+_OM_RETRY_DELAYS.length+'…');
-    const r=await _fetchOMSequence(omPath,isUS,reqId);
+    if(!S._lastWeatherData||!S._lastWeatherData._omPartial)return;   // already filled in
+    // Backgrounded: don't burn a request the user can't see the result of —
+    // re-arm and let the visibility handler pull it forward on return.
+    if(typeof document!=='undefined'&&document.hidden){_scheduleOMRetry(reqId,omPath,isUS,attempt);return}
+    if(S._omSyncing){_scheduleOMRetry(reqId,omPath,isUS,attempt);return}
+    console.log('OM background retry '+(attempt+1)+(attempt<_OM_RETRY_DELAYS.length?('/'+_OM_RETRY_DELAYS.length):' (keep-alive)')+'…');
+    S._omSyncing=true;
+    let r=null;
+    try{r=await _fetchOMSequence(omPath,isUS,reqId)}catch(e){}
+    S._omSyncing=false;
     if(reqId!==S._locReqId)return;
     if(r&&r.blended){
       _applyOMBackfill(r,'background retry');
@@ -573,8 +614,42 @@ function _scheduleOMRetry(reqId,omPath,isUS,attempt){
       console.log('OM background retry '+(attempt+1)+' failed');
       _scheduleOMRetry(reqId,omPath,isUS,attempt+1);
     }
-  },_OM_RETRY_DELAYS[attempt]);
+  },_omRetryDelay(attempt));
 }
+// v7.31: "Open-Meteo just answered somewhere else in the app." Winds aloft
+// retries Open-Meteo every 8 s forever, so its first success is the earliest
+// possible proof the service is healthy again — far earlier than the weather
+// tab's own next scheduled probe. Sync the pending forecast NOW.
+const _OM_ALIVE_MIN_GAP_MS=15000;
+function notifyOpenMeteoAlive(via){
+  const cur=S._lastWeatherData;
+  if(!cur||!cur._omPartial)return false;               // nothing is waiting
+  if(S.lat==null||S.lon==null)return false;
+  if(S._omSyncing)return false;                        // a probe is already running
+  if(S._omAliveAt&&Date.now()-S._omAliveAt<_OM_ALIVE_MIN_GAP_MS)return false;
+  S._omAliveAt=Date.now();
+  if(S._omRetryTimer){clearTimeout(S._omRetryTimer);S._omRetryTimer=null}
+  const reqId=S._locReqId,lat=S.lat,lon=S.lon;
+  const omPath=_buildOmPath(lat,lon),isUS=isUSLocation(lat,lon);
+  console.log('Open-Meteo reported alive via '+(via||'another request')+' — syncing the pending forecast now');
+  S._omSyncing=true;
+  _fetchOMSequence(omPath,isUS,reqId).then(r=>{
+    S._omSyncing=false;
+    if(reqId!==S._locReqId)return;
+    if(r&&r.blended)_applyOMBackfill(r,'recovery sync via '+(via||'another request'));
+    else _scheduleOMRetry(reqId,omPath,isUS,0);        // false alarm — resume the chain
+  }).catch(()=>{S._omSyncing=false;_scheduleOMRetry(reqId,omPath,isUS,0)});
+  return true;
+}
+// Coming back to the app is also a good moment to ask again.
+if(typeof document!=='undefined'){
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden)return;
+    const cur=S._lastWeatherData;
+    if(cur&&cur._omPartial)notifyOpenMeteoAlive('app returned to foreground');
+  });
+}
+if(typeof window!=='undefined')window.notifyOpenMeteoAlive=notifyOpenMeteoAlive;
 async function _fetchAWCOnce(){
   const _isUS=isNWSCoverage(S.lat,S.lon);
   const _bboxLevels=_isUS?[1.0,2.0,3.5]:[1.5,3.0];

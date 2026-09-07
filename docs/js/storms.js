@@ -728,6 +728,13 @@ function _useStaleWindsAloft(lat,lon){
   return true;
 }
 function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
+  // v7.31: winds aloft retries Open-Meteo every 8 s and never gives up, so a
+  // LIVE open-meteo profile here is the earliest proof the service recovered.
+  // Tell the weather tab, which may still be sitting on a MET Norway partial.
+  try{
+    if(providerInfo&&providerInfo.provider==='open-meteo'&&!/last session/.test(providerInfo.label||'')
+       &&typeof notifyOpenMeteoAlive==='function')notifyOpenMeteoAlive('winds aloft');
+  }catch(e){}
   // v6.63: remember whether steering was already known — if this call is the
   // moment motion FIRST resolves and storms are already on screen, their ETAs/
   // tiers/dial were computed without it and must be refreshed (see bottom).

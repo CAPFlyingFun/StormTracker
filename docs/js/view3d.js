@@ -52,7 +52,15 @@ var V3D = {
   glowLevel: 1,
   _markerGrp: null,
   _dayGlowMult: 1.0,
-  _lightingMode: localStorage.getItem('st_3dLighting') || 'auto'
+  _lightingMode: localStorage.getItem('st_3dLighting') || 'auto',
+  // v7.27: cloud STYLE — 'data' is the original coloured-cell rendering, kept
+  // exactly as it was; 'real' re-draws the SAME cells as merged white/gray
+  // cloud masses. Persisted alongside the other 3D prefs (v3d_* keys).
+  _cloudStyle: (localStorage.getItem('v3d_cloudStyle') === 'real') ? 'real' : 'data',
+  _realMaterial: null,
+  _realHiMaterial: null,
+  _bridgeMeshes: [],
+  _cloudLinks: []
 };
 
 var _TIER_TINT_COLORS = [0x88ccff, 0x44ff88, 0xffee44, 0xff8800, 0xff2222, 0xcc00ff];
@@ -75,6 +83,11 @@ function _applyGlowIntensity() {
   var mult = V3D.glowLevel * V3D._dayGlowMult;
   if (V3D._cloudMaterial) {
     V3D._cloudMaterial.color.setScalar(0.35 + mult * 0.65);
+  }
+  // v7.27: the LIGHT slider keeps meaning the same thing in Realistic mode —
+  // it scales the lit cloud's albedo, so 0 is a dim overcast and 3 is bright.
+  if (V3D._realMaterial) {
+    V3D._realMaterial.color.setScalar(0.55 + mult * 0.45);
   }
 }
 
@@ -253,6 +266,9 @@ function _applyTierVisibility() {
     if (sm.label) sm.label.visible = show && V3D._labelsVisible !== false;
     if (sm.rain) sm.rain.visible = show && sm._showRain;
   });
+  // v7.27: a bridge puff only exists to join two cells — if the Filter hides
+  // either one, the bridge goes with it, so clustering follows the filter.
+  if (V3D._cloudStyle === 'real') _rebuildBridges3D();
 }
 
 function syncTierButtons3D() {
@@ -1104,6 +1120,8 @@ function _startEtaInterval() {
 
 function clearStorms3D() {
   V3D.stormMeshes = [];
+  V3D._bridgeMeshes = [];
+  V3D._cloudLinks = [];
   V3D._etaSprites = [];
   V3D._lightningCells = [];
   V3D._lightningFlashes = [];
@@ -1174,6 +1192,285 @@ function makeCloudGroup3D(dbz) {
   var mesh = new THREE.Mesh(merged, V3D._cloudMaterial);
   mesh.renderOrder = 4;
   return { grp: mesh, r: baseR };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.27: REALISTIC CLOUD STYLE — a second RENDERING of the same cells.
+//
+// The data never changes. sonarZones3D() still owns every cell's position,
+// intensity, size, filter tier, selection and metadata, and rebuildStorms3D
+// still creates exactly one stormMeshes entry per cell — so Filter, tap-to-
+// inspect, LOD, lightning, rain, halos, cones and labels all keep working
+// untouched. Only the geometry builder and the material differ:
+//
+//   DATA  makeCloudGroup3D    — unlit, radar-coloured, kept exactly as it was
+//   REAL  makeRealCloudGroup3D — lit (MeshLambert picks up the existing sun /
+//         ambient / fill lights for free, so tops are bright and undersides
+//         dark without any new lighting code), mostly white/gray, with the
+//         radar hue lerped in at 8–20% so the data is still perceptible.
+//
+// Merging: neighbouring cells already overlap in the scene (mobile hex bins
+// are 9.7 km apart and a 45 dBZ cell is ~13 km across). Puffs of nearly the
+// same gray drawn with depthWrite off simply don't show a seam where they
+// overlap — and for the gaps that remain, a BRIDGE puff is placed between
+// each pair of spatially related cells. Bridges are pure rendering: they know
+// which two cells they join, are hidden when the Filter hides either, and are
+// never raycast, so tapping still resolves to a real cell.
+//
+// Everything is deterministic: puff jitter, rotation and bridge choice all
+// derive from a hash of (lat, lon, dBZ), so the same scan always draws the
+// same cloud and nothing reshuffles between frames or refreshes.
+// ═══════════════════════════════════════════════════════════════════════════
+function _cloudSeed(lat, lon, dbz) {
+  // FNV-1a over the quantised inputs — stable across reloads for the same cell
+  var str = (Math.round(lat * 1e4)) + ',' + (Math.round(lon * 1e4)) + ',' + Math.round(dbz);
+  var h = 2166136261 >>> 0;
+  for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+function _cloudRng(seed) {
+  // mulberry32 — tiny, deterministic, good enough for jitter
+  var a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    var t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// Intensity → look. gray is the cloud's albedo; hue is how much radar colour
+// bleeds in. Kept to the 5–20% the brief asks for — a red cell is a dark
+// storm cloud with a red undertone, never a red cloud.
+function _realShade(dbz) {
+  if (dbz >= 50) return { gray: 0.40, hue: 0.20, puffs: 6, tower: 2, anvil: true,  flat: 0.50 };
+  if (dbz >= 40) return { gray: 0.58, hue: 0.17, puffs: 5, tower: 1, anvil: false, flat: 0.48 };
+  if (dbz >= 30) return { gray: 0.80, hue: 0.12, puffs: 4, tower: 1, anvil: false, flat: 0.45 };
+  return           { gray: 0.92, hue: 0.08, puffs: 3, tower: 0, anvil: false, flat: 0.40 };
+}
+function _hexToRgb01(hex) {
+  var n = parseInt(String(hex).replace('#', ''), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+// One vertex colour. hN = 0 at the cloud's base → 1 at its top; rN = 0 on the
+// cell's axis → 1 at the outer edge. Tops and edges lighten, the underside
+// darkens, and the radar hue is mixed in last so it survives the shading.
+function _realVertexColor(gray, hueRgb, hueK, hN, rN, puffBias) {
+  var g = gray + puffBias + 0.14 * hN - 0.16 * (1 - hN) + 0.08 * rN;
+  g = Math.max(0.10, Math.min(1.0, g));
+  // Where the radar undertone lives: the dense INTERIOR of the cell. Sunlit
+  // tops are blown out to white by the daylight rig and would hide any tint,
+  // and the very underside must stay neutral so a blue-sky ambient can't turn
+  // a magenta 60 dBZ cell lavender. So the tint peaks in the mid-height core
+  // (hN ≈ 0.3–0.7, small rN) and fades to zero at the outer edge, the base
+  // and the top — that is the "dark gray storm core with a red undertone".
+  var band = Math.max(0, Math.min(1, (hN - 0.10) / 0.25)) * Math.max(0, Math.min(1, (0.95 - hN) / 0.30));
+  var k = hueK * band * (1 - 0.6 * rN);
+  return [g * (1 - k) + hueRgb[0] * k, g * (1 - k) + hueRgb[1] * k, g * (1 - k) + hueRgb[2] * k];
+}
+// Deterministic puff layout for one cell. Returns [{px,py,pz,sx,sy,sz,r,bias}]
+// in the cell's local frame (metres of scene = km, y up). No THREE here so it
+// can be unit-tested.
+function _realPuffLayout(dbz, baseR, seed, lodTier) {
+  var sh = _realShade(dbz), rnd = _cloudRng(seed);
+  var n = sh.puffs - (lodTier === 2 ? 2 : lodTier === 1 ? 1 : 0);
+  if (n < 2) n = 2;
+  var out = [];
+  // body puffs: ring around the axis, wide and flat, so neighbours overlap
+  for (var i = 0; i < n; i++) {
+    var ang = (i / n) * Math.PI * 2 + rnd() * 0.9;
+    var rad = (i === 0 ? 0 : 0.45 + rnd() * 0.45) * baseR;
+    var sz = (i === 0 ? 1.15 : 0.75 + rnd() * 0.35);
+    out.push({ px: Math.cos(ang) * rad, py: rnd() * 0.12 * baseR, pz: Math.sin(ang) * rad,
+      sx: 1.10 * sz, sy: sh.flat * sz, sz: 1.05 * sz, r: baseR, bias: i === 0 ? -0.08 : 0 });
+  }
+  // vertical development: towers rise from the core, the anvil caps a severe cell
+  for (var t = 0; t < sh.tower; t++) {
+    var ty = baseR * (0.75 + t * 0.7);
+    out.push({ px: (rnd() - 0.5) * 0.3 * baseR, py: ty, pz: (rnd() - 0.5) * 0.3 * baseR,
+      sx: 0.95 - t * 0.15, sy: 0.7, sz: 0.9 - t * 0.15, r: baseR, bias: 0.10 + t * 0.04 });
+  }
+  if (sh.anvil) {
+    out.push({ px: 0, py: baseR * 2.0, pz: 0, sx: 1.8, sy: 0.18, sz: 1.5, r: baseR, bias: 0.16 });
+  }
+  return out;
+}
+// Which cells visually join. cells = [{x,z,r,alt}] in scene units. Two cells
+// link when their horizontal footprints touch (d ≤ 0.92·(rA+rB)) and their
+// vertical volumes overlap; each cell keeps at most 6 links so a dense field
+// can't explode into bridges. Deterministic — pure geometry, stable order.
+function _cloudLinkCells(cells) {
+  var links = [], per = new Array(cells.length).fill(0);
+  for (var i = 0; i < cells.length; i++) {
+    var a = cells[i], cand = [];
+    for (var j = i + 1; j < cells.length; j++) {
+      var b = cells[j];
+      var dx = a.x - b.x, dz = a.z - b.z, d = Math.sqrt(dx * dx + dz * dz);
+      if (d > 0.92 * (a.r + b.r)) continue;
+      if (Math.abs(a.alt - b.alt) > Math.max(a.r, b.r)) continue;
+      cand.push({ j: j, d: d });
+    }
+    cand.sort(function (p, q) { return p.d - q.d; });
+    for (var k = 0; k < cand.length; k++) {
+      if (per[i] >= 6 || per[cand[k].j] >= 6) continue;
+      links.push([i, cand[k].j]); per[i]++; per[cand[k].j]++;
+    }
+  }
+  return links;
+}
+function _initRealMaterials() {
+  if (!V3D._realMaterial) {
+    // FrontSide: every puff is a closed sphere, so back faces only ever add
+    // fragment work (and it is lit, unlike the data material) — never pixels.
+    V3D._realMaterial = new THREE.MeshLambertMaterial({
+      vertexColors: true, transparent: true, opacity: 0.93,
+      depthWrite: false, side: THREE.FrontSide
+    });
+  }
+  if (!V3D._realHiMaterial) {
+    V3D._realHiMaterial = new THREE.MeshLambertMaterial({
+      vertexColors: true, transparent: true, opacity: 0.97,
+      depthWrite: false, side: THREE.FrontSide, emissive: new THREE.Color(0x000000)
+    });
+  }
+}
+function _activeCloudMaterial() {
+  return (V3D._cloudStyle === 'real' && V3D._realMaterial) ? V3D._realMaterial : V3D._cloudMaterial;
+}
+// Same contract as makeCloudGroup3D: returns { grp, r }. baseR is computed
+// with the identical formula so the cell occupies the same volume in both
+// styles — only its appearance differs.
+function makeRealCloudGroup3D(cell, dkm) {
+  _initRealMaterials();
+  var dbz = cell.dbz;
+  var baseR = Math.max(1.2, Math.min(6, (dbz - 10) / 7)) * (_isDesktop() ? 1.0 : 2.6);
+  var seed = _cloudSeed(cell.lat, cell.lon || cell.lng, dbz);
+  var lodTier = dkm > 120 ? 2 : dkm > 60 ? 1 : 0;
+  var puffs = _realPuffLayout(dbz, baseR, seed, lodTier);
+  var sh = _realShade(dbz), hue = _hexToRgb01(dbzCat3D(dbz).col);
+  var SEG_W = lodTier === 2 ? 6 : lodTier === 1 ? 8 : 10, SEG_H = lodTier === 2 ? 5 : lodTier === 1 ? 6 : 8;
+  var geos = [];
+  puffs.forEach(function (pf) {
+    var g = new THREE.SphereGeometry(pf.r, SEG_W, SEG_H);
+    var m4 = new THREE.Matrix4();
+    m4.compose(new THREE.Vector3(pf.px, pf.py, pf.pz), new THREE.Quaternion(), new THREE.Vector3(pf.sx, pf.sy, pf.sz));
+    g.applyMatrix4(m4);
+    var cnt = g.attributes.position.count, cols = new Float32Array(cnt * 3);
+    // stash the puff bias in the colour for the second pass below
+    for (var i = 0; i < cnt; i++) { cols[i * 3] = pf.bias; cols[i * 3 + 1] = 0; cols[i * 3 + 2] = 0; }
+    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    geos.push(g);
+  });
+  var merged = (geos.length > 1 && typeof THREE.BufferGeometryUtils !== 'undefined')
+    ? THREE.BufferGeometryUtils.mergeBufferGeometries(geos, false) : geos[0];
+  if (merged !== geos[0]) geos.forEach(function (g) { g.dispose(); });
+  // second pass: real vertex colours from height + radius within the whole cell
+  var pos = merged.attributes.position, col = merged.attributes.color, n = pos.count;
+  var minY = Infinity, maxY = -Infinity, maxR = 0;
+  for (var v = 0; v < n; v++) {
+    var y = pos.getY(v); if (y < minY) minY = y; if (y > maxY) maxY = y;
+    var rr = Math.sqrt(pos.getX(v) * pos.getX(v) + pos.getZ(v) * pos.getZ(v)); if (rr > maxR) maxR = rr;
+  }
+  var spanY = Math.max(1e-6, maxY - minY);
+  for (var w = 0; w < n; w++) {
+    var hN = (pos.getY(w) - minY) / spanY;
+    var rN = maxR > 0 ? Math.sqrt(pos.getX(w) * pos.getX(w) + pos.getZ(w) * pos.getZ(w)) / maxR : 0;
+    var c = _realVertexColor(sh.gray, hue, sh.hue, hN, rN, col.getX(w));
+    col.setXYZ(w, c[0], c[1], c[2]);
+  }
+  col.needsUpdate = true;
+  var mesh = new THREE.Mesh(merged, V3D._realMaterial);
+  mesh.renderOrder = 4;
+  return { grp: mesh, r: baseR, seed: seed };
+}
+// Bridges: one merged geometry per connected cluster (one draw call each),
+// rebuilt only when the Filter changes — never per frame.
+function _rebuildBridges3D() {
+  for (var i = 0; i < V3D._bridgeMeshes.length; i++) { V3D.stormGroup.remove(V3D._bridgeMeshes[i]); disposeObj3D(V3D._bridgeMeshes[i]); }
+  V3D._bridgeMeshes = [];
+  if (V3D._cloudStyle !== 'real' || !V3D._cloudLinks.length) return;
+  _initRealMaterials();
+  var sms = V3D.stormMeshes;
+  // union-find over VISIBLE links so a cluster is what the user can currently see
+  var parent = []; for (var p = 0; p < sms.length; p++) parent[p] = p;
+  function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  var live = [];
+  V3D._cloudLinks.forEach(function (lk) {
+    var a = sms[lk[0]], b = sms[lk[1]];
+    if (!a || !b || !V3D._tierFilter[a.tierIdx] || !V3D._tierFilter[b.tierIdx]) return;
+    live.push(lk); parent[find(lk[0])] = find(lk[1]);
+  });
+  if (!live.length) return;
+  var byRoot = {};
+  live.forEach(function (lk) { var r = find(lk[0]); (byRoot[r] = byRoot[r] || []).push(lk); });
+  Object.keys(byRoot).forEach(function (root) {
+    var geos = [], cx = 0, cz = 0, cnt = 0;
+    byRoot[root].forEach(function (lk) {
+      var a = sms[lk[0]], b = sms[lk[1]];
+      var pa = a.mesh.position, pb = b.mesh.position;
+      var r = Math.min(a._realR || 1, b._realR || 1) * 0.78;
+      var g = new THREE.SphereGeometry(r, 7, 5);
+      var m4 = new THREE.Matrix4();
+      var mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2 - r * 0.12, mz = (pa.z + pb.z) / 2;
+      // stretch the bridge along the join so it reads as connective mass
+      var dx = pb.x - pa.x, dz = pb.z - pa.z, len = Math.sqrt(dx * dx + dz * dz) || 1;
+      var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
+      m4.compose(new THREE.Vector3(mx, my, mz), q, new THREE.Vector3(1.05, 0.55, Math.max(1.05, len / (2 * r) * 0.9)));
+      g.applyMatrix4(m4);
+      var da = a.cell.dbz, db = b.cell.dbz, dm = (da + db) / 2;
+      var sh = _realShade(dm), hue = _hexToRgb01(dbzCat3D(dm).col);
+      var n = g.attributes.position.count, cols = new Float32Array(n * 3);
+      var pos = g.attributes.position, minY = Infinity, maxY = -Infinity;
+      for (var v = 0; v < n; v++) { var y = pos.getY(v); if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      for (var w = 0; w < n; w++) {
+        var hN = (pos.getY(w) - minY) / Math.max(1e-6, maxY - minY);
+        var c = _realVertexColor(sh.gray, hue, sh.hue, hN, 0.5, -0.02);
+        cols[w * 3] = c[0]; cols[w * 3 + 1] = c[1]; cols[w * 3 + 2] = c[2];
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      geos.push(g); cx += mx; cz += mz; cnt++;
+    });
+    var merged = (geos.length > 1 && typeof THREE.BufferGeometryUtils !== 'undefined')
+      ? THREE.BufferGeometryUtils.mergeBufferGeometries(geos, false) : geos[0];
+    if (merged !== geos[0]) geos.forEach(function (g) { g.dispose(); });
+    var mesh = new THREE.Mesh(merged, V3D._realMaterial);
+    mesh.renderOrder = 3;                       // just under the cells so cell tops win overlaps
+    mesh.userData.on = true; mesh.userData.bridge = true;
+    mesh.position.set(0, 0, 0);
+    // LOD uses a representative position — the cluster centroid — stored on userData
+    mesh.userData.cx = cx / cnt; mesh.userData.cz = cz / cnt;
+    V3D.stormGroup.add(mesh);
+    V3D._bridgeMeshes.push(mesh);
+  });
+}
+function setCloudStyle3D(style) {
+  style = style === 'real' ? 'real' : 'data';
+  if (V3D._cloudStyle === style) { _syncCloudStyleBtns(); return; }
+  V3D._cloudStyle = style;
+  try { localStorage.setItem('v3d_cloudStyle', style); } catch (e) {}
+  _syncCloudStyleBtns();
+  // rebuildStorms3D only touches stormGroup/coneGroup: no terrain reload, no
+  // camera or AR pose reset, zoom/height/filter all untouched.
+  if (V3D.ready) { rebuildStorms3D(); _applyGlowIntensity(); }
+}
+function _syncCloudStyleBtns() {
+  var d = document.getElementById('v3d-cs-data'), r = document.getElementById('v3d-cs-real');
+  var on = 'rgba(0,200,255,0.22)', off = 'rgba(0,200,255,0.07)';
+  if (d) { d.style.background = V3D._cloudStyle === 'data' ? on : off; d.style.borderColor = V3D._cloudStyle === 'data' ? '#00c8ff' : 'rgba(0,200,255,0.22)'; }
+  if (r) { r.style.background = V3D._cloudStyle === 'real' ? on : off; r.style.borderColor = V3D._cloudStyle === 'real' ? '#00c8ff' : 'rgba(0,200,255,0.22)'; }
+}
+// Brief selection emphasis in Realistic mode: the tapped cell glows with its
+// own tier colour for ~1.2 s so the user can see WHICH source cell answered,
+// then settles back into the cloud. Never permanent, never every cell.
+function _realSelectPulse(sm) {
+  if (!sm || !sm.mesh || V3D._cloudStyle !== 'real' || !V3D._realHiMaterial) return;
+  var tier = _cloudTierIdx(sm.cell.dbz);
+  V3D._realHiMaterial.emissive.setHex(_TIER_TINT_COLORS[tier]).multiplyScalar(0.28);
+  sm.mesh.material = V3D._realHiMaterial;
+  if (V3D._selTimer) clearTimeout(V3D._selTimer);
+  V3D._selTimer = setTimeout(function () {
+    if (sm.mesh && sm.mesh.material === V3D._realHiMaterial) sm.mesh.material = _activeCloudMaterial();
+  }, 1200);
 }
 
 function makeRain3D(dbz, r, terrainBaseH) {
@@ -1431,7 +1728,7 @@ function _tickLightning() {
     if (V3D.frame >= f.endFrame) {
       var sm = V3D.stormMeshes[f.meshIdx];
       if (sm && sm.mesh) {
-        sm.mesh.material = V3D._cloudMaterial;
+        sm.mesh.material = _activeCloudMaterial();   // v7.27: mode-aware restore
         sm.mesh.visible = f.prevVisible;
       }
       V3D._lightningFlashes.splice(i, 1);
@@ -1472,6 +1769,13 @@ function _updateLOD() {
     if (sm.halo) sm.halo.visible = !far;
     if (sm.label && V3D._labelsVisible) sm.label.visible = !far;
   });
+  // v7.27: Realistic LOD — bridge puffs are detail; beyond the LOD ring the
+  // cells alone still read as the storm. Large structures never vanish.
+  for (var bi = 0; bi < V3D._bridgeMeshes.length; bi++) {
+    var bm = V3D._bridgeMeshes[bi];
+    var bdx = bm.userData.cx - camPos.x, bdz = bm.userData.cz - camPos.z;
+    bm.visible = bm.userData.on && Math.sqrt(bdx * bdx + bdz * bdz) <= lodScene * 1.5;
+  }
 }
 
 function rebuildStorms3D() {
@@ -1485,6 +1789,7 @@ function rebuildStorms3D() {
   var desktop = _isDesktop();
   var _coneCandidates = [];
   var _rainCandidates = [];
+  var _linkCells = [];
   storms.forEach(function (cell) {
     var tierIdx = _cloudTierIdx(cell.dbz);
     var lon = cell.lon || cell.lng;
@@ -1492,11 +1797,18 @@ function rebuildStorms3D() {
     var sp = geoToScene3D(lat, lon);
     var dkm = haversineKm3D(S.lat, S.lon, lat, lon);
     var cloudBase = getCloudBase3D();
-    var cl = makeCloudGroup3D(cell.dbz);
-    var yJitter = (Math.random() - 0.5) * 0.06;
+    // v7.27: same cell, same volume, two looks. Data mode is byte-for-byte the
+    // original path (including its random rotation/jitter); Realistic derives
+    // its jitter from the cell's seed so the cloud never reshuffles.
+    var real = V3D._cloudStyle === 'real';
+    var cl = real ? makeRealCloudGroup3D(cell, dkm) : makeCloudGroup3D(cell.dbz);
+    var yJitter = real ? ((_cloudRng(cl.seed)() - 0.5) * 0.06) : ((Math.random() - 0.5) * 0.06);
     var alt = cloudBase + cl.r + yJitter;
 
-    cl.grp.position.set(sp.x, alt, sp.z); cl.grp.rotation.y = (Math.random() * 358 - 179) * (Math.PI / 180); cl.grp.userData.cell = cell; V3D.stormGroup.add(cl.grp);
+    cl.grp.position.set(sp.x, alt, sp.z);
+    cl.grp.rotation.y = real ? 0 : (Math.random() * 358 - 179) * (Math.PI / 180);
+    cl.grp.userData.cell = cell; V3D.stormGroup.add(cl.grp);
+    if (real) _linkCells.push({ x: sp.x, z: sp.z, r: cl.r, alt: alt });
 
     var haloMesh = null;
     if (cell.dbz >= 50) {
@@ -1531,7 +1843,7 @@ function rebuildStorms3D() {
     }
 
     var cellForCone = { lat: lat, lon: lon, dbz: cell.dbz, distance: cell.distance, bearing: cell.bearing || bearingDeg(S.lat, S.lon, lat, lon) };
-    V3D.stormMeshes.push({ mesh: cl.grp, cell: cellForCone, rain: null, label: lspr, halo: haloMesh, dkm: dkm, _showRain: false, tierIdx: tierIdx });
+    V3D.stormMeshes.push({ mesh: cl.grp, cell: cellForCone, rain: null, label: lspr, halo: haloMesh, dkm: dkm, _showRain: false, tierIdx: tierIdx, _realR: cl.r });
     if (cell.dbz >= 35) {
       var q = _qualifyCone3D(cellForCone, sp);
       if (q) { _coneCandidates.push(q); }
@@ -1562,6 +1874,9 @@ function rebuildStorms3D() {
     V3D._etaSprites.push({ spr: eSpr, arriveAt: arriveAt });
   }
   V3D._etaCandidates = [];
+  // v7.27: which cells visually join (Realistic only). Computed once per
+  // rebuild from geometry; _applyTierVisibility turns it into bridge meshes.
+  V3D._cloudLinks = _linkCells.length ? _cloudLinkCells(_linkCells) : [];
   _startEtaInterval();
   _startRainReroll();
   _applyTierVisibility();
@@ -1721,7 +2036,7 @@ function onClick3D(e) {
   if (hits.length) {
     var hitObj = hits[0].object, found = null;
     V3D.stormMeshes.forEach(function (sm) { sm.mesh.traverse(function (c) { if (c === hitObj) found = sm; }); });
-    if (found) openPopup3D(found.cell, e.clientX, e.clientY);
+    if (found) { openPopup3D(found.cell, e.clientX, e.clientY); _realSelectPulse(found); }
   } else {
     var popup = document.getElementById('v3d-popup');
     if (popup) popup.style.display = 'none';
@@ -1822,6 +2137,7 @@ async function activate3DView() {
   if (V3D.ready) reset3DView();
   if (V3D._startMarkerPulse && !V3D._markerRAF) V3D._startMarkerPulse();
   syncTierButtons3D();
+  _syncCloudStyleBtns();
   var _camBtn = document.getElementById('v3d-cam-mode-btn');
   if (_camBtn) _camBtn.textContent = V3D._camMode === 'fixed' ? '📌 Fixed' : '🔓 Free';
   _lock3DScroll(true);

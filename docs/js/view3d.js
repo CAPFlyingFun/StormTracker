@@ -1272,6 +1272,17 @@ function _realShade(dbz) {
   if (dbz >= 30) return { gray: 0.80, hue: 0.12, puffs: 4, tower: 1, anvil: false, flat: 0.45 };
   return           { gray: 0.92, hue: 0.08, puffs: 3, tower: 0, anvil: false, flat: 0.40 };
 }
+// v7.30: opacity by intensity (owner's table). A severe core is solid; the
+// weaker the cell, the more you see through it — so the strong storms stand
+// out and the light stuff reads as haze around them.
+//   55+ → 100%   46–54 → 80%   36–45 → 60%   26–35 → 40%   <26 → 20%
+function _dbzOpacity(dbz) {
+  if (dbz >= 55) return 1.0;
+  if (dbz >= 46) return 0.8;
+  if (dbz >= 36) return 0.6;
+  if (dbz >= 26) return 0.4;
+  return 0.2;
+}
 function _hexToRgb01(hex) {
   var n = parseInt(String(hex).replace('#', ''), 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
@@ -1429,6 +1440,7 @@ function _realSprites(dbz, baseR, seed, lodTier) {
   // Fill rate is the whole cost of sprite clouds: fewer, slightly larger
   // sprites read the same and draw a fraction of the pixels.
   var per = lodTier === 2 ? 2 : lodTier === 1 ? 3 : 5;
+  var opacityK = _dbzOpacity(dbz);
   var minY = Infinity, maxY = -Infinity, maxR = 0;
   puffs.forEach(function (pf) {
     var top = pf.py + pf.r * pf.sy, bot = pf.py - pf.r * pf.sy;
@@ -1451,8 +1463,7 @@ function _realSprites(dbz, baseR, seed, lodTier) {
       var hN = (y - minY) / Math.max(1e-6, maxY - minY);
       var rN = Math.min(1, Math.sqrt(x * x + z * z) / Math.max(1e-6, maxR));
       var c = _realVertexColor(sh.gray, hue, sh.hue, hN, rN, pf.bias);
-      var alpha = body ? (0.34 + 0.22 * (1 - rN)) : 0.62;
-      if (dbz >= 50) alpha *= 1.08;
+      var alpha = (body ? (0.34 + 0.22 * (1 - rN)) : 0.62) * opacityK;
       out.push({ x: x, y: y, z: z, s: size, c: c, a: Math.min(0.72, alpha), lit: 0.15 + 0.7 * hN, rot: rnd() * 6.2832 });
     }
   });
@@ -1555,7 +1566,7 @@ function _rebuildBridges3D() {
         var hN = 0.25 + rnd() * 0.5;
         var y = pa.y + (pb.y - pa.y) * t + (hN - 0.45) * r * 0.9;
         var c = _realVertexColor(sh.gray, hue, sh.hue, hN, 0.5, -0.02);
-        inst.push({ x: x, y: y, z: z, s: r * (0.7 + rnd() * 0.5), c: c, a: 0.42, lit: 0.2 + 0.8 * hN, rot: rnd() * 6.2832 });
+        inst.push({ x: x, y: y, z: z, s: r * (0.7 + rnd() * 0.5), c: c, a: 0.42 * _dbzOpacity(dm), lit: 0.2 + 0.8 * hN, rot: rnd() * 6.2832 });
       }
       cx += (pa.x + pb.x) / 2; cz += (pa.z + pb.z) / 2; cnt++;
     });

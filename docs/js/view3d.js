@@ -736,11 +736,25 @@ function buildSky3D() {
   V3D.skyDome = new THREE.Mesh(geo, V3D.skyMat); V3D.scene.add(V3D.skyDome);
 }
 
-function _getSkyPeriod(now, rise, set) {
-  if (now < rise - 3600 || now > set + 3600) return 'night';
-  if (now < rise + 2400) return 'dawn';
-  if (now < set - 2400) return 'day';
-  return 'dusk';
+// v7.29: day / dawn / dusk / night from the sun's ACTUAL altitude at the
+// user's location right now, via the ephemeris the sun sprite already uses.
+// The old rule compared the clock to daily.sunrise[0] / sunset[0] out of the
+// last weather payload — and that payload is cached for up to 24 h, so one
+// fetched yesterday afternoon (or before midnight, or while Open-Meteo was
+// down and the fallback filled in) carried YESTERDAY's sunset in slot 0. Then
+// "sunset was over an hour ago" was true all day and Auto sat on night at
+// 1:30 in the afternoon. Solar altitude can't be stale, doesn't care which
+// timezone the device thinks it's in, and needs no string parsing.
+//   ≥ +6°  day      ≤ −6°  night      between: dawn if rising, dusk if setting
+// d blends 0→1 across the twilight band for the dawn/dusk colours.
+function _skyPeriodFromSun(lat, lon, nowMs) {
+  if (lat == null || lon == null) return { period: 'day', d: 1, alt: 45 };
+  var alt = _astroSun(nowMs, lat, lon).alt;
+  var altPrev = _astroSun(nowMs - 600000, lat, lon).alt;
+  if (!isFinite(alt)) return { period: 'day', d: 1, alt: 45 };
+  if (alt >= 6) return { period: 'day', d: 1, alt: alt };
+  if (alt <= -6) return { period: 'night', d: 0, alt: alt };
+  return { period: alt > altPrev ? 'dawn' : 'dusk', d: (alt + 6) / 12, alt: alt };
 }
 
 
@@ -920,7 +934,8 @@ function refreshSky3D() {
     var today2 = new Date(); today2.setHours(19, 30, 0, 0); set = today2.getTime() / 1000;
   }
 
-  var period = _getSkyPeriod(now, rise, set);
+  var sun = _skyPeriodFromSun(S.lat, S.lon, Date.now());
+  var period = sun.period;
   var mode = V3D._lightingMode;
   if (mode === 'day') { period = 'day'; }
   else if (mode === 'night') { period = 'night'; }
@@ -934,7 +949,7 @@ function refreshSky3D() {
     V3D.sunLight.intensity = 0.05; V3D.sunLight.color.setHex(0x223366); V3D.ambientLight.intensity = 0.15;
     V3D._dayGlowMult = 0.3;
   } else if (period === 'dawn') {
-    var d = (mode !== 'auto') ? 0.6 : Math.max(0, Math.min(1, (now - rise + 3600) / 5000));
+    var d = (mode !== 'auto') ? 0.6 : sun.d;
     topC.lerpColors(new THREE.Color(0x020510), new THREE.Color(0x2060b8), d);
     horizC.lerpColors(new THREE.Color(0xaa3818), new THREE.Color(0x6090c8), d);
     groundC.lerpColors(new THREE.Color(0x030608), new THREE.Color(0x0a1525), d);
@@ -948,7 +963,7 @@ function refreshSky3D() {
     V3D.ambientLight.color.setHex(0x8ab4e0);
     V3D._dayGlowMult = 1.0;
   } else {
-    var d = (mode !== 'auto') ? 0.6 : Math.max(0, Math.min(1, 1 - (now - (set - 2400)) / 4200));
+    var d = (mode !== 'auto') ? 0.6 : sun.d;
     topC.lerpColors(new THREE.Color(0x020510), new THREE.Color(0x2060b8), d);
     horizC.lerpColors(new THREE.Color(0xaa3818), new THREE.Color(0x6090c8), d);
     groundC.lerpColors(new THREE.Color(0x030608), new THREE.Color(0x0a1525), d);

@@ -87,8 +87,15 @@ function _applyGlowIntensity() {
   // v7.27: the LIGHT slider keeps meaning the same thing in Realistic mode —
   // it scales the lit cloud's albedo, so 0 is a dim overcast and 3 is bright.
   if (V3D._realMaterial) {
-    V3D._realMaterial.color.setScalar(0.55 + mult * 0.45);
+    // v7.28: the sprite shader isn't lit by the scene graph, so the sun and
+    // ambient rig are handed to it here — day, night and golden all follow.
+    var u = V3D._realMaterial.uniforms;
+    u.uLight.value = 0.55 + mult * 0.45;
+    if (V3D.sunLight) u.uSun.value.copy(V3D.sunLight.color).multiplyScalar(Math.max(0.45, Math.min(1.25, V3D.sunLight.intensity / 1.6)));
+    if (V3D.ambientLight) u.uAmb.value.copy(V3D.ambientLight.color).multiplyScalar(Math.max(0.40, Math.min(1.0, V3D.ambientLight.intensity / 1.4)));
   }
+  // an internal flash is a whisper in daylight and the whole show at night
+  V3D._glowOpacity = 0.30 + 0.65 * (1 - Math.min(1, V3D._dayGlowMult));
 }
 
 function cycleLightingMode3D() {
@@ -1090,9 +1097,11 @@ function buildUserMarker3D() {
 // =====================================================
 function _isSharedMaterial(mat) {
   if (mat === V3D._cloudMaterial || mat === V3D._flashMaterial) return true;
+  if (mat === V3D._realMaterial || mat === V3D._pickMaterial) return true;   // v7.28
   return false;
 }
 function _isSharedTexture(tex) {
+  if (tex === V3D._puffTex) return true;   // v7.28
   for (var k in V3D._sharedHaloTextures) { if (V3D._sharedHaloTextures[k] === tex) return true; }
   for (var k in V3D._sharedLabelTextures) { if (V3D._sharedLabelTextures[k] === tex) return true; }
   return false;
@@ -1320,78 +1329,192 @@ function _cloudLinkCells(cells) {
 }
 function _initRealMaterials() {
   if (!V3D._realMaterial) {
-    // FrontSide: every puff is a closed sphere, so back faces only ever add
-    // fragment work (and it is lit, unlike the data material) — never pixels.
-    V3D._realMaterial = new THREE.MeshLambertMaterial({
-      vertexColors: true, transparent: true, opacity: 0.93,
-      depthWrite: false, side: THREE.FrontSide
+    var uni = THREE.UniformsUtils.clone(THREE.UniformsLib.fog);
+    uni.uTex = { value: null }; uni.uSun = { value: new THREE.Color(1, 1, 1) };
+    uni.uAmb = { value: new THREE.Color(0.55, 0.7, 0.9) }; uni.uLight = { value: 1.0 };
+    V3D._realMaterial = new THREE.ShaderMaterial({
+      uniforms: uni, vertexShader: _PUFF_VERT, fragmentShader: _PUFF_FRAG,
+      transparent: true, depthWrite: false, depthTest: true, fog: true, blending: THREE.NormalBlending
     });
+    V3D._realMaterial.uniforms.uTex.value = _getPuffTexture();
   }
-  if (!V3D._realHiMaterial) {
-    V3D._realHiMaterial = new THREE.MeshLambertMaterial({
-      vertexColors: true, transparent: true, opacity: 0.97,
-      depthWrite: false, side: THREE.FrontSide, emissive: new THREE.Color(0x000000)
-    });
-  }
+  if (!V3D._pickMaterial) V3D._pickMaterial = new THREE.MeshBasicMaterial({ visible: false });
 }
 function _activeCloudMaterial() {
   return (V3D._cloudStyle === 'real' && V3D._realMaterial) ? V3D._realMaterial : V3D._cloudMaterial;
 }
-// Same contract as makeCloudGroup3D: returns { grp, r }. baseR is computed
-// with the identical formula so the cell occupies the same volume in both
-// styles — only its appearance differs.
-function makeRealCloudGroup3D(cell, dkm) {
+// ---------------------------------------------------------------------------
+// v7.28: SOFT SPRITE CLOUDS. v7.27 proved the concept with lit polygon puffs;
+// the hard polygon silhouettes were its one visible limit. The cloud is now a
+// scatter of camera-facing soft sprites (one instanced quad mesh per cell —
+// still ONE draw call per cell), which is what gives real edges: feathered,
+// wispy, denser where sprites pile up in the core, thin at the rim. Lighting
+// is baked per sprite (top-lit factor) and resolved in the shader against the
+// live sun/ambient colours, so Day/Night/Golden and the LIGHT slider all
+// still apply without a rebuild. Picking uses an invisible proxy ellipsoid
+// per cell, so a tap resolves to exactly the same cell as before.
+// ---------------------------------------------------------------------------
+var _PUFF_VERT = [
+  '#include <fog_pars_vertex>',
+  'attribute vec3 aOffset; attribute float aSize; attribute vec3 aColor; attribute float aAlpha; attribute float aLit; attribute float aRot;',
+  'varying vec2 vUv; varying vec3 vColor; varying float vAlpha; varying float vLit;',
+  'void main() {',
+  '  vUv = uv; vColor = aColor; vAlpha = aAlpha; vLit = aLit;',
+  '  vec4 mvPosition = modelViewMatrix * vec4(aOffset, 1.0);',
+  '  float c = cos(aRot), s = sin(aRot);',
+  '  mvPosition.xy += vec2(position.x * c - position.y * s, position.x * s + position.y * c) * aSize;',
+  '  gl_Position = projectionMatrix * mvPosition;',
+  '  #include <fog_vertex>',
+  '}'].join('\n');
+var _PUFF_FRAG = [
+  '#include <fog_pars_fragment>',
+  'uniform sampler2D uTex; uniform vec3 uSun; uniform vec3 uAmb; uniform float uLight;',
+  'varying vec2 vUv; varying vec3 vColor; varying float vAlpha; varying float vLit;',
+  'void main() {',
+  '  float a = texture2D(uTex, vUv).a * vAlpha;',
+  '  if (a < 0.03) discard;',
+  '  vec3 l = clamp(mix(uAmb, uSun, vLit) * uLight, vec3(0.30), vec3(1.05));',
+  '  vec3 col = vColor * l;',
+  '  gl_FragColor = vec4(col, a);',
+  '  #include <tonemapping_fragment>',
+  '  #include <encodings_fragment>',
+  '  #include <fog_fragment>',
+  '}'].join('\n');
+// One shared 128 px puff: a soft radial falloff modulated by a few seeded
+// lumps so the silhouette isn't a perfect disc. Built once, never rebuilt.
+function _getPuffTexture() {
+  if (V3D._puffTex) return V3D._puffTex;
+  var N = 128, cv = document.createElement('canvas'); cv.width = cv.height = N;
+  var cx = cv.getContext('2d'), img = cx.createImageData(N, N), d = img.data;
+  // Two scales of seeded lumps CARVE the silhouette: big ones give the puff a
+  // lopsided outline, small ones the cauliflower edge. A plain radial falloff
+  // reads as an out-of-focus blob — that was v7.28's first draft.
+  var rnd = _cloudRng(0x5EED), lumps = [];
+  for (var l = 0; l < 5; l++) lumps.push({ x: (rnd() - 0.5) * 0.8, y: (rnd() - 0.5) * 0.8, r: 0.42 + rnd() * 0.25, w: 0.9 });
+  for (var l2 = 0; l2 < 9; l2++) lumps.push({ x: (rnd() - 0.5) * 1.3, y: (rnd() - 0.5) * 1.3, r: 0.16 + rnd() * 0.14, w: 0.6 });
+  for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+    var u = (x + 0.5) / N * 2 - 1, v = (y + 0.5) / N * 2 - 1, r2 = u * u + v * v;
+    var base = r2 >= 1 ? 0 : Math.pow(1 - r2, 0.9), lump = 0;
+    for (var k = 0; k < lumps.length; k++) { var L = lumps[k], dx = u - L.x, dy = v - L.y, q = 1 - (dx * dx + dy * dy) / (L.r * L.r); if (q > 0) lump += q * q * L.w; }
+    // the lump field gates the falloff: outside every lump the puff simply ends
+    var a = base * Math.max(0, Math.min(1, lump * 1.4 - 0.15));
+    a = a * a * (3 - 2 * a);                                    // smoothstep: soft interior, crisp rim
+    var i = (y * N + x) * 4; d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = Math.round(a * 255);
+  }
+  cx.putImageData(img, 0, 0);
+  V3D._puffTex = new THREE.CanvasTexture(cv);
+  return V3D._puffTex;
+}
+// Scatter sprites through a cell's puff layout. Pure (no THREE) so it can be
+// unit-tested: returns [{x,y,z,s,c,a,lit,rot}] in the cell's local frame.
+function _realSprites(dbz, baseR, seed, lodTier) {
+  var sh = _realShade(dbz), hue = _hexToRgb01(dbzCat3D(dbz).col);
+  var puffs = _realPuffLayout(dbz, baseR, seed, lodTier);
+  var rnd = _cloudRng((seed ^ 0xA5A5A5) >>> 0);
+  // Fill rate is the whole cost of sprite clouds: fewer, slightly larger
+  // sprites read the same and draw a fraction of the pixels.
+  var per = lodTier === 2 ? 2 : lodTier === 1 ? 3 : 5;
+  var minY = Infinity, maxY = -Infinity, maxR = 0;
+  puffs.forEach(function (pf) {
+    var top = pf.py + pf.r * pf.sy, bot = pf.py - pf.r * pf.sy;
+    if (top > maxY) maxY = top; if (bot < minY) minY = bot;
+    var rr = Math.sqrt(pf.px * pf.px + pf.pz * pf.pz) + pf.r * Math.max(pf.sx, pf.sz);
+    if (rr > maxR) maxR = rr;
+  });
+  var out = [];
+  puffs.forEach(function (pf) {
+    var k = pf.bias > 0.1 ? Math.max(3, Math.round(per * 0.7)) : per;   // towers/anvil: fewer, larger
+    var kBody = Math.max(1, Math.round(k * 0.4));                        // big soft bodies…
+    for (var i = 0; i < k; i++) {
+      var body = i < kBody;
+      var th = rnd() * 6.2832, ph = Math.acos(2 * rnd() - 1);
+      // …and small crisp detail sprites pushed to the surface, where edges are made
+      var rad = body ? Math.cbrt(rnd()) * 0.6 : 0.6 + rnd() * 0.25;
+      var ox = Math.sin(ph) * Math.cos(th) * rad, oy = Math.cos(ph) * rad, oz = Math.sin(ph) * Math.sin(th) * rad;
+      var x = pf.px + ox * pf.r * pf.sx, y = pf.py + oy * pf.r * pf.sy, z = pf.pz + oz * pf.r * pf.sz;
+      var size = pf.r * (pf.sx + pf.sz) * 0.5 * (body ? (0.85 + rnd() * 0.35) : (0.38 + rnd() * 0.25));
+      var hN = (y - minY) / Math.max(1e-6, maxY - minY);
+      var rN = Math.min(1, Math.sqrt(x * x + z * z) / Math.max(1e-6, maxR));
+      var c = _realVertexColor(sh.gray, hue, sh.hue, hN, rN, pf.bias);
+      var alpha = body ? (0.34 + 0.22 * (1 - rN)) : 0.62;
+      if (dbz >= 50) alpha *= 1.08;
+      out.push({ x: x, y: y, z: z, s: size, c: c, a: Math.min(0.72, alpha), lit: 0.15 + 0.7 * hN, rot: rnd() * 6.2832 });
+    }
+  });
+  return { sprites: out, minY: minY, maxY: maxY, maxR: maxR };
+}
+// instances: [{x,y,z,s,c,a,lit,rot}] already in the mesh's local frame
+function _makePuffCloud(instances) {
+  var n = instances.length;
+  var geo = new THREE.InstancedBufferGeometry();
+  var quad = new THREE.PlaneGeometry(1, 1);
+  geo.setIndex(quad.getIndex().clone());
+  geo.setAttribute('position', quad.getAttribute('position').clone());
+  geo.setAttribute('uv', quad.getAttribute('uv').clone());
+  quad.dispose();
+  var off = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), alp = new Float32Array(n), lit = new Float32Array(n), rot = new Float32Array(n);
+  for (var i = 0; i < n; i++) {
+    var q = instances[i];
+    off[i * 3] = q.x; off[i * 3 + 1] = q.y; off[i * 3 + 2] = q.z;
+    col[i * 3] = q.c[0]; col[i * 3 + 1] = q.c[1]; col[i * 3 + 2] = q.c[2];
+    size[i] = q.s; alp[i] = q.a; lit[i] = q.lit; rot[i] = q.rot;
+  }
+  geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(off, 3));
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(col, 3));
+  geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(size, 1));
+  geo.setAttribute('aAlpha', new THREE.InstancedBufferAttribute(alp, 1));
+  geo.setAttribute('aLit', new THREE.InstancedBufferAttribute(lit, 1));
+  geo.setAttribute('aRot', new THREE.InstancedBufferAttribute(rot, 1));
+  geo.instanceCount = n;
+  // A real bounding sphere over the instances (the base quad's own sphere is
+  // a 1-unit dot at the origin and would cull the whole cloud). With it in
+  // place normal frustum culling works, so cells behind the viewer cost nothing.
+  var cx = 0, cy = 0, cz = 0;
+  for (var a = 0; a < n; a++) { cx += instances[a].x; cy += instances[a].y; cz += instances[a].z; }
+  cx /= Math.max(1, n); cy /= Math.max(1, n); cz /= Math.max(1, n);
+  var rad = 0;
+  for (var b = 0; b < n; b++) { var q2 = instances[b], dx = q2.x - cx, dy = q2.y - cy, dz = q2.z - cz; var d = Math.sqrt(dx * dx + dy * dy + dz * dz) + q2.s * 0.75; if (d > rad) rad = d; }
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, cy, cz), rad);
+  var m = new THREE.Mesh(geo, V3D._realMaterial);
+  m.raycast = function () {};     // picking goes through the proxy ellipsoid
+  m.renderOrder = 4;
+  return m;
+}
+// Same contract as makeCloudGroup3D: { grp, r }. baseR uses the identical
+// formula so the cell occupies the same volume in both styles.
+function makeRealCloudGroup3D(cell, dkm, sp, forceLod) {
   _initRealMaterials();
   var dbz = cell.dbz;
   var baseR = Math.max(1.2, Math.min(6, (dbz - 10) / 7)) * (_isDesktop() ? 1.0 : 2.6);
   var seed = _cloudSeed(cell.lat, cell.lon || cell.lng, dbz);
-  var lodTier = dkm > 120 ? 2 : dkm > 60 ? 1 : 0;
-  var puffs = _realPuffLayout(dbz, baseR, seed, lodTier);
-  var sh = _realShade(dbz), hue = _hexToRgb01(dbzCat3D(dbz).col);
-  var SEG_W = lodTier === 2 ? 6 : lodTier === 1 ? 8 : 10, SEG_H = lodTier === 2 ? 5 : lodTier === 1 ? 6 : 8;
-  var geos = [];
-  puffs.forEach(function (pf) {
-    var g = new THREE.SphereGeometry(pf.r, SEG_W, SEG_H);
-    var m4 = new THREE.Matrix4();
-    m4.compose(new THREE.Vector3(pf.px, pf.py, pf.pz), new THREE.Quaternion(), new THREE.Vector3(pf.sx, pf.sy, pf.sz));
-    g.applyMatrix4(m4);
-    var cnt = g.attributes.position.count, cols = new Float32Array(cnt * 3);
-    // stash the puff bias in the colour for the second pass below
-    for (var i = 0; i < cnt; i++) { cols[i * 3] = pf.bias; cols[i * 3 + 1] = 0; cols[i * 3 + 2] = 0; }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    geos.push(g);
-  });
-  var merged = (geos.length > 1 && typeof THREE.BufferGeometryUtils !== 'undefined')
-    ? THREE.BufferGeometryUtils.mergeBufferGeometries(geos, false) : geos[0];
-  if (merged !== geos[0]) geos.forEach(function (g) { g.dispose(); });
-  // second pass: real vertex colours from height + radius within the whole cell
-  var pos = merged.attributes.position, col = merged.attributes.color, n = pos.count;
-  var minY = Infinity, maxY = -Infinity, maxR = 0;
-  for (var v = 0; v < n; v++) {
-    var y = pos.getY(v); if (y < minY) minY = y; if (y > maxY) maxY = y;
-    var rr = Math.sqrt(pos.getX(v) * pos.getX(v) + pos.getZ(v) * pos.getZ(v)); if (rr > maxR) maxR = rr;
-  }
-  var spanY = Math.max(1e-6, maxY - minY);
-  for (var w = 0; w < n; w++) {
-    var hN = (pos.getY(w) - minY) / spanY;
-    var rN = maxR > 0 ? Math.sqrt(pos.getX(w) * pos.getX(w) + pos.getZ(w) * pos.getZ(w)) / maxR : 0;
-    var c = _realVertexColor(sh.gray, hue, sh.hue, hN, rN, col.getX(w));
-    col.setXYZ(w, c[0], c[1], c[2]);
-  }
-  col.needsUpdate = true;
-  var mesh = new THREE.Mesh(merged, V3D._realMaterial);
-  mesh.renderOrder = 4;
-  return { grp: mesh, r: baseR, seed: seed };
+  var lodTier = Math.max(forceLod || 0, dkm > 120 ? 2 : dkm > 60 ? 1 : 0);
+  var sc = _realSprites(dbz, baseR, seed, lodTier);
+  V3D._spriteCount = (V3D._spriteCount || 0) + sc.sprites.length;
+  // draw far-to-near from the viewer at the origin (Fixed / AR / VR eye), so
+  // overlapping sprites blend in a sensible order without per-frame sorting
+  var ox = sp ? sp.x : 0, oz = sp ? sp.z : 0;
+  sc.sprites.sort(function (a, b) { var da = (ox + a.x) * (ox + a.x) + (oz + a.z) * (oz + a.z), db = (ox + b.x) * (ox + b.x) + (oz + b.z) * (oz + b.z); return db - da; });
+  var grp = new THREE.Group();
+  grp.add(_makePuffCloud(sc.sprites));
+  var proxy = new THREE.Mesh(new THREE.SphereGeometry(1, 6, 4), V3D._pickMaterial);
+  proxy.scale.set(sc.maxR * 0.9, Math.max(0.5, (sc.maxY - sc.minY) / 2), sc.maxR * 0.9);
+  proxy.position.set(0, (sc.minY + sc.maxY) / 2, 0);
+  grp.add(proxy);
+  // internal glow: lightning flashes and the tap pulse light the cloud from inside
+  var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: _getPuffTexture(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9 }));
+  glow.scale.set(baseR * 1.9, baseR * 1.4, 1); glow.position.set(0, (sc.minY + sc.maxY) * 0.45, 0);
+  glow.visible = false; glow.renderOrder = 6;
+  grp.add(glow);
+  return { grp: grp, r: baseR, seed: seed, glow: glow };
 }
-// Bridges: one merged geometry per connected cluster (one draw call each),
-// rebuilt only when the Filter changes — never per frame.
+// Bridges: sprites strung along each join, one instanced mesh per connected
+// cluster, rebuilt only when the Filter changes — never per frame.
 function _rebuildBridges3D() {
   for (var i = 0; i < V3D._bridgeMeshes.length; i++) { V3D.stormGroup.remove(V3D._bridgeMeshes[i]); disposeObj3D(V3D._bridgeMeshes[i]); }
   V3D._bridgeMeshes = [];
   if (V3D._cloudStyle !== 'real' || !V3D._cloudLinks.length) return;
   _initRealMaterials();
   var sms = V3D.stormMeshes;
-  // union-find over VISIBLE links so a cluster is what the user can currently see
   var parent = []; for (var p = 0; p < sms.length; p++) parent[p] = p;
   function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
   var live = [];
@@ -1404,40 +1527,27 @@ function _rebuildBridges3D() {
   var byRoot = {};
   live.forEach(function (lk) { var r = find(lk[0]); (byRoot[r] = byRoot[r] || []).push(lk); });
   Object.keys(byRoot).forEach(function (root) {
-    var geos = [], cx = 0, cz = 0, cnt = 0;
+    var inst = [], cx = 0, cz = 0, cnt = 0;
     byRoot[root].forEach(function (lk) {
-      var a = sms[lk[0]], b = sms[lk[1]];
-      var pa = a.mesh.position, pb = b.mesh.position;
-      var r = Math.min(a._realR || 1, b._realR || 1) * 0.78;
-      var g = new THREE.SphereGeometry(r, 7, 5);
-      var m4 = new THREE.Matrix4();
-      var mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2 - r * 0.12, mz = (pa.z + pb.z) / 2;
-      // stretch the bridge along the join so it reads as connective mass
-      var dx = pb.x - pa.x, dz = pb.z - pa.z, len = Math.sqrt(dx * dx + dz * dz) || 1;
-      var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
-      m4.compose(new THREE.Vector3(mx, my, mz), q, new THREE.Vector3(1.05, 0.55, Math.max(1.05, len / (2 * r) * 0.9)));
-      g.applyMatrix4(m4);
-      var da = a.cell.dbz, db = b.cell.dbz, dm = (da + db) / 2;
-      var sh = _realShade(dm), hue = _hexToRgb01(dbzCat3D(dm).col);
-      var n = g.attributes.position.count, cols = new Float32Array(n * 3);
-      var pos = g.attributes.position, minY = Infinity, maxY = -Infinity;
-      for (var v = 0; v < n; v++) { var y = pos.getY(v); if (y < minY) minY = y; if (y > maxY) maxY = y; }
-      for (var w = 0; w < n; w++) {
-        var hN = (pos.getY(w) - minY) / Math.max(1e-6, maxY - minY);
+      var a = sms[lk[0]], b = sms[lk[1]], pa = a.mesh.position, pb = b.mesh.position;
+      var r = Math.min(a._realR || 1, b._realR || 1);
+      var dm = (a.cell.dbz + b.cell.dbz) / 2, sh = _realShade(dm), hue = _hexToRgb01(dbzCat3D(dm).col);
+      var rnd = _cloudRng((_cloudSeed(a.cell.lat, a.cell.lon, dm) ^ 0x3C3C) >>> 0);
+      for (var k = 0; k < 8; k++) {
+        var t = 0.15 + 0.7 * (k + rnd() * 0.6) / 8;
+        var x = pa.x + (pb.x - pa.x) * t + (rnd() - 0.5) * r * 0.5;
+        var z = pa.z + (pb.z - pa.z) * t + (rnd() - 0.5) * r * 0.5;
+        var hN = 0.25 + rnd() * 0.5;
+        var y = pa.y + (pb.y - pa.y) * t + (hN - 0.45) * r * 0.9;
         var c = _realVertexColor(sh.gray, hue, sh.hue, hN, 0.5, -0.02);
-        cols[w * 3] = c[0]; cols[w * 3 + 1] = c[1]; cols[w * 3 + 2] = c[2];
+        inst.push({ x: x, y: y, z: z, s: r * (0.7 + rnd() * 0.5), c: c, a: 0.42, lit: 0.2 + 0.8 * hN, rot: rnd() * 6.2832 });
       }
-      g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-      geos.push(g); cx += mx; cz += mz; cnt++;
+      cx += (pa.x + pb.x) / 2; cz += (pa.z + pb.z) / 2; cnt++;
     });
-    var merged = (geos.length > 1 && typeof THREE.BufferGeometryUtils !== 'undefined')
-      ? THREE.BufferGeometryUtils.mergeBufferGeometries(geos, false) : geos[0];
-    if (merged !== geos[0]) geos.forEach(function (g) { g.dispose(); });
-    var mesh = new THREE.Mesh(merged, V3D._realMaterial);
-    mesh.renderOrder = 3;                       // just under the cells so cell tops win overlaps
+    inst.sort(function (a, b) { return (b.x * b.x + b.z * b.z) - (a.x * a.x + a.z * a.z); });
+    var mesh = _makePuffCloud(inst);
+    mesh.renderOrder = 3;
     mesh.userData.on = true; mesh.userData.bridge = true;
-    mesh.position.set(0, 0, 0);
-    // LOD uses a representative position — the cluster centroid — stored on userData
     mesh.userData.cx = cx / cnt; mesh.userData.cz = cz / cnt;
     V3D.stormGroup.add(mesh);
     V3D._bridgeMeshes.push(mesh);
@@ -1463,14 +1573,11 @@ function _syncCloudStyleBtns() {
 // own tier colour for ~1.2 s so the user can see WHICH source cell answered,
 // then settles back into the cloud. Never permanent, never every cell.
 function _realSelectPulse(sm) {
-  if (!sm || !sm.mesh || V3D._cloudStyle !== 'real' || !V3D._realHiMaterial) return;
+  if (!sm || !sm.glow || V3D._cloudStyle !== 'real') return;
   var tier = _cloudTierIdx(sm.cell.dbz);
-  V3D._realHiMaterial.emissive.setHex(_TIER_TINT_COLORS[tier]).multiplyScalar(0.28);
-  sm.mesh.material = V3D._realHiMaterial;
+  sm.glow.material.color.setHex(_TIER_TINT_COLORS[tier]); sm.glow.material.opacity = Math.min(0.7, (V3D._glowOpacity || 0.5) + 0.15); sm.glow.visible = true;
   if (V3D._selTimer) clearTimeout(V3D._selTimer);
-  V3D._selTimer = setTimeout(function () {
-    if (sm.mesh && sm.mesh.material === V3D._realHiMaterial) sm.mesh.material = _activeCloudMaterial();
-  }, 1200);
+  V3D._selTimer = setTimeout(function () { if (sm.glow) sm.glow.visible = false; }, 1200);
 }
 
 function makeRain3D(dbz, r, terrainBaseH) {
@@ -1728,7 +1835,8 @@ function _tickLightning() {
     if (V3D.frame >= f.endFrame) {
       var sm = V3D.stormMeshes[f.meshIdx];
       if (sm && sm.mesh) {
-        sm.mesh.material = _activeCloudMaterial();   // v7.27: mode-aware restore
+        if (sm.glow) sm.glow.visible = false;           // v7.28: Real mode flashes from inside
+        else sm.mesh.material = _activeCloudMaterial(); // v7.27: mode-aware restore
         sm.mesh.visible = f.prevVisible;
       }
       V3D._lightningFlashes.splice(i, 1);
@@ -1746,7 +1854,8 @@ function _tickLightning() {
     if (sm2 && sm2.mesh) {
       var prevVis = sm2.mesh.visible;
       sm2.mesh.visible = true;
-      sm2.mesh.material = V3D._flashMaterial;
+      if (sm2.glow) { sm2.glow.material.color.setRGB(1, 0.95, 0.78); sm2.glow.material.opacity = V3D._glowOpacity || 0.6; sm2.glow.visible = true; }
+      else sm2.mesh.material = V3D._flashMaterial;
       V3D._lightningFlashes.push({ meshIdx: lc.meshIdx, endFrame: V3D.frame + 8 + Math.floor(Math.random() * 9), prevVisible: prevVis });
     }
     lc.nextFlash = now + _ltInterval(lc.dbz);
@@ -1790,6 +1899,7 @@ function rebuildStorms3D() {
   var _coneCandidates = [];
   var _rainCandidates = [];
   var _linkCells = [];
+  V3D._spriteCount = 0;
   storms.forEach(function (cell) {
     var tierIdx = _cloudTierIdx(cell.dbz);
     var lon = cell.lon || cell.lng;
@@ -1801,7 +1911,11 @@ function rebuildStorms3D() {
     // original path (including its random rotation/jitter); Realistic derives
     // its jitter from the cell's seed so the cloud never reshuffles.
     var real = V3D._cloudStyle === 'real';
-    var cl = real ? makeRealCloudGroup3D(cell, dkm) : makeCloudGroup3D(cell.dbz);
+    // v7.28: a global sprite budget keeps a 200-cell field from becoming a
+    // fill-rate wall — cells come strongest-first, so once the budget is spent
+    // the weak tail builds at the far LOD rather than being dropped.
+    var overBudget = real && (V3D._spriteCount || 0) > (desktop ? 4000 : 1400);
+    var cl = real ? makeRealCloudGroup3D(cell, dkm, sp, overBudget ? 2 : 0) : makeCloudGroup3D(cell.dbz);
     var yJitter = real ? ((_cloudRng(cl.seed)() - 0.5) * 0.06) : ((Math.random() - 0.5) * 0.06);
     var alt = cloudBase + cl.r + yJitter;
 
@@ -1843,7 +1957,7 @@ function rebuildStorms3D() {
     }
 
     var cellForCone = { lat: lat, lon: lon, dbz: cell.dbz, distance: cell.distance, bearing: cell.bearing || bearingDeg(S.lat, S.lon, lat, lon) };
-    V3D.stormMeshes.push({ mesh: cl.grp, cell: cellForCone, rain: null, label: lspr, halo: haloMesh, dkm: dkm, _showRain: false, tierIdx: tierIdx, _realR: cl.r });
+    V3D.stormMeshes.push({ mesh: cl.grp, cell: cellForCone, rain: null, label: lspr, halo: haloMesh, dkm: dkm, _showRain: false, tierIdx: tierIdx, _realR: cl.r, glow: cl.glow || null });
     if (cell.dbz >= 35) {
       var q = _qualifyCone3D(cellForCone, sp);
       if (q) { _coneCandidates.push(q); }

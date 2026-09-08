@@ -735,6 +735,11 @@ function _applyAloftData(aloftSpeeds,providerInfo,lat,lon){
     if(providerInfo&&providerInfo.provider==='open-meteo'&&!/last session/.test(providerInfo.label||'')
        &&typeof notifyOpenMeteoAlive==='function')notifyOpenMeteoAlive('winds aloft');
   }catch(e){}
+  // v7.33: a LIVE profile ends the outage — say so once, naming the source that
+  // actually delivered. A restored "last session" profile is not a recovery.
+  try{
+    if(providerInfo&&!/last session/.test(providerInfo.label||''))_aloftRestoredNotice(providerInfo.label||providerInfo.provider);
+  }catch(e){}
   // v6.63: remember whether steering was already known — if this call is the
   // moment motion FIRST resolves and storms are already on screen, their ETAs/
   // tiers/dial were computed without it and must be refreshed (see bottom).
@@ -902,14 +907,29 @@ function _firstUsableAloft(tasks){
   });
 }
 const _ALOFT_NOTICE_MS=60000;
+// v7.33: an outage speaks ONCE, then goes quiet. The 8 s retry cadence stays
+// (the owner asked for that in v7.11 and it is what eventually recovers the
+// data) but it no longer narrates every failure — during the Kaua'i hurricane
+// that was a toast every 8 seconds for as long as Open-Meteo was down. Now:
+// first failure says what broke and that it will keep trying in the
+// background; every later failure is console-only; and the moment winds land
+// again the app says which source it settled on.
+function _aloftOutageNotice(msg){
+  if(S._aloftOutage)return;                       // already told them
+  S._aloftOutage=true;
+  if(typeof toast==='function')toast('\u26A0\uFE0F Winds aloft unavailable'+(msg?' ('+msg+')':'')+' \u2014 retrying quietly in the background');
+}
+function _aloftRestoredNotice(label){
+  if(!S._aloftOutage)return;
+  S._aloftOutage=false;
+  if(typeof toast==='function')toast('\u2705 Winds aloft restored via '+(label||'a backup source')+' \u2014 storm motion is live again');
+}
 function _aloftAltNotice(why){
-  if(typeof toast!=='function')return;
-  if(S._aloftAltNoticeAt&&Date.now()-S._aloftAltNoticeAt<_ALOFT_NOTICE_MS)return;
-  S._aloftAltNoticeAt=Date.now();
-  toast('\u26A0\uFE0F Winds aloft: Open-Meteo failed ('+why+') \u2014 retrying and trying NOMADS GFS');
+  console.log('Winds aloft: Open-Meteo failed ('+why+') — trying NOMADS GFS alongside the retry');
 }
 function _aloftAltWon(label){
   if(typeof toast!=='function')return;
+  if(S._aloftOutage)return;                 // v7.33: the restore notice covers it
   if(S._aloftAltWonAt&&Date.now()-S._aloftAltWonAt<_ALOFT_NOTICE_MS)return;
   S._aloftAltWonAt=Date.now();
   toast('\u2713 Winds aloft via '+label+' (Open-Meteo unavailable)');
@@ -1064,7 +1084,7 @@ function _scheduleWindsAloftRetry(lat,lon,attempt){
       _queueWindStormRefresh();   // v6.63: same dedup'd path _applyAloftData uses
     }else{
       // fetchWindsAloft's failure path has already re-armed the next 8 s attempt
-      if(typeof toast==='function')toast('⚠️ Winds aloft attempt '+n+' failed'+(S._aloftLastErr?' ('+S._aloftLastErr+')':'')+' — retrying in 8 s');
+      _aloftOutageNotice(S._aloftLastErr);   // v7.33: first failure only
       if(!S._aloftRetryTimer)_scheduleWindsAloftRetry(lat,lon,attempt);
     }
   },_ALOFT_RETRY_MS);
@@ -1167,7 +1187,7 @@ async function ensureWindsAloft(lat,lon,reqId){
       if(_waReady(lat,lon)){if(typeof _bootStepDone==='function')_bootStepDone('wind','Winds aloft ✓');return true}
       if(reqId!=null&&reqId!==S._locReqId)return false;
       // v7.11: the boot-step strip is usually gone by now — say it out loud
-      if(typeof toast==='function')toast('⚠️ Winds aloft attempt '+attempt+' failed'+(S._aloftLastErr?' ('+S._aloftLastErr+')':'')+' — retrying');
+      _aloftOutageNotice(S._aloftLastErr);   // v7.33: first failure only
       const remain=deadline-Date.now();
       if(remain<=0)break;
       await new Promise(r=>setTimeout(r,Math.min(_WA_GATE_PAUSE_MS,remain)));
@@ -1536,6 +1556,19 @@ function getSteeringMv(){
   if(fh&&fh.confidence>0&&!aloft)return{direction:fh.direction,speed:fh.speed,source:'observed',confidence:fh.confidence};
   return aloft?{direction:aloft.direction,speed:aloft.speed,source:'aloft',confidence:0}:null;
 }
+// v7.33: THE app's single answer to "which way are storms moving?" — winds-aloft
+// steering when we have it, radar-observed cell motion when we don't, blended
+// when both. Every consumer must go through this. The text already did;
+// the DRAWINGS and projections did not — they read S.stormMovement, which only
+// winds aloft ever writes. So during an Open-Meteo outage the Watch window
+// printed a bearing while the dial refused to draw the wedge for it, and the
+// Rain Clock footed "Motion unknown" over a perfectly good observed vector.
+function steeringNow(){
+  if(typeof getSteeringMv==='function'){const m=getSteeringMv();if(m&&m.speed>=2)return m}
+  const sm=(typeof S!=='undefined')?S.stormMovement:null;
+  return (sm&&sm.speed>=2)?sm:null;
+}
+if(typeof window!=='undefined')window.steeringNow=steeringNow;
 function _movSourceBadge(h){
   if(!h||!h.source)return'';
   if(h.source==='aloft')return ` <span style="font-size:0.72em;color:#7f8c9b;font-weight:600" title="${tStr('Direction from winds-aloft steering')}">· ${tStr('aloft')}</span>`;
@@ -2324,7 +2357,7 @@ function _computeHookScore(rawPts, cell) {
   asymmetryScore = 1 - coreCompactness;
   const intensityBonus = cell.dbz >= 55 ? 0.15 : cell.dbz >= 50 ? 0.1 : 0;
   let score = (hookArcFraction * 0.4) + (asymmetryScore * 0.2) + notchBonus + intensityBonus;
-  const mv = S.stormMovement;
+  const mv = (typeof steeringNow==='function') ? steeringNow() : S.stormMovement;   // v7.33
   if (mv && mv.speed >= 15) score += 0.05;
   if (_spcData && _spcData.watches) {
     const inTorWatch = _spcData.watches.some(w => w.type === 'tornado' && _isPointInSpcWatch(cell.lat, cell.lng, w));
@@ -4762,7 +4795,7 @@ function _applyStormFilter(storms,f){
     return est>=f.minDbz;
   });
   if(f.maxDist>0)out=out.filter(s=>s.distance<=f.maxDist);
-  const _fHasMv=S.stormMovement&&S.stormMovement.speed&&S.stormMovement.speed>=2;
+  const _fHasMv=!!steeringNow();                       // v7.33: observed motion counts too
   const _fHasAl=S._upperWindDir!=null;
   const noMv=!_fHasMv&&!_fHasAl;
   if(S._coneFocus&&S.lat!=null&&S.lon!=null){

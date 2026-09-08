@@ -1427,7 +1427,9 @@ function drawMiniSonar(){
   // end of the frame (see _watchLbl below) and drawn on top of everything.
   let _watchLbl=null;
   if(_sonarCfg.showWatchWedge!==false&&typeof watchDirHint==='function'){
-    const _wh=watchDirHint(S.stormMovement);
+    // v7.33: draw from the SAME steering the Watch tile prints. This is the
+    // bug the owner hit under the Kaua'i hurricane: tile populated, wedge absent.
+    const _wh=watchDirHint((typeof steeringNow==='function')?steeringNow():S.stormMovement);
     if(_wh){
       const a0=(_wh.fromDeg-15-90)*Math.PI/180,a1=(_wh.fromDeg+15-90)*Math.PI/180;
       ctx.save();
@@ -2862,7 +2864,7 @@ function _rainClockProject(){
   // v4.46: loading state — don't say "all clear" when nothing has loaded yet.
   if(!hasWeather&&!hasRadar&&!haveHourly){out.loading=true;return out}
   const radarStale=hasRadar&&S.scanTime&&(Date.now()-S.scanTime)>15*60000;
-  const mv=S.stormMovement;
+  const mv=(typeof steeringNow==='function')?steeringNow():S.stormMovement;   // v7.33
   const MIN_DBZ=getRainFloorDbz();
   let vx=0,vy=0,haveMv=false;
   if(mv&&mv.speed>1&&mv.direction!=null){
@@ -3198,7 +3200,7 @@ function _rainClockProject(){
   // right after a location change (both reset S.stormMovement). Forecast-only dials
   // (no radar yet) are NOT gated — they don't depend on motion and are already
   // labelled as forecast. ===
-  const _motionKnown=(S.stormMovement!=null);
+  const _motionKnown=((typeof steeringNow==='function')?steeringNow():S.stormMovement)!=null;   // v7.33
   const _radarRain=out.radarReady&&(out.rainingNow||out.nearest!=null||out.windows.length>0);
   if(_radarRain&&!_motionKnown){if(S._rcAwaitSince==null)S._rcAwaitSince=Date.now();}
   else S._rcAwaitSince=null;

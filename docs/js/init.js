@@ -643,7 +643,7 @@ function stormThreatScore(dbz,distance,bearing){
   const intens=Math.min(50,Math.max(0,((dbz-15)/45)*50));
   let impactScore=0;
   const etas=S._stormETAs||{};
-  const mv=S.stormMovement;
+  const mv=(typeof steeringNow==='function')?steeringNow():S.stormMovement;   // v7.33
   if(mv&&mv.speed>=2){
     const bearToUser=(bearing+180)%360;
     const diff=Math.abs(((mv.direction-bearToUser+180)%360)-180);
@@ -1067,7 +1067,7 @@ function renderTerrain3D(){
     }
   }
 
-  const mv=S.stormMovement;
+  const mv=(typeof steeringNow==='function')?steeringNow():S.stormMovement;   // v7.33
   if(mv&&mv.speed>=2){
     const dir=(mv.direction)*Math.PI/180;
     const aLen=40*zoom;

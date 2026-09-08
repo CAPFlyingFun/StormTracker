@@ -410,7 +410,7 @@ function renderGaugeG1000(d){
   svg+=`<line x1="0" y1="${topBar}" x2="${W}" y2="${topBar}" stroke="#3a3e48" stroke-width="0.5"/>`;
   const storms=S.storms||[];
   const strongest=storms.length?storms.reduce((a,b)=>(b.dbz||0)>(a.dbz||0)?b:a,storms[0]):null;
-  const mv=S.stormMovement;
+  const mv=(typeof steeringNow==='function')?steeringNow():S.stormMovement;   // v7.33
   let topTxt='';
   if(strongest){
     topTxt+=`STM ${strongest.dbz||0}dBZ ${strongest.distance!=null?strongest.distance.toFixed(0):'--'}${S.radarMetric?'km':'mi'}`;

@@ -1041,6 +1041,11 @@ async function fetchWindsAloft(overrideLat,overrideLon){
       const msg=errs.join(' \u00B7 ')||'all providers failed';
       console.log('Winds aloft: all providers failed ('+msg+')');
       S._aloftLastErr=msg;
+      // v7.35: the owner's ask — start radar frame correlation on the FIRST
+      // failure, not after the retries give up. It runs in the background and
+      // repaints when it lands, so a long Open-Meteo outage still gets real,
+      // measured storm motion instead of nothing.
+      if(typeof maybeStartFrameMotion==='function')maybeStartFrameMotion('winds aloft unavailable');
       if(!S._aloftStale&&_useStaleWindsAloft(lat,lon)){_scheduleWindsAloftRetry(lat,lon,0);return}
       if(typeof _bootStepFail==='function')_bootStepFail('wind','Winds aloft failed ('+msg+')');
       _scheduleWindsAloftRetry(lat,lon,0);
@@ -1550,10 +1555,14 @@ function getHybridMovement(storm){
 const _OBS_MIN_CONF=0.2, _OBS_MIN_CELLS=3;
 function getSteeringMv(){
   const aloft=_aloftMv();
-  const fh=S._fleetHybrid;
+  // v7.35: frame correlation measures the IMAGE, so it outranks the cell
+  // tracker as the observed term — the tracker's band mis-pairing is exactly
+  // what it was built to replace.
+  const fm=(typeof frameMotionMv==='function')?frameMotionMv():null;
+  const fh=fm?{direction:fm.direction,speed:fm.speed,confidence:fm.confidence,cells:99,_frames:true}:S._fleetHybrid;
   if(fh&&fh.confidence>0&&aloft){
     const w=fh.confidence;
-    return{direction:Math.round(_blendDir(aloft.direction,fh.direction,w)),speed:Math.round(aloft.speed*(1-w)+fh.speed*w),source:w>=0.5?'observed':'hybrid',confidence:w};
+    return{direction:Math.round(_blendDir(aloft.direction,fh.direction,w)),speed:Math.round(aloft.speed*(1-w)+fh.speed*w),source:fh._frames?'frames':(w>=0.5?'observed':'hybrid'),confidence:w};
   }
   // v7.34: with NO winds-aloft prior the observed vector speaks alone, so it has
   // to clear a bar first. The old test was `confidence>0`, which let a single
@@ -1564,7 +1573,7 @@ function getSteeringMv(){
   // cells can mis-pair CONSISTENTLY along a band; only frame correlation does.
   if(fh&&!aloft){
     if(fh.confidence>=_OBS_MIN_CONF&&(fh.cells||0)>=_OBS_MIN_CELLS)
-      return{direction:fh.direction,speed:fh.speed,source:'observed',confidence:fh.confidence};
+      return{direction:fh.direction,speed:fh.speed,source:fh._frames?'frames':'observed',confidence:fh.confidence};
     return null;                       // honestly unknown beats confidently wrong
   }
   return aloft?{direction:aloft.direction,speed:aloft.speed,source:'aloft',confidence:0}:null;
@@ -1585,6 +1594,7 @@ if(typeof window!=='undefined')window.steeringNow=steeringNow;
 function _movSourceBadge(h){
   if(!h||!h.source)return'';
   if(h.source==='aloft')return ` <span style="font-size:0.72em;color:#7f8c9b;font-weight:600" title="${tStr('Direction from winds-aloft steering')}">· ${tStr('aloft')}</span>`;
+  if(h.source==='frames'){const _p=Math.round((h.confidence||0)*100);return ` <span style="font-size:0.72em;color:#f472b6;font-weight:700" title="Measured by correlating consecutive radar frames (${_p}%)">· 🛰️ radar frames ${_p}%</span>`;}
   const pct=Math.round((h.confidence||0)*100);
   const col=h.source==='observed'?'#22d3ee':'#a3e635';
   const lbl=h.source==='observed'?tStr('observed'):tStr('hybrid');

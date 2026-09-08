@@ -136,6 +136,11 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
   if(!img)return null;       // load error or 15s timeout — FAILED, not dry
   const c=document.createElement('canvas');c.width=tileSize;c.height=tileSize;
   const ctx=c.getContext('2d',{willReadFrequently:true});
+  // v7.38: a null 2d context is a FAILED tile, not a dry one. iOS Safari hands
+  // back null once enough canvases are live, and drawImage sits outside the
+  // try below — so this threw past scanTileForPoints entirely instead of
+  // counting as one failed tile. Same class of bug as the v7.25 taint fix.
+  if(!ctx){S._noCtxTiles=(S._noCtxTiles||0)+1;return null}
   ctx.drawImage(img,0,0);
   let data;
   // v7.25: an unreadable canvas is a FAILURE, not a dry tile. This returned []
@@ -167,16 +172,23 @@ async function scanTileForPoints(url,tx,ty,zoom,colorFn,minDbz,scanRadius,stepOv
 (function initAdaptiveScan(){
   S._scanStep=2;
   const t0=performance.now();
-  const c=document.createElement('canvas');c.width=256;c.height=256;
-  const ctx=c.getContext('2d',{willReadFrequently:true});
-  ctx.fillRect(0,0,256,256);
-  const d=ctx.getImageData(0,0,256,256).data;
-  let s=0;for(let i=0;i<d.length;i+=8)s+=d[i];
-  const ms=performance.now()-t0;
-  if(ms>50)S._scanStep=4;
-  else if(ms>20)S._scanStep=3;
-  else S._scanStep=2;
-  console.log('Adaptive scan: step='+S._scanStep+' (bench='+ms.toFixed(1)+'ms)');
+  // v7.38: this runs at load. An exception here does not just skip the bench —
+  // it aborts storms.js, so every function below this point never gets defined
+  // and the app has no storm scanning at all. Keep the default step and carry
+  // on instead.
+  try{
+    const c=document.createElement('canvas');c.width=256;c.height=256;
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    if(!ctx){console.warn('Adaptive scan: no 2d context — keeping step=2');return}
+    ctx.fillRect(0,0,256,256);
+    const d=ctx.getImageData(0,0,256,256).data;
+    let s=0;for(let i=0;i<d.length;i+=8)s+=d[i];
+    const ms=performance.now()-t0;
+    if(ms>50)S._scanStep=4;
+    else if(ms>20)S._scanStep=3;
+    else S._scanStep=2;
+    console.log('Adaptive scan: step='+S._scanStep+' (bench='+ms.toFixed(1)+'ms)');
+  }catch(e){console.warn('Adaptive scan bench failed — keeping step='+S._scanStep,e)}
 })();
 
 // v4.44: Optional Skylink (RapidAPI) winds-aloft provider. Returns FAA-standard

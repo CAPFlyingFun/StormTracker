@@ -382,11 +382,21 @@ function stopRadarAnim(map){
   if(!map)return;
   if(S.radarLayer){map.removeLayer(S.radarLayer);S.radarLayer=null}
   if(S.radarSource==='rainviewer'){
-    fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json()).then(rv=>{
+    fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>{
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return r.json();
+    }).then(rv=>{
       const past=rv.radar?.past||[];const nowcast=rv.radar?.nowcast||[];
       S.radarFrames=past.concat(nowcast);
       showRadarLayer(map);
-    }).catch(()=>showRadarLayer(map));
+    }).catch(e=>{
+      // v7.38: this used to swallow the reason and call showRadarLayer with no
+      // frames — which paints an EMPTY radar that looks exactly like clear
+      // skies. Say why in the console; the layer call is kept so the rest of
+      // the UI still comes up.
+      console.warn('RainViewer frame index unavailable — radar may render empty:',e&&e.message||e);
+      showRadarLayer(map);
+    });
   }else{
     showRadarLayer(map);
   }
@@ -430,11 +440,19 @@ function showRadarLayer(map){
   if(S.radarSource==='nexrad'&&nexradBenched()&&noaaReady())S.radarSource='noaa';
   if(S.radarSource==='nexrad'&&nexradBenched()){
     if(!S.radarFrames||!S.radarFrames.length){
-      fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json()).then(rv=>{
+      fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>{
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        return r.json();
+      }).then(rv=>{
         const past=rv.radar?.past||[],now=rv.radar?.nowcast||[];
         S.radarFrames=past.concat(now);
         _showRvLayer(map,lbl,btn,true);
-      }).catch(()=>radarUnavailable());
+      }).catch(e=>{
+        // v7.38: NEXRAD is benched and RainViewer is the last source left, so
+        // record why before declaring radar unavailable.
+        console.warn('RainViewer frame index unavailable (NEXRAD benched):',e&&e.message||e);
+        radarUnavailable();
+      });
       return;
     }
     _showRvLayer(map,lbl,btn,true);

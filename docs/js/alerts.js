@@ -777,6 +777,11 @@ function _renderHazardSummary(){
   }
   const nhc=_getFilteredSystems();
   if(nhc===null)items.push({icon:'🔄',label:'Tropical',status:'Loading...',color:'#666',target:'hz-tropical'});
+  // v7.39: an empty list is only "Clear" when a source actually ANSWERED. With
+  // every tropical feed down the list is UNKNOWN, and a green ✅ there is the
+  // same lie as a blank radar reading as clear skies (v7.25).
+  else if(!nhc.length&&typeof tropicalBlackout==='function'&&tropicalBlackout())
+    items.push({icon:'⚠️',label:'Tropical',status:'Source unavailable',color:'#f59e0b',target:'hz-tropical'});
   else if(!nhc.length)items.push({icon:'✅',label:'Tropical',status:S._nhcRegionFilter!=='all'?'Clear (filtered)':'Clear',color:'#22c55e',target:'hz-tropical'});
   else{
     const inCone=nhc.filter(s=>s._inCone).length;

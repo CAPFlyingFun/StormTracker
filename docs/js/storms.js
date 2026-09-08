@@ -2949,7 +2949,11 @@ async function fetchNHCData() {
     _recomputeNHCUserFields();
     return;
   }
-  _nhcData._lastFetch = now;
+  // v7.39: only a successful fetch buys the full 15-minute quiet window. This
+  // used to stamp _lastFetch before awaiting, so ONE failed attempt locked the
+  // tropical list to [] for a full 15 minutes even if the network recovered a
+  // second later. A failure now retries in 90 s.
+  _nhcData._lastFetch = now - (900000 - _NHC_RETRY_MS);
   try {
     const [gisRes, rssRes, surgeRes, jtwcRes, gdacsRes] = await Promise.allSettled([
       _fetchNHCGIS(),
@@ -2958,6 +2962,17 @@ async function fetchNHCData() {
       _fetchJTWCStorms(),
       _fetchGDACSStorms()
     ]);
+    // v7.39: remember which feeds actually answered. An empty tropical list is
+    // only "no storms" if at least one source SPOKE; if they all failed, the
+    // list is unknown — and the UI must say so instead of a green "Clear".
+    const _why = r => (r.status === 'rejected') ? ((r.reason && r.reason.message) || String(r.reason || 'failed')) : null;
+    _nhcData.health = {
+      gis:   { ok: gisRes.status === 'fulfilled' && !!gisRes.value, why: _why(gisRes) },
+      rss:   { ok: rssRes.status === 'fulfilled', why: _why(rssRes) },
+      jtwc:  { ok: jtwcRes.status === 'fulfilled', why: _why(jtwcRes) },
+      gdacs: { ok: gdacsRes.status === 'fulfilled', why: _why(gdacsRes) },
+      at: now
+    };
     const gis = gisRes.status === 'fulfilled' ? gisRes.value : null;
     const rssStorms = rssRes.status === 'fulfilled' ? rssRes.value : [];
     const surgeData = surgeRes.status === 'fulfilled' ? surgeRes.value : null;
@@ -3125,12 +3140,43 @@ async function fetchNHCData() {
     _nhcData.systems = _stormFreezeGate(storms);
     _nhcData.surgeRaw = surgeData;
     _recomputeNHCUserFields();
+    const _h = _nhcData.health;
+    const _dead = Object.keys(_h).filter(k => k !== 'at' && !_h[k].ok);
+    _nhcData.blackout = _dead.length === 4;   // gis + rss + jtwc + gdacs
+    if (_dead.length) {
+      _nhcData._lastFetch = now - (900000 - _NHC_RETRY_MS);   // partial → re-try soon
+      console.warn('[NHC] tropical source(s) down: ' + _dead.map(k => k + ' (' + (_h[k].why || 'no data') + ')').join(', '));
+    } else {
+      _nhcData._lastFetch = now;                              // full success → 15-min window
+    }
+    if (_nhcData.blackout) console.warn('[NHC] EVERY tropical source failed — the list is UNKNOWN, not empty.');
+    // A feed that carried storms but an EMPTY live list means the freeze /
+    // lifecycle gate swallowed all of them. That is a legitimate state, but it
+    // is indistinguishable from "no storms" on screen, so say it out loud.
+    else if (storms.length && !_nhcData.systems.length)
+      console.warn('[NHC] ' + storms.length + ' storm(s) in the feed but 0 live — all archived/dismissed. See the 📢 panel (Archived / Trash).');
     console.log('[NHC+JTWC+GDACS] Tropical systems:', storms.length, 'tracks:', (_nhcData.forecast||[]).length, 'cones:', (_nhcData.cones||[]).length, 'history:', (_nhcData.history||[]).length, 'JTWC:', jtwcStorms.length, 'GDACS:', gdacsStorms.length);
   } catch (e) {
-    console.log('[NHC] Fetch error:', e.message);
+    console.warn('[NHC] Fetch error:', e.message);
+    _nhcData.blackout = true;
+    _nhcData.health = { gis:{ok:false,why:e.message}, rss:{ok:false,why:e.message},
+                        jtwc:{ok:false,why:e.message}, gdacs:{ok:false,why:e.message}, at: Date.now() };
     if (!_nhcData.systems) _nhcData.systems = [];
   }
 }
+// v7.39: true when the last poll got nothing from ANY tropical source, so an
+// empty systems[] means "we don't know", not "no storms". The radar side
+// learned this lesson in v7.25 — a blank answer from a dead source must never
+// render as the all-clear.
+function tropicalBlackout() {
+  return !!(typeof _nhcData !== 'undefined' && _nhcData && _nhcData.blackout);
+}
+function tropicalDownSources() {
+  const h = (typeof _nhcData !== 'undefined' && _nhcData) ? _nhcData.health : null;
+  if (!h) return [];
+  return Object.keys(h).filter(k => k !== 'at' && h[k] && !h[k].ok);
+}
+if (typeof window !== 'undefined') { window.tropicalBlackout = tropicalBlackout; window.tropicalDownSources = tropicalDownSources; }
 async function _fetchNHCGIS() {
   const base = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
   const q = 'where=1%3D1&outFields=*&f=geojson&resultRecordCount=500';
@@ -3768,6 +3814,9 @@ function _stormAsOfHtml(s) {
 // ~6 h, so 12 h of byte-identical data is a definitive dead-feed signal. The
 // separate NHC GIS cone/track layers are authoritative and left untouched.
 const _STORM_FREEZE_MS = 12 * 3600000;
+// v7.39: how soon to re-try tropical after a failed fetch (vs the 15-min
+// success cadence).
+const _NHC_RETRY_MS = 90000;
 function _stormFingerprint(s) {
   // Round position to 0.1 deg so float noise isn't mistaken for movement;
   // include the intensity/motion fields a real advisory would revise.
@@ -4166,8 +4215,20 @@ function _renderTropicalSection() {
     return `<button onclick="setNHCRegionFilter('${r.id}')" style="font-size:0.6em;padding:2px 8px;border-radius:12px;border:1px solid ${isActive ? 'var(--accent-cyan)' : 'var(--border-subtle)'};background:${isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-surface)'};color:${isActive ? 'var(--accent-cyan)' : 'var(--text-muted)'};cursor:pointer;font-weight:${isActive ? '700' : '500'};white-space:nowrap">${r.label}${count ? ' (' + count + ')' : ''}</button>`;
   }).join('');
   if (!allSystems.length) {
+    // v7.39: distinguish "nothing out there" from "we could not ask". A green
+    // all-clear on a dead feed is exactly the failure the radar path fixed in
+    // v7.25 — a blank answer must never be presented as good news.
+    const _blk = (typeof tropicalBlackout === 'function') && tropicalBlackout();
+    const _down = (typeof tropicalDownSources === 'function') ? tropicalDownSources() : [];
+    const _lcArch = (typeof _loadStormLC === 'function')
+      ? Object.keys(_loadStormLC()).filter(k => { const st = _loadStormLC()[k].state; return st === 'archived' || st === 'deleted'; }).length : 0;
+    const body = _blk
+      ? `<div style="text-align:center;padding:16px;color:#f59e0b;font-size:0.8em">⚠️ Tropical data unavailable<div style="font-size:0.8em;color:var(--text-muted);margin-top:4px">Every source failed to answer — this is NOT an all-clear. Retrying in the background.</div></div>`
+      : `<div style="text-align:center;padding:16px;color:var(--accent-green);font-size:0.8em">✅ No active tropical systems</div>`
+        + (_lcArch ? `<div style="font-size:0.6em;color:var(--text-muted);text-align:center;padding:0 8px 4px">${_lcArch} storm${_lcArch > 1 ? 's' : ''} in Archived / Trash — open 📢 to review or restore</div>` : '')
+        + (_down.length ? `<div style="font-size:0.6em;color:#f59e0b;text-align:center;padding:0 8px 4px">⚠️ ${_down.join(', ')} unavailable — coverage may be incomplete</div>` : '');
     return `<div class="card mt-12"><div class="card-title"><span class="icon">🌀</span> Tropical Cyclones</div>
-      <div style="text-align:center;padding:16px;color:var(--accent-green);font-size:0.8em">✅ No active tropical systems</div>
+      ${body}
       <div style="font-size:0.6em;color:var(--text-muted);text-align:center;padding:0 8px 8px">Data: NHC + JTWC + GDACS</div></div>`;
   }
   let html = `<div class="card mt-12"><div class="card-title flex-between"><span><span class="icon">🌀</span> Tropical Cyclones (${systems.length}${S._nhcRegionFilter !== 'all' ? '/' + allSystems.length : ''})</span><label style="display:flex;align-items:center;gap:4px;font-size:0.65em;font-weight:500;color:var(--text-muted);cursor:pointer"><span>Map</span><input type="checkbox" ${S._showNHCTracks ? 'checked' : ''} onchange="toggleNHCTracks(this.checked)" class="accent-cyan-check"></label></div>`;

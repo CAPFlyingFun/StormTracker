@@ -308,7 +308,17 @@ async function init(){
         const gps=await _silentGpsOnLoad();
         if(gps){
           if(gps.coords.altitude!=null)S._gpsAltitude=gps.coords.altitude;
-          reverseGeo(gps.coords.latitude,gps.coords.longitude);
+          // v7.32: a launch fix is a circle. If the saved address is inside it,
+          // that address is the more precise answer — otherwise reverse-geocode
+          // the fix, and say so when it is too coarse to name a street.
+          const fix=_resolveLaunchFix(gps,saved);
+          if(fix.snapped){
+            console.log('Auto-GPS: fix ±'+(fix.accuracyM!=null?Math.round(fix.accuracyM):'?')+' m contains the saved location — keeping the saved address');
+            setLoc(fix.lat,fix.lon,fix.name||saved.name);
+          }else{
+            if(fix.coarse&&typeof toast==='function')toast('\uD83D\uDCCD GPS fix is approximate (\u00B1'+_fmtAccuracy(fix.accuracyM)+') \u2014 tap the location bar if it lands on the wrong street');
+            reverseGeo(fix.lat,fix.lon);
+          }
           return;
         }
       }

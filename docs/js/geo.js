@@ -355,25 +355,81 @@ async function toggleAutoGps(){
 let _autoGpsPending=false;
 let _travelGpsPending=false;
 
+// v7.32: AUTO-LOCATE ON LAUNCH — accuracy-aware.
+//
+// The old version accepted a position up to FIVE MINUTES old
+// (maximumAge:300000) on both attempts and never looked at coords.accuracy. So
+// the phone was free to hand back a cached wifi/cell fix from wherever it last
+// had one, instantly and without taking a reading — which is how a launch could
+// land the user on a street they were not on. (Every other GPS call in the app
+// already used maximumAge 5–60 s; this one was the outlier, since v6.16.)
+//
+// Now: the fix must be FRESH, and watchPosition keeps the BEST reading over a
+// short budget, because the first callback on iOS is usually a coarse network
+// fix that the GPS then refines over the next few seconds.
+var _GPS_GOOD_M = 100;        // street-level — good enough, stop early
+var _GPS_BUDGET_MS = 12000;   // how long we will spend improving the fix
+var _GPS_COARSE_M = 300;      // beyond this, tell the user it is approximate
+function _gpsAccOf(p){return (p&&p.coords&&p.coords.accuracy!=null)?p.coords.accuracy:1e9}
 function _silentGpsOnLoad(){
   return new Promise(resolve=>{
     if(!navigator.geolocation){resolve(null);return}
-    let done=false;
-    function finish(val){if(done)return;done=true;clearTimeout(masterTO);resolve(val)}
-    const masterTO=setTimeout(()=>finish(null),20000);
-    navigator.geolocation.getCurrentPosition(
-      pos=>finish(pos),
-      err=>{
-        if(err.code===1){localStorage.removeItem('st_autoGps');finish(null);return}
-        navigator.geolocation.getCurrentPosition(
-          pos=>finish(pos),
-          err2=>{if(err2.code===1)localStorage.removeItem('st_autoGps');finish(null)},
-          {enableHighAccuracy:false,timeout:10000,maximumAge:300000}
-        );
-      },
-      {enableHighAccuracy:true,timeout:10000,maximumAge:300000}
-    );
+    let done=false,best=null,wid=null,fbStarted=false;
+    function finish(val){
+      if(done)return;done=true;
+      clearTimeout(masterTO);
+      if(wid!=null){try{navigator.geolocation.clearWatch(wid)}catch(e){}}
+      resolve(val);
+    }
+    function denied(){try{localStorage.removeItem('st_autoGps')}catch(e){}finish(null)}
+    // Nothing precise arrived: a rough fix still beats no location at all, and
+    // the caller flags it to the user rather than presenting it as exact.
+    function coarseFallback(){
+      if(fbStarted||done)return;fbStarted=true;
+      navigator.geolocation.getCurrentPosition(
+        p=>finish(p),
+        e=>{if(e&&e.code===1){denied();return}finish(null)},
+        {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
+      );
+    }
+    const masterTO=setTimeout(()=>{if(best)finish(best);else coarseFallback()},_GPS_BUDGET_MS);
+    try{
+      wid=navigator.geolocation.watchPosition(
+        p=>{
+          if(_gpsAccOf(p)<_gpsAccOf(best))best=p;
+          if(_gpsAccOf(p)<=_GPS_GOOD_M)finish(best);
+        },
+        e=>{
+          if(e&&e.code===1){denied();return}
+          if(!best)coarseFallback();
+        },
+        {enableHighAccuracy:true,timeout:_GPS_BUDGET_MS,maximumAge:0}
+      );
+    }catch(e){coarseFallback()}
   });
+}
+// v7.32: reconcile a launch fix with the saved location. A GPS fix is a CIRCLE,
+// not a point — "you are within ±accuracy of here". When the saved address sits
+// inside that circle the saved address is the MORE precise answer, so a coarse
+// fix taken at home resolves to home instead of whichever street the circle's
+// centre happened to land on. Returns {lat,lon,name?,accuracyM,snapped,coarse}.
+function _resolveLaunchFix(pos,saved){
+  const acc=(pos&&pos.coords&&pos.coords.accuracy!=null)?pos.coords.accuracy:null;
+  const lat=pos.coords.latitude,lon=pos.coords.longitude;
+  const out={lat:lat,lon:lon,accuracyM:acc,snapped:false,coarse:(acc!=null&&acc>_GPS_COARSE_M)};
+  if(!saved||saved.lat==null||saved.lon==null)return out;
+  const dM=haversine(lat,lon,saved.lat,saved.lon)*1609.34;
+  if(dM<=Math.max(acc||0,_GPS_GOOD_M)){
+    out.lat=saved.lat;out.lon=saved.lon;out.name=saved.name;
+    out.snapped=true;out.coarse=false;
+  }
+  return out;
+}
+function _fmtAccuracy(m){
+  if(m==null)return '?';
+  if(S.radarMetric)return m>=1000?(m/1000).toFixed(1)+' km':Math.round(m)+' m';
+  const ft=m*3.28084;
+  return ft>=1000?(ft/5280).toFixed(1)+' mi':Math.round(ft)+' ft';
 }
 
 let _locConfirmShown=false;
@@ -426,7 +482,7 @@ function _doGPSLocate(){
           if(err2.code===1&&wasAutoGpsPending){localStorage.removeItem('st_autoGps');syncSettingsPanel()}
           toast(err2.code===1?'📍 Location permission denied — enable location and try again':'📍 Still cannot get location — make sure Location Services is ON, or search for your city instead');
         },
-        {enableHighAccuracy:false,timeout:30000,maximumAge:300000}
+        {enableHighAccuracy:false,timeout:30000,maximumAge:60000}
       );
       return;
     }else{

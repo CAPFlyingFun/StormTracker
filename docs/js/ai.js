@@ -85,6 +85,9 @@ function syncAISettings(){
   if(lk&&typeof getLightningKey==='function')lk.value=getLightningKey();
   const ls=document.getElementById('settings-lightning-source');
   if(ls&&typeof getLightningSource==='function')ls.value=getLightningSource();
+  const ms=document.getElementById('settings-motion-source');
+  if(ms&&typeof getMotionSource==='function')ms.value=getMotionSource();
+  if(typeof _motionSrcStatus==='function')try{_motionSrcStatus()}catch(e){}
   if(typeof _ltgSetStatus==='function')_ltgSetStatus();   // v6.63: last lightning-source outcome (live / quota / rejected)
   if(typeof _ltgZoneSyncUI==='function')_ltgZoneSyncUI(); // v6.68: real-time zone mode + status
   if(typeof syncBriefingModeUI==='function')syncBriefingModeUI();

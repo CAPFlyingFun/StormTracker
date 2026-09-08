@@ -1553,12 +1553,77 @@ function getHybridMovement(storm){
 // Fleet-level blend for aggregate displays (path arrows, sonar, 3D steering).
 // v7.34: quality bar for observed-only steering (no winds-aloft prior).
 const _OBS_MIN_CONF=0.2, _OBS_MIN_CELLS=3;
+// v7.36: which source owns storm direction. The two are genuinely different
+// questions, so this is a real choice rather than a quality dial:
+//   aloft  — where the ATMOSPHERE is pushing (a forecast model). Steady, works
+//            with no radar echoes at all, but it is a prediction.
+//   frames — where the echoes ACTUALLY WENT, measured by correlating
+//            consecutive radar frames. Ground truth, but it needs echoes on
+//            screen and it is blind to a storm that has not moved yet.
+//   auto   — aloft when it is there, measured motion when it is not.
+function getMotionSource(){
+  try{const v=localStorage.getItem('st_motionSource');if(v==='aloft'||v==='frames')return v}catch(e){}
+  return 'auto';
+}
+function setMotionSource(v){
+  const t=(v==='aloft'||v==='frames')?v:'auto';
+  try{localStorage.setItem('st_motionSource',t)}catch(e){}
+  // Picking "frames" must not mean "wait for Open-Meteo to break first" — go
+  // and measure now. The 5-minute gap guard inside stops this being abusive.
+  if(t==='frames'&&typeof maybeStartFrameMotion==='function')maybeStartFrameMotion('radar-frame motion selected');
+  if(typeof _queueWindStormRefresh==='function')_queueWindStormRefresh();
+  else{
+    if(typeof renderStorms==='function')try{renderStorms()}catch(e){}
+    if(typeof drawMiniSonar==='function')try{drawMiniSonar()}catch(e){}
+    if(typeof refreshRainClock==='function')try{refreshRainClock(true)}catch(e){}
+  }
+  if(typeof _motionSrcStatus==='function')_motionSrcStatus();
+  const lbl={auto:'Auto (winds aloft, then measured)',aloft:'Winds aloft only',frames:'Measured from radar frames'}[t];
+  if(typeof toast==='function')toast('\uD83E\uDDED Storm direction: '+lbl);
+}
+// Live status line under the picker, so the choice is never a guess.
+function _motionSrcStatus(){
+  const el=document.getElementById('motion-source-status');
+  if(!el)return;
+  const src=getMotionSource();
+  const fm=(typeof frameMotionMv==='function')?frameMotionMv():null;
+  const al=(typeof _aloftMv==='function')?_aloftMv():null;
+  const mv=(typeof getSteeringMv==='function')?getSteeringMv():null;
+  const dir=d=>(typeof degToDir==='function')?degToDir(d):Math.round(d)+'\u00B0';
+  let msg,col='';
+  if(mv){
+    const name=mv.source==='aloft'?'winds aloft':mv.source==='frames'?'radar frames':'radar-tracked cells';
+    col='#4ade80';
+    msg='\u2713 Using '+name+' \u2014 storms tracking '+dir(mv.direction)+' at '+Math.round(mv.speed)+' mph.';
+  }else{
+    col='#facc15';
+    msg='\u26A0\uFE0F No storm motion yet \u2014 '+(src==='frames'?'waiting for radar frames with echoes in them.':'waiting for winds aloft.');
+  }
+  if(src==='frames'&&!fm&&al)msg+=' Radar-frame motion is not available right now, so winds aloft is filling in.';
+  if(src==='aloft'&&!al&&fm)msg+=' Winds aloft is unavailable; measured motion is held back because you pinned this to winds aloft.';
+  if(fm)msg+=' Last frame measurement: '+dir(fm.direction)+' '+Math.round(fm.speed)+' mph ('+Math.round((fm.confidence||0)*100)+'% confidence).';
+  el.style.display='block';el.style.color=col||'var(--text-muted)';el.textContent=msg;
+}
+if(typeof window!=='undefined'){window.getMotionSource=getMotionSource;window.setMotionSource=setMotionSource;window._motionSrcStatus=_motionSrcStatus;}
 function getSteeringMv(){
   const aloft=_aloftMv();
   // v7.35: frame correlation measures the IMAGE, so it outranks the cell
   // tracker as the observed term — the tracker's band mis-pairing is exactly
   // what it was built to replace.
-  const fm=(typeof frameMotionMv==='function')?frameMotionMv():null;
+  // v7.36: the user's pick decides which measured source may speak, and
+  // whether it outranks the aloft forecast.
+  const _mSrc=(typeof getMotionSource==='function')?getMotionSource():'auto';
+  const _fmRaw=(_mSrc==='aloft')?null:((typeof frameMotionMv==='function')?frameMotionMv():null);
+  // "frames" means the measurement WINS when it exists — that is the whole
+  // point of choosing it. Aloft still covers the gap when nothing is measurable.
+  if(_mSrc==='frames'&&_fmRaw)return{direction:_fmRaw.direction,speed:_fmRaw.speed,source:'frames',confidence:_fmRaw.confidence};
+  // Otherwise aloft LEADS and the measurement only speaks when there is no
+  // aloft prior. Deliberately not blended: a forecast saying W and a
+  // measurement saying NE average to N, a direction neither source claims and
+  // the sky never did. The cell tracker keeps its old confidence blend, which
+  // is appropriate for a noisy observation nudging a forecast — a direct
+  // measurement is not that.
+  const fm=aloft?null:_fmRaw;
   const fh=fm?{direction:fm.direction,speed:fm.speed,confidence:fm.confidence,cells:99,_frames:true}:S._fleetHybrid;
   if(fh&&fh.confidence>0&&aloft){
     const w=fh.confidence;
@@ -2024,6 +2089,10 @@ async function scanRadarForStorms(){
   showScanOverlay();
   if(reqId!==S._locReqId){hideScanOverlay();return}
   S._fullScanActive=true;
+  // v7.36: pinned to measured motion → re-measure alongside each scan so it
+  // stays current (the internal 5-minute gap guard keeps it cheap).
+  if(typeof getMotionSource==='function'&&getMotionSource()==='frames'&&typeof maybeStartFrameMotion==='function')
+    maybeStartFrameMotion('radar-frame motion selected');
   if(typeof _bootStep==='function')_bootStep('scan','Scanning radar…');
   // v7.09: the winds-aloft gate no longer holds the radar tiles hostage.
   // v4.76 awaited the full 30 s gate (plus the AFD) before requesting a single

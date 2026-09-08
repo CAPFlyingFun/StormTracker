@@ -1511,7 +1511,7 @@ function computeFleetHybrid(){
   const resultant=Math.sqrt(vx*vx+vy*vy)/spdW; // agreement across cells
   const avgConf=confSum/n;
   const conf=Math.max(0,Math.min(0.9,avgConf*resultant)); // cap so aloft keeps ≥10% on aggregate displays
-  S._fleetHybrid={direction:Math.round(dir),speed:Math.round(spdSum/spdW),confidence:Math.round(conf*100)/100,cells:n};
+  S._fleetHybrid={direction:Math.round(dir),speed:Math.round(spdSum/spdW),confidence:Math.round(conf*100)/100,cells:n,agreement:Math.round(resultant*100)/100};
 }
 function getCellTrack(storm){
   if(!S._cellTracks||!storm)return null;
@@ -1546,6 +1546,8 @@ function getHybridMovement(storm){
   return null;
 }
 // Fleet-level blend for aggregate displays (path arrows, sonar, 3D steering).
+// v7.34: quality bar for observed-only steering (no winds-aloft prior).
+const _OBS_MIN_CONF=0.2, _OBS_MIN_CELLS=3;
 function getSteeringMv(){
   const aloft=_aloftMv();
   const fh=S._fleetHybrid;
@@ -1553,7 +1555,18 @@ function getSteeringMv(){
     const w=fh.confidence;
     return{direction:Math.round(_blendDir(aloft.direction,fh.direction,w)),speed:Math.round(aloft.speed*(1-w)+fh.speed*w),source:w>=0.5?'observed':'hybrid',confidence:w};
   }
-  if(fh&&fh.confidence>0&&!aloft)return{direction:fh.direction,speed:fh.speed,source:'observed',confidence:fh.confidence};
+  // v7.34: with NO winds-aloft prior the observed vector speaks alone, so it has
+  // to clear a bar first. The old test was `confidence>0`, which let a single
+  // pair of mis-matched cells present a bearing as fact — that is how a wrong
+  // steering direction reached the dial during the Kaua'i hurricane. Three
+  // agreeing cells and a real confidence floor is a low bar, but it excludes the
+  // degenerate case. NOTE: it does NOT fix banded/rotating precipitation, where
+  // cells can mis-pair CONSISTENTLY along a band; only frame correlation does.
+  if(fh&&!aloft){
+    if(fh.confidence>=_OBS_MIN_CONF&&(fh.cells||0)>=_OBS_MIN_CELLS)
+      return{direction:fh.direction,speed:fh.speed,source:'observed',confidence:fh.confidence};
+    return null;                       // honestly unknown beats confidently wrong
+  }
   return aloft?{direction:aloft.direction,speed:aloft.speed,source:'aloft',confidence:0}:null;
 }
 // v7.33: THE app's single answer to "which way are storms moving?" — winds-aloft

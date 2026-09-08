@@ -1542,12 +1542,26 @@ function _aloftMv(){
 function getHybridMovement(storm){
   const aloft=_aloftMv();
   const ct=storm?getCellTrack(storm):null;
+  // v7.37: per-cell movement follows the SAME source rules as the dial. Until
+  // now every storm card, the radar popup, the ETAs and the cones read aloft
+  // directly, so the sonar could show measured motion while the cards beside it
+  // still said "aloft" — the owner watched them disagree by ~23°.
+  // And because frame correlation produces a FIELD, a cell uses the motion
+  // measured NEAR IT rather than the field average.
+  const _mSrc=(typeof getMotionSource==='function')?getMotionSource():'auto';
+  const _lat=storm?storm.lat:null, _lon=storm?(storm.lng!=null?storm.lng:storm.lon):null;
+  const fm=(_mSrc==='aloft')?null:((typeof frameMotionAt==='function')?frameMotionAt(_lat,_lon)
+    :((typeof frameMotionMv==='function')?frameMotionMv():null));
+  // Pinned to frames: the measurement wins outright, exactly as on the dial.
+  if(_mSrc==='frames'&&fm)return{direction:fm.direction,speed:fm.speed,source:'frames',confidence:fm.confidence,obsDir:ct?ct.dir:null,aloftDir:aloft?aloft.direction:null,local:!!fm.local};
+  // Otherwise aloft leads; the measurement stands in when there is no forecast.
+  const base=aloft||(fm?{direction:fm.direction,speed:fm.speed,_frames:true}:null);
   if(ct&&ct.confidence>0){
     const w=ct.confidence;
-    if(!aloft)return{direction:ct.dir,speed:ct.speed,source:'observed',confidence:w,obsDir:ct.dir,aloftDir:null};
-    return{direction:Math.round(_blendDir(aloft.direction,ct.dir,w)),speed:Math.round(aloft.speed*(1-w)+ct.speed*w),source:w>=0.6?'observed':'hybrid',confidence:w,obsDir:ct.dir,aloftDir:aloft.direction};
+    if(!base)return{direction:ct.dir,speed:ct.speed,source:'observed',confidence:w,obsDir:ct.dir,aloftDir:null};
+    return{direction:Math.round(_blendDir(base.direction,ct.dir,w)),speed:Math.round(base.speed*(1-w)+ct.speed*w),source:w>=0.6?'observed':(base._frames?'frames':'hybrid'),confidence:w,obsDir:ct.dir,aloftDir:aloft?aloft.direction:null};
   }
-  if(aloft)return{direction:aloft.direction,speed:aloft.speed,source:'aloft',confidence:0,obsDir:ct?ct.dir:null,aloftDir:aloft.direction};
+  if(base)return{direction:base.direction,speed:base.speed,source:base._frames?'frames':'aloft',confidence:base._frames?(fm.confidence||0):0,obsDir:ct?ct.dir:null,aloftDir:aloft?aloft.direction:null,local:!!(base._frames&&fm.local)};
   return null;
 }
 // Fleet-level blend for aggregate displays (path arrows, sonar, 3D steering).

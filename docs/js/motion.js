@@ -160,6 +160,15 @@ function _fmAggregate(vectors) {
     blocks: vectors.length
   };
 }
+// Inverse slippy: mosaic pixel → lat/lon, so every block vector knows WHERE it
+// was measured. That is what makes this a motion FIELD instead of one number.
+function _fmPxToLatLon(px, py, z) {
+  var world = 256 * Math.pow(2, z);
+  var lon = px / world * 360 - 180;
+  var yN = 1 - 2 * py / world;
+  var lat = Math.atan(Math.sinh(Math.PI * yN)) * 180 / Math.PI;
+  return [lat, lon];
+}
 // Turn one frame pair's pixel offsets into km/h vectors.
 function _fmVectorsFor(matches, lat, z, dtH) {
   var kmPerPx = _fmMetresPerPx(lat, z) / 1000, out = [];
@@ -169,7 +178,7 @@ function _fmVectorsFor(matches, lat, z, dtH) {
     out.push({
       vx: (m.dx * kmPerPx) / dtH,        // +x = east
       vy: (-m.dy * kmPerPx) / dtH,       // +y = north (screen y grows southward)
-      q: m.q
+      q: m.q, bx: m.bx, by: m.by
     });
   }
   return out;
@@ -209,7 +218,7 @@ async function estimateMotionFromFrames(lat, lon, opts) {
     grids.push(g);
     if (opts.onProgress) try { opts.onProgress(i + 1, use.length); } catch (e) {}
   }
-  var all = [], pairs = 0;
+  var all = [], pairs = 0, byBlock = {};
   for (var p = 0; p + 1 < grids.length; p++) {
     var A = grids[p], B = grids[p + 1];
     if (!A || !B) continue;
@@ -217,17 +226,34 @@ async function estimateMotionFromFrames(lat, lon, opts) {
     if (!(dtH > 0) || dtH > 1) continue;                       // a gap that big is not one step
     var matches = _fmBlockMatch(A.g, B.g, A.W, A.H);
     var vecs = _fmVectorsFor(matches, lat, z, dtH);
-    for (var v = 0; v < vecs.length; v++) all.push(vecs[v]);
+    for (var v = 0; v < vecs.length; v++) {
+      all.push(vecs[v]);
+      var key = vecs[v].bx + ',' + vecs[v].by;
+      (byBlock[key] = byBlock[key] || []).push(vecs[v]);
+    }
     pairs++;
   }
   var est = _fmAggregate(all);
   var ms = Date.now() - t0;
   if (!est) { console.log('[FrameMotion] no usable motion from ' + pairs + ' pair(s), ' + all.length + ' block vectors (' + ms + ' ms)'); return null; }
+  // Per-block median across the frame pairs, tagged with the block's real
+  // position. A cell 60 mi east can then use the motion measured THERE rather
+  // than the field average — which is the whole point of a field, and the only
+  // way a rotating system is ever described correctly.
+  var field = [];
+  for (var key in byBlock) {
+    var vs = byBlock[key];
+    var ll = _fmPxToLatLon(tx0 * 256 + vs[0].bx + _FM_BLOCK / 2, ty0 * 256 + vs[0].by + _FM_BLOCK / 2, z);
+    field.push({ lat: ll[0], lon: ll[1],
+      vx: _fmMedian(vs.map(function (v) { return v.vx; })),
+      vy: _fmMedian(vs.map(function (v) { return v.vy; })), n: vs.length });
+  }
+  est.field = field;
   est.pairs = pairs; est.frames = use.length; est.ms = ms; est.zoom = z; est.ts = Date.now();
   est.lat = lat; est.lon = lon;
   console.log('[FrameMotion] ' + est.direction + '° @ ' + est.speed + ' mph from ' + est.blocks +
               ' block vectors across ' + pairs + ' frame pair(s) — agreement ' + est.agreement +
-              ', confidence ' + est.confidence + ' (' + ms + ' ms)');
+              ', confidence ' + est.confidence + ', ' + est.field.length + ' field points (' + ms + ' ms)');
   return est;
 }
 // ---------------------------------------------------------------------------
@@ -242,6 +268,33 @@ function frameMotionMv() {
       && haversine(S.lat, S.lon, m.lat, m.lon) > 100) return null;    // estimated somewhere else
   if (!(m.speed >= 2) || !(m.confidence >= 0.2)) return null;
   return { direction: m.direction, speed: m.speed, confidence: m.confidence };
+}
+// Motion measured NEAR a given point. Takes the median of the nearest few
+// field vectors so one bad block cannot steer a cell, and falls back to the
+// field-wide answer when nothing was measured close enough.
+var _FM_LOCAL_MI = 60, _FM_LOCAL_K = 5;
+function frameMotionAt(lat, lon) {
+  var g = frameMotionMv();
+  if (!g) return null;
+  var m = S._frameMotion;
+  if (!m || !m.field || !m.field.length || lat == null || lon == null || typeof haversine !== 'function') return g;
+  var near = [];
+  for (var i = 0; i < m.field.length; i++) {
+    var f = m.field[i], d = haversine(lat, lon, f.lat, f.lon);
+    if (d <= _FM_LOCAL_MI) near.push({ d: d, vx: f.vx, vy: f.vy });
+  }
+  if (near.length < 2) return g;
+  near.sort(function (a, b) { return a.d - b.d; });
+  var k = near.slice(0, _FM_LOCAL_K);
+  var vx = _fmMedian(k.map(function (v) { return v.vx; }));
+  var vy = _fmMedian(k.map(function (v) { return v.vy; }));
+  var mag = Math.sqrt(vx * vx + vy * vy);
+  if (mag < 1) return g;
+  return {
+    direction: Math.round((Math.atan2(vx, vy) * 180 / Math.PI + 360) % 360),
+    speed: Math.round(mag * 0.621371),
+    confidence: g.confidence, local: true, from: k.length
+  };
 }
 var _FM_MIN_GAP_MS = 5 * 60000;
 function maybeStartFrameMotion(why) {
@@ -278,4 +331,5 @@ if (typeof window !== 'undefined') {
   window.estimateMotionFromFrames = estimateMotionFromFrames;
   window.maybeStartFrameMotion = maybeStartFrameMotion;
   window.frameMotionMv = frameMotionMv;
+  window.frameMotionAt = frameMotionAt;
 }

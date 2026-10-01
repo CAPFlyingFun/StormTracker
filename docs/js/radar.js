@@ -401,6 +401,19 @@ function stopRadarAnim(map){
     showRadarLayer(map);
   }
 }
+// v7.40: how deep each source is fetched BEFORE Leaflet starts magnifying.
+// Measured at the 932x430 design canvas, map zoom 11:
+//   nz8  -> z8 tiles drawn at 2048 css px = 8x magnification, 611 m per source px
+//   nz10 -> z10 tiles drawn at 512 css px = 2x magnification, 153 m per source px
+// The old nz8 was the whole reason NEXRAD looked blocky — one source pixel was
+// painted as an 8x8 screen block. It is not a smoothing problem: the app was
+// discarding detail it ALREADY fetched successfully, since runRadarScan has
+// always pulled this same cache at z9/z10/z11 for detection.
+// Stopping at 10 is deliberate — n0q's real resolution is ~250 m, so z10 already
+// oversamples the radar; z11 would double the tile count to draw the same
+// information. RainViewer stays lower: z8 is the deepest the scan path proves.
+const RADAR_MAX_NATIVE={nexrad:10,noaa:10,rainviewer:8};
+function radarMaxNative(src){return RADAR_MAX_NATIVE[src]||8}
 function scrubRadarAnim(map,idx){
   clearInterval(S._radarAnimTimer);
   S._radarAnimIdx=idx;
@@ -412,7 +425,7 @@ function showRadarAnimFrame(map,idx){
   if(!frames||!frames[idx])return;
   const frame=frames[idx];
   if(S.radarLayer){map.removeLayer(S.radarLayer);S.radarLayer=null}
-  const maxNZ=S._radarAnimSrc==='nexrad'?8:7;
+  const maxNZ=radarMaxNative(S._radarAnimSrc==='nexrad'?'nexrad':'rainviewer');
   S.radarLayer=L.tileLayer(frame.url,{opacity:0.7,maxZoom:11,maxNativeZoom:maxNZ}).addTo(map);
   if(S._showZones&&S._rawScanPts&&S._rawScanPts.length>0&&!S._radarOverlayVisible&&S._zoneOverlays&&S._zoneOverlays.length>0&&_shouldAutoHideRadar()&&map.hasLayer(S.radarLayer)){try{map.removeLayer(S.radarLayer)}catch(e){}}
   const t=new Date(frame.time*1000);
@@ -468,7 +481,7 @@ function showRadarLayer(map){
       _showRvLayer(map,lbl,btn,true);
     }else{
       let _noaaErrs=0;
-      S.radarLayer=L.tileLayer.wms(ep.base,{layers:ep.layer,format:'image/png',transparent:true,version:'1.1.1',opacity:0.7,maxZoom:11,maxNativeZoom:8}).addTo(map);
+      S.radarLayer=L.tileLayer.wms(ep.base,{layers:ep.layer,format:'image/png',transparent:true,version:'1.1.1',opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('noaa')}).addTo(map);
       S.radarLayer.on('load',()=>_radarSourceProved('noaa'));
       S.radarLayer.on('tileerror',()=>{
         if(S.radarSource!=='noaa')return;
@@ -485,13 +498,15 @@ function showRadarLayer(map){
     }
   }else if(S.radarSource==='nexrad'){
     let _nexErrs=0;
-    S.radarLayer=L.tileLayer(`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=${Date.now()}`,{opacity:0.7,maxZoom:11,maxNativeZoom:8}).addTo(map);
+    S.radarLayer=L.tileLayer(`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=${Date.now()}`,{opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('nexrad')}).addTo(map);
     // v7.22: a handful of tile errors means the composite is down, not that one
     // tile is missing — bench it and re-render through RainViewer.
     S.radarLayer.on('load',()=>_radarSourceProved('nexrad'));   // v7.23: overlay imagery also disarms the watchdog
     S.radarLayer.on('tileerror',()=>{
       if(S.radarSource!=='nexrad'||nexradBenched())return;
-      if(++_nexErrs<4)return;
+      // v7.40: was 4, when the layer only ever drew ~2 tiles. At nz10 the same
+      // viewport holds ~6, so 4 errors no longer means "the composite is down".
+      if(++_nexErrs<8)return;
       try{S.radarLayer.off('tileerror')}catch(e){}
       _markNexradBad();
       if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
@@ -519,7 +534,7 @@ function _showRvLayer(map,lbl,btn,isFallback){
     S.radarIdx=S.radarFrames.length-1;
     const frame=S.radarFrames[S.radarIdx];
     if(S.radarLayer){try{map.removeLayer(S.radarLayer)}catch(e){}S.radarLayer=null}
-    S.radarLayer=L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,{opacity:0.7,maxZoom:11,maxNativeZoom:7}).addTo(map);
+    S.radarLayer=L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,{opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('rainviewer')}).addTo(map);
     const t=new Date(frame.time*1000);
     const el=document.getElementById('radar-time');
     if(el)el.textContent=fmtClock(t);

@@ -3708,22 +3708,29 @@ function _scopeStatusStrip(){
       :((org&&org.forecast)||d.forecast?' · AREA FORECAST':'');
     rest='· IN '+(mins<60?mins+' MIN':_fmtRingOffset(mins).replace('+','').toUpperCase())+fromTxt;
     warm=true;
-  }else if(d.fcFirstMin!=null){
-    // v7.42: radar is healthy and shows nothing inbound, but the INNER forecast
-    // ring carries rain later in the span. Report that as what it is — a
-    // forecast — instead of letting it occupy the radar window list and come
-    // back out the other side dressed as an arriving cell.
-    const fm=Math.max(1,Math.round(d.fcFirstMin));
-    icon='🌤';
-    main='NO RAIN ON RADAR';
-    rest='· FORECAST '+_clock(d.fcFirstMin)
-        +' ('+(fm<60?fm+' MIN':_fmtRingOffset(fm).replace('+','').toUpperCase())+')'
-        +(nearTxt?' · NEAREST '+nearTxt:'');
-    warm=false;
   }else{
-    icon='☀️';
-    main='NO RAIN '+((typeof _rcSpanLabel==='function')?_rcSpanLabel(d.span||720).toUpperCase():'');
-    rest=nearTxt?'· NEAREST '+nearTxt:'';warm=false;
+    // v7.43: "NO RAIN ON RADAR" (v7.42) was plainly false — the dial can be
+    // covered in echoes and still land here, because what this branch actually
+    // means is that nothing is INBOUND. Say that, and qualify it: the nearest
+    // echo with which way it is going, or the radius we can honestly speak for
+    // when there is no echo at all.
+    const _rel=_rcNearestRelation(d.nearest);
+    const _relTxt=_rel?(_rel.receding?', MOVING AWAY':(_rel.closing?', CLOSING':', SLIDING PAST')):'';
+    const _scope=(S.scanRadius!=null)
+      ? (S.radarMetric?Math.round(S.scanRadius*1.609)+' KM':S.scanRadius+' MI')
+      : null;
+    main='NO RAIN INBOUND';
+    const bits=[];
+    if(nearTxt)bits.push('NEAREST '+nearTxt+_relTxt);
+    else if(_scope)bits.push('NOTHING ON RADAR WITHIN '+_scope);
+    if(d.fcFirstMin!=null){
+      const fm=Math.max(1,Math.round(d.fcFirstMin));
+      bits.push('FORECAST '+_clock(d.fcFirstMin)
+        +' ('+(fm<60?fm+' MIN':_fmtRingOffset(fm).replace('+','').toUpperCase())+')');
+    }
+    icon=(d.fcFirstMin!=null)?'🌤':'☀️';
+    rest=bits.length?'· '+bits.join(' · '):'';
+    warm=false;
   }
   const bg=warm?'rgba(250,204,21,0.07)':'rgba(0,229,255,0.06)';
   const bd=warm?'rgba(250,204,21,0.28)':'rgba(0,229,255,0.22)';

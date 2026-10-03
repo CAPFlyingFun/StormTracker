@@ -3114,7 +3114,16 @@ function _rainClockProject(){
   // the radar path drew anything, so live storms always win. Forecast wins are
   // tagged out.forecast so the renderer can label them "FORECAST" and word the
   // summary as a forecast rather than a live-radar nowcast.
-  if(!out.windows.length&&!out.rainingNow&&cellList.length===0&&haveHourly){
+  // v7.42: `cellList.length===0` means NOTHING IS INBOUND — it does not mean
+  // "no radar". With a sky full of echoes that are all steering away (exactly
+  // the Pensacola case: cells to the W/WNW under a 317 degree steering), radar
+  // has answered clearly — "nothing is coming at you" — and this fallback was
+  // still firing and overwriting out.windows/out.span, the structures reserved
+  // for real radar cells. The comment three lines up already promised it "never
+  // runs when the radar path drew anything"; !out.radarReady is what actually
+  // keeps that promise. Forecast rain still reaches the dial on its own INNER
+  // dashed ring (out.fcMinutes), which is built further down regardless.
+  if(!out.windows.length&&!out.rainingNow&&cellList.length===0&&haveHourly&&!out.radarReady){
     const nowMs=Date.now();
     const FC_FLOOR_MM=0.1; // measurable rain in the hour; below this is trace/noise
     const fcHours=[];
@@ -3186,6 +3195,14 @@ function _rainClockProject(){
     const tOut=Math.min(_fcSpan,Math.ceil(f.end));
     for(let t=tIn;t<=tOut;t++){if(f.dbz>out.fcMinutes[t])out.fcMinutes[t]=f.dbz}  // v6.89: any value >0 draws
   }
+  // v7.42: when radar is healthy but quiet, the strip still has something true
+  // to say — the inner ring's first forecast rain. Published separately from
+  // out.windows so forecast timing can never masquerade as a radar cell.
+  out.fcFirstMin=null;out.fcPeakDbz=0;
+  for(let t=0;t<out.fcMinutes.length;t++){
+    const v=out.fcMinutes[t];
+    if(v>0){if(out.fcFirstMin==null)out.fcFirstMin=t;if(v>out.fcPeakDbz)out.fcPeakDbz=v}
+  }
   // === v5.82: hold the dial blank until storm MOTION is known. On first load a
   // quick pre-winds-aloft scan can drop a transient echo inside the user's ~1.5 mi
   // hex (the rainOverUserNow oracle → "rain right over you · 1 mi ENE") that the
@@ -3209,6 +3226,7 @@ function _rainClockProject(){
     const _z=(out.span||_RC_TOTAL_MIN)+1;
     out.windows=[];out.minutes=new Array(_z).fill(0);out.fcMinutes=new Array(_z).fill(0);
     out.fcReady=false;out.nearest=null;out.rainingNow=false;out.totalMm=0;out.forecast=false;
+    out.fcFirstMin=null;out.fcPeakDbz=0;
   }
   out.ready=true;
   return out;
@@ -3690,6 +3708,18 @@ function _scopeStatusStrip(){
       :((org&&org.forecast)||d.forecast?' · AREA FORECAST':'');
     rest='· IN '+(mins<60?mins+' MIN':_fmtRingOffset(mins).replace('+','').toUpperCase())+fromTxt;
     warm=true;
+  }else if(d.fcFirstMin!=null){
+    // v7.42: radar is healthy and shows nothing inbound, but the INNER forecast
+    // ring carries rain later in the span. Report that as what it is — a
+    // forecast — instead of letting it occupy the radar window list and come
+    // back out the other side dressed as an arriving cell.
+    const fm=Math.max(1,Math.round(d.fcFirstMin));
+    icon='🌤';
+    main='NO RAIN ON RADAR';
+    rest='· FORECAST '+_clock(d.fcFirstMin)
+        +' ('+(fm<60?fm+' MIN':_fmtRingOffset(fm).replace('+','').toUpperCase())+')'
+        +(nearTxt?' · NEAREST '+nearTxt:'');
+    warm=false;
   }else{
     icon='☀️';
     main='NO RAIN '+((typeof _rcSpanLabel==='function')?_rcSpanLabel(d.span||720).toUpperCase():'');
@@ -3743,6 +3773,15 @@ function _scopeSummaryCells(){
     const dur=Math.max(1,Math.round(w0.endMin-w0.startMin));
     arrSub=(dur<60?dur+' min':_fmtRingOffset(dur).replace('+',''))+(d.forecast?' · forecast':' · of rain');
     arrCol='#facc15';
+  }
+  else if(d.fcFirstMin!=null){
+    // v7.42: no radar window, but the inner ring has forecast rain. Label the
+    // tile for what it is so it reads differently from a radar arrival.
+    const fm=Math.max(1,Math.round(d.fcFirstMin));
+    arrLab='Forecast rain';
+    arrVal=_clock(d.fcFirstMin);
+    arrSub=(fm<60?fm+' min':_fmtRingOffset(fm).replace('+',''))+' · inner ring';
+    arrCol='#7dd3fc';
   }
   let wVal='—',wSub='steering unknown',wCol='var(--text-muted)';
   if(typeof watchDirHint==='function'){

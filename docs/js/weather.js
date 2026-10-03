@@ -3478,20 +3478,23 @@ function renderRainClock(){
     // movement heading and the precip→user bearing > 0.3, i.e. within ~72°);
     // otherwise the rain is sliding past or receding and no ETA is honest.
     let etaTxt='';
-    if(!(data.windows&&data.windows.length)&&data.nearest.brg!=null){
-      const _mv=(typeof getSteeringMv==='function')?getSteeringMv():null;
-      if(_mv&&_mv.speed>=2){
-        const _toUser=(data.nearest.brg+180)%360;
-        const _cos=Math.cos((_mv.direction-_toUser)*Math.PI/180);
-        if(_cos>0.3){
-          const _h=data.nearest.mi/(_mv.speed*_cos);
-          if(_h>0.1){
-            const _t=_h<1?Math.round(_h*60)+' min':(Math.round(_h*10)/10)+' hrs';
-            etaTxt=` · ≈ ${_t} out at current storm speed`;
-          }
-        }else if(_cos<-0.3){
-          etaTxt=' · moving away';
+    const _rel=_rcNearestRelation(data.nearest);
+    if(_rel){
+      // The "how far out" ESTIMATE still only makes sense on an empty dial — with
+      // a radar window painted, the dial already answers the timing question.
+      // v7.41: but "moving away" is now said whenever it is true. The old gate
+      // suppressed it the moment ANY window existed, including a forecast-only
+      // window that says nothing about this cell — which is exactly the case
+      // where the reader most needs to know the nearest echo is leaving.
+      const _radarWindow=data.windows&&data.windows.length&&!data.forecast;
+      if(_rel.closing&&!_radarWindow&&!(data.windows&&data.windows.length)){
+        const _h=data.nearest.mi/_rel.speedToward;
+        if(_h>0.1){
+          const _t=_h<1?Math.round(_h*60)+' min':(Math.round(_h*10)/10)+' hrs';
+          etaTxt=` · ≈ ${_t} out at current storm speed`;
         }
+      }else if(_rel.receding){
+        etaTxt=' · moving away';
       }
     }
     sub=`<div style="font-size:0.7em;color:var(--text-secondary);text-align:center;margin-top:6px"><span style="color:var(--text-muted)">Nearest Precipitation:</span> <strong>${dStr}</strong> to the ${data.nearest.dir}${etaTxt}</div>`;
@@ -3607,6 +3610,34 @@ function renderRainClock(){
 // sonar. Turning the ring off in the sonar ⚙️ restores the classic two-card
 // layout. Runs only on renderRainClock (data refreshes), never per frame.
 // v6.89: the window that covers minute 0 — the rain currently overhead.
+// v7.41: one rule for "is the nearest precip actually coming at me". The same
+// cos test the Rain Clock headline has always used, lifted out so the Storm
+// Scope strip and tiles answer it identically instead of only the headline.
+// cos > 0 means the steering vector points from the precip TOWARD the user.
+function _rcNearestRelation(nearest){
+  if(!nearest||nearest.brg==null)return null;
+  const mv=(typeof getSteeringMv==='function')?getSteeringMv():null;
+  if(!mv||mv.direction==null||!(mv.speed>=2))return null;
+  const toUser=(nearest.brg+180)%360;
+  const cos=Math.cos((mv.direction-toUser)*Math.PI/180);
+  return {cos,closing:cos>0.3,receding:cos<-0.3,speedToward:mv.speed*cos};
+}
+// v7.41: where the rain in THIS window is actually coming from. The window owns
+// its cells, so ask them — never the nearest radar pixel, which may be a
+// different cell entirely, or be sliding away while this window is forecast rain
+// that has no direction at all.
+function _rcWindowOrigin(w){
+  if(!w||!Array.isArray(w.cells)||!w.cells.length)return null;
+  if(w.cells.some(c=>c&&c.forecast))return {forecast:true};
+  let best=null;
+  for(const c of w.cells){
+    if(!c||c.dist==null||c.bearing==null)continue;
+    if(!best||c.centerMin<best.centerMin)best=c;   // the one arriving FIRST
+  }
+  if(!best)return null;
+  return {mi:best.dist,brg:best.bearing,forecast:false,
+          dir:(typeof degToDir==='function')?degToDir(best.bearing):''};
+}
 function _scopeNowWindow(d){
   if(!d||!d.windows)return null;
   return d.windows.find(w=>w.startMin<=0&&w.endMin>=0)||null;
@@ -3645,8 +3676,19 @@ function _scopeStatusStrip(){
     const mins=Math.max(1,Math.round(w0.startMin));
     icon=d.forecast?'🌦':'🌧';
     main='RAIN '+_clock(w0.startMin);
-    rest='· IN '+(mins<60?mins+' MIN':_fmtRingOffset(mins).replace('+','').toUpperCase())
-        +(nearTxt?' · '+nearTxt:'');
+    // v7.41: this line used to append `nearTxt` — the nearest radar pixel — to an
+    // arrival time that frequently came from somewhere else entirely. On a
+    // forecast-sourced dial the time is an hourly precipitation forecast while
+    // nearTxt is a radar cell that can be receding, so the strip read
+    // "RAIN 12:59 · IN 30 MIN · 13 MI WNW" for rain 13 mi WNW that was steering
+    // AWAY at 317 degrees — two unrelated facts welded into one false sentence,
+    // contradicting the Watch tile beside it. Ask the window where ITS rain
+    // comes from instead.
+    const org=_rcWindowOrigin(w0);
+    const fromTxt=(org&&!org.forecast&&org.mi!=null)
+      ?' · '+(S.radarMetric?Math.round(org.mi*1.609)+' KM':Math.round(org.mi)+' MI')+' '+org.dir
+      :((org&&org.forecast)||d.forecast?' · AREA FORECAST':'');
+    rest='· IN '+(mins<60?mins+' MIN':_fmtRingOffset(mins).replace('+','').toUpperCase())+fromTxt;
     warm=true;
   }else{
     icon='☀️';
@@ -3675,7 +3717,12 @@ function _scopeSummaryCells(){
     +`<div style="font-size:${val.length>11?'0.68em':'0.84em'};font-weight:800;line-height:1.25;margin-top:3px;font-family:var(--font-mono);color:${col}">${val}</div>`
     +`<div style="font-size:0.52em;color:var(--text-secondary);line-height:1.3;margin-top:2px">${sub||'&nbsp;'}</div></div>`;
   const nearVal=d.nearest?(S.radarMetric?Math.round(d.nearest.mi*1.609)+' km':Math.round(d.nearest.mi)+' mi'):'—';
-  const nearSub=d.nearest?('to the '+d.nearest.dir):'nothing in range';
+  // v7.41: "13 mi WNW" beside a Watch tile reading SE is not wrong, but it is
+  // unreadable without knowing which way that precip is going. Say so.
+  const _rel=_rcNearestRelation(d.nearest);
+  const nearSub=d.nearest
+    ?('to the '+d.nearest.dir+(_rel?(_rel.receding?' · moving away':(_rel.closing?' · closing':' · sliding past')):''))
+    :'nothing in range';
   const nearCol=d.nearest?(d.nearest.mi<=15?'#fb923c':'#4ade80'):'var(--text-muted)';
   let arrLab='Arrival window',arrVal='none',arrSub='nothing on the dial',arrCol='var(--text-muted)';
   if(d.rainingNow){

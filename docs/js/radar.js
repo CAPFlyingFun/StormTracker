@@ -413,7 +413,73 @@ function stopRadarAnim(map){
 // oversamples the radar; z11 would double the tile count to draw the same
 // information. RainViewer stays lower: z8 is the deepest the scan path proves.
 const RADAR_MAX_NATIVE={nexrad:10,noaa:10,rainviewer:8};
-function radarMaxNative(src){return RADAR_MAX_NATIVE[src]||8}
+// The FLOOR each source is known-good at. Depth above this is an optimistic
+// ask: providers publish zoom limits, change them, and differ by product, and
+// none of that is knowable from here. So rather than hardcode a number we
+// cannot verify, ask deep and BACK OFF one level whenever tiles are refused —
+// then remember the answer. v7.44, after Esri started refusing a zoom the
+// basemap had been requesting happily ("zoom level unsupported").
+const RADAR_MIN_NATIVE={nexrad:8,noaa:8,rainviewer:7};
+// Learned per-source depth caps, kept for a week so a provider that raises its
+// limit back is picked up again rather than permanently written off.
+const _DEPTH_CAP_KEY='st_depthCap',_DEPTH_CAP_TTL=7*86400000;
+function _depthCaps(){
+  try{const m=JSON.parse(localStorage.getItem(_DEPTH_CAP_KEY)||'{}')||{};
+      let dirty=false;const now=Date.now();
+      for(const k in m){if(!m[k]||m[k].at+_DEPTH_CAP_TTL<now){delete m[k];dirty=true}}
+      if(dirty)try{localStorage.setItem(_DEPTH_CAP_KEY,JSON.stringify(m))}catch(e){}
+      return m;
+  }catch(e){return{}}
+}
+function depthCapGet(key){const c=_depthCaps()[key];return c?c.z:null}
+function depthCapSet(key,z){
+  try{const m=_depthCaps();m[key]={z,at:Date.now()};
+      localStorage.setItem(_DEPTH_CAP_KEY,JSON.stringify(m));}catch(e){}
+}
+function radarMaxNative(src){
+  const want=RADAR_MAX_NATIVE[src]||8;
+  const learned=depthCapGet('radar:'+src);
+  return (learned!=null&&learned<want)?learned:want;
+}
+function radarMinNative(src){return RADAR_MIN_NATIVE[src]||8}
+// Shared handler: a tile refusal while we are asking ABOVE the known-good floor
+// is a depth problem, not an outage. Step down one level, remember it, redraw,
+// and report that we handled it so the caller does not bench the whole source.
+function depthBackoff(layer,key,floor){
+  if(!layer||!layer.options)return false;
+  const cur=layer.options.maxNativeZoom;
+  if(cur==null||cur<=floor)return false;
+  const next=cur-1;
+  layer.options.maxNativeZoom=next;
+  depthCapSet(key,next);
+  console.warn('['+key+'] tiles refused at z'+cur+' — backing off to z'+next+' (floor z'+floor+')');
+  try{layer.redraw()}catch(e){}
+  return true;
+}
+// Watch a tile layer and decide, once the dust settles, whether a burst of tile
+// errors means "too deep" or "this source is down".
+//
+// Counting errors does not work: at shallow depth the viewport holds only ~2
+// tiles, so a threshold of 3 can NEVER be reached — the layer would sit there
+// blank, never stepping down and never failing over. (Caught by the headless
+// back-off test, which is why it exists.) Instead: after the first error, wait
+// a beat; if ANY tile rendered in that window this is partial coverage, not an
+// outage, and we leave it alone. If nothing rendered, step down a zoom — and
+// only when already at the floor call it an outage.
+function attachDepthGuard(layer,key,floor,onExhausted){
+  let errs=0,oks=0,timer=null;
+  const settle=()=>{
+    timer=null;
+    const hadErr=errs>0,hadOk=oks>0;
+    errs=0;oks=0;
+    if(!hadErr||hadOk)return;                 // nothing wrong, or tiles are coming through
+    if(depthBackoff(layer,key,floor))return;  // asking too deep → shallower, try again
+    if(typeof onExhausted==='function')onExhausted();
+  };
+  layer.on('tileload',()=>{oks++});
+  layer.on('tileerror',()=>{errs++;if(!timer)timer=setTimeout(settle,1500)});
+}
+if(typeof window!=='undefined'){window.depthBackoff=depthBackoff;window.depthCapGet=depthCapGet;window.depthCapSet=depthCapSet;window.attachDepthGuard=attachDepthGuard;}
 function scrubRadarAnim(map,idx){
   clearInterval(S._radarAnimTimer);
   S._radarAnimIdx=idx;
@@ -497,17 +563,15 @@ function showRadarLayer(map){
       if(el)el.textContent=fmtClock(new Date());
     }
   }else if(S.radarSource==='nexrad'){
-    let _nexErrs=0;
     S.radarLayer=L.tileLayer(`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=${Date.now()}`,{opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('nexrad')}).addTo(map);
-    // v7.22: a handful of tile errors means the composite is down, not that one
-    // tile is missing — bench it and re-render through RainViewer.
     S.radarLayer.on('load',()=>_radarSourceProved('nexrad'));   // v7.23: overlay imagery also disarms the watchdog
-    S.radarLayer.on('tileerror',()=>{
+    // v7.44: try a zoom step shallower before writing NEXRAD off. v7.40 raised
+    // this layer from z8 to z10 on reasoning I could not verify from here — if
+    // the cache refuses z10 for n0q, the old handler read that as "NEXRAD is
+    // down" and dropped the whole US to RainViewer, a far bigger downgrade than
+    // drawing one zoom shallower.
+    attachDepthGuard(S.radarLayer,'radar:nexrad',radarMinNative('nexrad'),()=>{
       if(S.radarSource!=='nexrad'||nexradBenched())return;
-      // v7.40: was 4, when the layer only ever drew ~2 tiles. At nz10 the same
-      // viewport holds ~6, so 4 errors no longer means "the composite is down".
-      if(++_nexErrs<8)return;
-      try{S.radarLayer.off('tileerror')}catch(e){}
       _markNexradBad();
       if(typeof toast==='function'&&(!S._srcFallbackToastAt||Date.now()-S._srcFallbackToastAt>600000)){
         S._srcFallbackToastAt=Date.now();

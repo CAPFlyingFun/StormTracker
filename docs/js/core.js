@@ -1220,22 +1220,34 @@ function applyBasemap(map,opts){
   const keyStr=_bmKey(id);
   const maxZoom=opts.maxZoom||19;
   (def.tiles||[]).forEach((tpl,i)=>{
+    // v7.44: honour anything we have already learned about this service's real
+    // depth. Esri's published LOD is not a promise — it changed under us, and
+    // "zoom level unsupported" was being read as a dead basemap.
+    const _bmKeyId='bm:'+id+':'+i;
+    const _bmWant=Math.min(maxZoom,def.maxNative||maxZoom);
+    const _bmLearned=(typeof depthCapGet==='function')?depthCapGet(_bmKeyId):null;
     const layer=L.tileLayer(_bmUrl(tpl,keyStr),{
       maxZoom:maxZoom,
-      maxNativeZoom:Math.min(maxZoom,def.maxNative||maxZoom),
+      maxNativeZoom:(_bmLearned!=null&&_bmLearned<_bmWant)?_bmLearned:_bmWant,
       subdomains:'abc',
       opacity:(id==='terrain'&&i===0)?0.9:1,
       className:def.dim?'bm-dim':'',
       attribution:def.attrib||''
     });
-    let errs=0;
-    layer.on('tileerror',()=>{
-      if(basemapChoice()!=='auto')return;      // a manual pick is the user's call
-      if(++errs<3)return;                       // one bad tile isn't an outage
-      layer.off('tileerror');
-      _bmMarkBad(id);
-      try{applyBasemap(map,opts)}catch(e){}
-    });
+    // v7.44: a refusal while we are asking deeper than z10 is almost always a
+    // ZOOM limit, not an outage — step down a level and keep the provider. Esri
+    // started refusing a zoom its published LOD said it served, and the old
+    // handler read that as a dead basemap and blacklisted it for 12 hours.
+    // The guard steps down first and only calls it an outage at the floor; it
+    // runs even on a manually pinned basemap, because picking "Dark" is a choice
+    // of provider, not a demand for a zoom it will not serve.
+    if(typeof attachDepthGuard==='function'){
+      attachDepthGuard(layer,_bmKeyId,10,()=>{
+        if(basemapChoice()!=='auto')return;    // a manual pick is the user's call
+        _bmMarkBad(id);
+        try{applyBasemap(map,opts)}catch(e){}
+      });
+    }
     layer.addTo(map);
     try{layer.bringToBack()}catch(e){}
     map._bmLayers.push(layer);

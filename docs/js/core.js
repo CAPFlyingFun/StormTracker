@@ -1148,32 +1148,44 @@ const BASEMAPS={
   // Leaflet upscale past it (which is the behaviour anyway above maxNative).
   dark:{label:'Dark',maxNative:15,
     tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
-    attrib:'Esri, HERE, Garmin, © OpenStreetMap contributors'},
+    attrib:'Esri, HERE, Garmin, © OpenStreetMap contributors',
+    licence:{name:'ODbL',url:'https://www.openstreetmap.org/copyright'}},
   terrain:{label:'Terrain',maxNative:15,
     tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
            'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'],
-    attrib:'Esri, USGS, NOAA, © OpenStreetMap contributors'},
+    attrib:'Esri, USGS, NOAA, © OpenStreetMap contributors',
+    licence:{name:'ODbL',url:'https://www.openstreetmap.org/copyright'}},
   satellite:{label:'Satellite',maxNative:17,
     tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
            'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
     attrib:'Esri, Maxar, Earthstar Geographics'},
   stadia:{label:'Stadia',maxNative:20,keyStore:'st_stadiaKey',keyOptional:true,
     tiles:['https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png'],
-    attrib:'© Stadia Maps, © OpenMapTiles, © OpenStreetMap contributors'},
+    attrib:'© Stadia Maps, © OpenMapTiles, © OpenStreetMap contributors',
+    licence:{name:'ODbL',url:'https://www.openstreetmap.org/copyright'}},
   carto:{label:'CARTO',maxNative:19,keyStore:'st_cartoKey',
     tiles:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
-    attrib:'© CARTO, © OpenStreetMap contributors'},
-  // v7.45: the street-level option. Esri's Canvas styles stop around z15-16 and
-  // carry almost no road detail when you are placing a pin on a driveway, which
-  // is exactly what the location picker is for. OSM renders roads, names and
-  // addresses to z19 and needs no key. Dimmed to sit inside the dark app.
-  // NOTE: tile.openstreetmap.org is a donated, volunteer-run service. Its usage
-  // policy is fine with an app this size but explicitly not with a large
-  // userbase — if StormTracker ever grows, move to the CARTO or Stadia key
-  // (both already supported above) rather than leaning harder on OSM.
-  osm:{label:'Streets',maxNative:19,dim:true,
-    tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    attrib:'© OpenStreetMap contributors'},
+    attrib:'© CARTO, © OpenStreetMap contributors',
+    licence:{name:'ODbL',url:'https://www.openstreetmap.org/copyright'}},
+  // v7.47: the street-level option — Esri's Canvas styles carry almost no road
+  // detail at the zoom where you are placing a pin on a driveway, which is what
+  // the location picker is for.
+  //
+  // v7.45 pointed this at tile.openstreetmap.org. That was wrong. The OSMF
+  // copyright page states plainly: "Although OpenStreetMap is open data, we
+  // cannot provide a free-of-charge map API or map tiles for third-parties."
+  // Their tile servers are donated infrastructure for OSM's own site, not a CDN
+  // for other people's apps, and a published PWA is exactly the third party they
+  // mean. The DATA is free; their SERVING of it is not on offer.
+  //
+  // So this now draws from Esri's World Street Map — a service meant to be
+  // consumed by third parties, keyless, already the vendor the rest of this file
+  // depends on. It is OSM-derived in many regions, so the OSM credit and the
+  // ODbL link below are still required, and are still given.
+  osm:{label:'Streets',maxNative:17,dim:true,
+    tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'],
+    attrib:'Esri, HERE, Garmin, USGS, NGA, © OpenStreetMap contributors',
+    licence:{name:'ODbL',url:'https://www.openstreetmap.org/copyright'}},
   // Auto-only backstop, and a deliberately DIFFERENT vendor: if Esri's legacy
   // tiled services are ever withdrawn they all go together, so the fallback has
   // to come from somewhere else entirely. USGS National Map is free, keyless and
@@ -1255,7 +1267,14 @@ function applyBasemap(map,opts){
       subdomains:'abc',
       opacity:(id==='terrain'&&i===0)?0.9:1,
       className:def.dim?'bm-dim':'',
-      attribution:def.attrib||''
+      // Leaflet's own control (the location-picker map) renders attribution as
+      // HTML, so the ODbL link belongs here too — the radar map builds its own
+      // line in _bmSyncAttrib. Both halves of the licence condition, both maps.
+      attribution:def.attrib
+        ? def.attrib+(def.licence&&def.licence.url
+            ? ' · <a href="'+def.licence.url+'" target="_blank" rel="noopener noreferrer">'+(def.licence.name||'licence')+'</a>'
+            : '')
+        : ''
     });
     // v7.44: a refusal while we are asking deeper than z10 is almost always a
     // ZOOM limit, not an outage — step down a level and keep the provider. Esri
@@ -1281,11 +1300,30 @@ function applyBasemap(map,opts){
 // Attribution is a licence condition for every provider here, and the radar map
 // runs with Leaflet's own attribution control disabled, so it gets its own line
 // under the map instead.
+// v7.47: ODbL asks for two things, not one — credit OpenStreetMap AND make
+// clear the data is under the Open Database Licence, normally by linking to
+// openstreetmap.org/copyright. This line only ever did the first half: it set
+// textContent, so a link was impossible and the licence went unnamed. Built
+// from DOM nodes rather than innerHTML — these are our own constants, but an
+// attribution line is not worth an HTML sink.
 function _bmSyncAttrib(){
   const el=document.getElementById('basemap-attrib');
   if(!el)return;
   const def=BASEMAPS[basemapResolve()]||{};
-  el.textContent=def.attrib?('Map: '+def.attrib):'';
+  while(el.firstChild)el.removeChild(el.firstChild);
+  if(!def.attrib)return;
+  el.appendChild(document.createTextNode('Map: '+def.attrib));
+  if(def.licence&&def.licence.url){
+    el.appendChild(document.createTextNode(' · '));
+    const a=document.createElement('a');
+    a.href=def.licence.url;
+    a.target='_blank';
+    a.rel='noopener noreferrer';
+    a.textContent=def.licence.name||'licence';
+    a.style.color='inherit';
+    a.style.textDecoration='underline';
+    el.appendChild(a);
+  }
 }
 function setBasemapChoice(id){
   if(!BASEMAPS[id])return;

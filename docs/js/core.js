@@ -1268,13 +1268,9 @@ function applyBasemap(map,opts){
       opacity:(id==='terrain'&&i===0)?0.9:1,
       className:def.dim?'bm-dim':'',
       // Leaflet's own control (the location-picker map) renders attribution as
-      // HTML, so the ODbL link belongs here too — the radar map builds its own
-      // line in _bmSyncAttrib. Both halves of the licence condition, both maps.
-      attribution:def.attrib
-        ? def.attrib+(def.licence&&def.licence.url
-            ? ' · <a href="'+def.licence.url+'" target="_blank" rel="noopener noreferrer">'+(def.licence.name||'licence')+'</a>'
-            : '')
-        : ''
+      // HTML; the radar map builds its own line in _bmSyncAttrib. Same credit,
+      // same linked name, both maps.
+      attribution:_bmAttribHtml(def)
     });
     // v7.44: a refusal while we are asking deeper than z10 is almost always a
     // ZOOM limit, not an outage — step down a level and keep the provider. Esri
@@ -1300,30 +1296,53 @@ function applyBasemap(map,opts){
 // Attribution is a licence condition for every provider here, and the radar map
 // runs with Leaflet's own attribution control disabled, so it gets its own line
 // under the map instead.
-// v7.47: ODbL asks for two things, not one — credit OpenStreetMap AND make
-// clear the data is under the Open Database Licence, normally by linking to
-// openstreetmap.org/copyright. This line only ever did the first half: it set
-// textContent, so a link was impossible and the licence went unnamed. Built
-// from DOM nodes rather than innerHTML — these are our own constants, but an
-// attribution line is not worth an HTML sink.
+// ODbL asks for two things — credit OpenStreetMap, and make clear the data is
+// under the Open Database Licence. v7.47 did that with a separate "· ODbL"
+// chip bolted onto the end. v7.48 does what OSM's own attribution guidelines
+// actually recommend: make the NAME the link, pointed at the copyright page,
+// which is where the licence is explained. One link, no bolted-on chip, and
+// still both halves of the condition.
+const _OSM_TOKEN='OpenStreetMap';
+// Build the attribution as DOM nodes with the OSM name linked in place. These
+// are our own constants, but an attribution line is not worth an HTML sink.
+function _bmAttribNodes(def,doc){
+  const frag=doc.createDocumentFragment();
+  const txt=def.attrib||'';
+  const url=def.licence&&def.licence.url;
+  const i=url?txt.indexOf(_OSM_TOKEN):-1;
+  if(i<0){if(txt)frag.appendChild(doc.createTextNode(txt));return frag}
+  if(i>0)frag.appendChild(doc.createTextNode(txt.slice(0,i)));
+  const a=doc.createElement('a');
+  a.href=url;
+  a.target='_blank';
+  a.rel='noopener noreferrer';
+  a.textContent=_OSM_TOKEN;
+  a.title='OpenStreetMap data, Open Database Licence (ODbL)';
+  a.style.color='inherit';
+  a.style.textDecoration='underline';
+  frag.appendChild(a);
+  const rest=txt.slice(i+_OSM_TOKEN.length);
+  if(rest)frag.appendChild(doc.createTextNode(rest));
+  return frag;
+}
+// The same thing as an HTML string, for Leaflet's own attribution control
+// (the location-picker map), which renders HTML rather than taking nodes.
+function _bmAttribHtml(def){
+  const txt=def.attrib||'';
+  const url=def.licence&&def.licence.url;
+  if(!url||txt.indexOf(_OSM_TOKEN)<0)return txt;
+  return txt.replace(_OSM_TOKEN,
+    '<a href="'+url+'" target="_blank" rel="noopener noreferrer"'
+    +' title="OpenStreetMap data, Open Database Licence (ODbL)">'+_OSM_TOKEN+'</a>');
+}
 function _bmSyncAttrib(){
   const el=document.getElementById('basemap-attrib');
   if(!el)return;
   const def=BASEMAPS[basemapResolve()]||{};
   while(el.firstChild)el.removeChild(el.firstChild);
   if(!def.attrib)return;
-  el.appendChild(document.createTextNode('Map: '+def.attrib));
-  if(def.licence&&def.licence.url){
-    el.appendChild(document.createTextNode(' · '));
-    const a=document.createElement('a');
-    a.href=def.licence.url;
-    a.target='_blank';
-    a.rel='noopener noreferrer';
-    a.textContent=def.licence.name||'licence';
-    a.style.color='inherit';
-    a.style.textDecoration='underline';
-    el.appendChild(a);
-  }
+  el.appendChild(document.createTextNode('Map: '));
+  el.appendChild(_bmAttribNodes(def,document));
 }
 function setBasemapChoice(id){
   if(!BASEMAPS[id])return;

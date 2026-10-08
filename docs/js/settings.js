@@ -507,6 +507,7 @@ function setScanRange(v){
   if(typeof scanRadarForStorms==='function')scanRadarForStorms();
 }
 function syncSettingsPanel(){
+  try{if(typeof syncUsRadarBtns==='function')syncUsRadarBtns()}catch(e){}
   syncAISettings();
   syncUnitSelects();
   syncGaugeStyleBtns();

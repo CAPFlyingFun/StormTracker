@@ -6,6 +6,49 @@
 function isUSLocation(lat,lon){
   return lat>=24&&lat<=50&&lon>=-125&&lon<=-66;
 }
+// v7.51: "US location weather radar override". A US user can make RainViewer
+// the default instead of NEXRAD. It only ever applies INSIDE NEXRAD coverage:
+// outside the US there is no NEXRAD to choose, so RainViewer wins regardless
+// of this setting. Both location paths (geo.js) ask this one function, so the
+// launch fix and a typed/picked location can never disagree.
+function usRadarPref(){
+  try{return localStorage.getItem('st_usRadar')==='rainviewer'?'rainviewer':'nexrad'}catch(e){return 'nexrad'}
+}
+function defaultRadarSource(lat,lon){
+  if(lat==null||lon==null||!isUSLocation(lat,lon))return 'rainviewer';
+  return usRadarPref();
+}
+function syncUsRadarBtns(){
+  const pref=usRadarPref();
+  ['nexrad','rainviewer'].forEach(id=>{
+    const b=document.getElementById('usr-'+id);
+    if(!b)return;
+    const on=id===pref;
+    b.style.background=on?'rgba(0,229,255,0.15)':'rgba(255,255,255,0.04)';
+    b.style.borderColor=on?'var(--accent-cyan)':'var(--border-subtle)';
+    b.style.color=on?'var(--accent-cyan)':'var(--text-muted)';
+  });
+  const st=document.getElementById('usr-status');
+  if(st){
+    const inUS=(S.lat!=null&&S.lon!=null&&isUSLocation(S.lat,S.lon));
+    st.textContent=(S.lat==null)?'':inUS
+      ?('📍 You are in NEXRAD coverage — using '+(pref==='nexrad'?'NEXRAD':'RainViewer')+'.')
+      :'📍 You are outside NEXRAD coverage — using RainViewer.';
+  }
+}
+function setUsRadarPref(v){
+  const want=(v==='rainviewer')?'rainviewer':'nexrad';
+  try{localStorage.setItem('st_usRadar',want)}catch(e){}
+  syncUsRadarBtns();
+  // Apply now if it changes what is on screen. Outside the US nothing changes.
+  if(S.lat==null||!isUSLocation(S.lat,S.lon)){
+    if(typeof toast==='function')toast('Saved — applies at US locations');
+    return;
+  }
+  const onRv=S.radarSource==='rainviewer';       // 'nexrad' and its 'noaa' fallback both count as NEXRAD
+  if((want==='rainviewer')!==onRv&&S.map&&typeof toggleRadarSource==='function')toggleRadarSource(S.map);
+}
+if(typeof window!=='undefined'){window.setUsRadarPref=setUsRadarPref;window.defaultRadarSource=defaultRadarSource;}
 function isNWSCoverage(lat,lon){
   if(lat>=24&&lat<=50&&lon>=-125&&lon<=-66)return true;
   if(lat>=51&&lat<=72&&lon>=-180&&lon<=-129)return true;

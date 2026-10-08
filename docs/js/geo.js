@@ -669,7 +669,7 @@ function showHdScanDialog(){
     document.getElementById('location-input').value=name;
     S.station=null;S.stationId=null;S._stationSource=null;S.stormMovement=null;S._windCache=null;S._aloftData=null;
     S._locReqId=(S._locReqId||0)+1; // HD target is a real location change: invalidate any in-flight winds-aloft gate
-    S.radarSource=isUSLocation(lat,lon)?'nexrad':'rainviewer';
+    S.radarSource=(typeof defaultRadarSource==='function')?defaultRadarSource(lat,lon):(isUSLocation(lat,lon)?'nexrad':'rainviewer');   // v7.51: honours the US override
     if(typeof armRadarWatchdog==='function')armRadarWatchdog(lat,lon);   // v7.23
     S.storms=[];if(typeof bumpStormScanId==='function')bumpStormScanId();S._topStorms=[];S._topStormAnalysis={inbound:[],overhead:[],nearby:[],allWithEta:[]};S._rawScanPts=[];S._sonarClusteredPts=[];S._sonarTotalSwept=0;S._sonarSweepAngle=0;S._approachData=null;S._arrowCells=[];S._airportDataCache=null;clearStormZones();   // v6.57 (QW9): stale-city airport list cleared on location change
     try{localStorage.setItem('st_loc',JSON.stringify({lat,lon,name}))}catch(e){}
@@ -716,7 +716,7 @@ function setLoc(lat,lon,name,opts){
   document.getElementById('status-dot').classList.add('live');
   document.getElementById('status-text').textContent='Loading · '+S.locName;
   S.station=null;S.stationId=null;S._stationSource=null;S.stormMovement=null;S._windCache=null;S._aloftData=null;
-  S.radarSource=isUSLocation(lat,lon)?'nexrad':'rainviewer';
+  S.radarSource=(typeof defaultRadarSource==='function')?defaultRadarSource(lat,lon):(isUSLocation(lat,lon)?'nexrad':'rainviewer');   // v7.51: honours the US override
   if(typeof armRadarWatchdog==='function')armRadarWatchdog(lat,lon);   // v7.23: 10 s clock from the location fix
   updateNavForLocation();
   if(S.map){

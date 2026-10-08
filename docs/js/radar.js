@@ -412,21 +412,34 @@ function stopRadarAnim(map){
 // Stopping at 10 is deliberate — n0q's real resolution is ~250 m, so z10 already
 // oversamples the radar; z11 would double the tile count to draw the same
 // information. RainViewer stays lower: z8 is the deepest the scan path proves.
-// v7.46: RainViewer was pinned to z8 while NEXRAD drew at z10, so switching
-// source quietly quadrupled the magnification — 8x vs 2x, 611 m vs 153 m per
-// source pixel. That is the "NEXRAD zooms close, RainViewer doesn't" the owner
-// reported. The z8 figure was never RainViewer's limit, only the deepest the
-// SCAN path happens to request (radiusMi<=30?8:7), which says nothing about
-// what the tile cache serves. It asks for z10 now, and the depth guard below
-// walks it back if the cache disagrees.
-const RADAR_MAX_NATIVE={nexrad:10,noaa:10,rainviewer:10};
+// v7.49: back to z8, the value that ran for years before v7.40.
+//
+// The device finally showed what was happening: tiles reading "Zoom Level Not
+// Supported", rendered as IMAGES across the map. That is the Iowa State cache
+// answering HTTP 200 with a picture of an error rather than failing the
+// request — so Leaflet fires tileLOAD, the depth guard added in v7.44 never
+// runs, and the map fills with error text while the app believes every tile
+// arrived fine.
+//
+// v7.40 raised this from 8 to 10 and v7.46 took RainViewer with it, both on my
+// inference that the cache served those zooms. It does not, and I had no way
+// to check: every tile host is egress-blocked from the sandbox, so "the scan
+// path requests z9-z11" was the only evidence I had, and a scan requesting a
+// zoom is not the same as a cache serving it. The screenshots are the first
+// real measurement any of this has had.
+//
+// 8 is the only depth with years of evidence behind it. Going deeper needs the
+// app to probe on-device, not another inference from here.
+const RADAR_MAX_NATIVE={nexrad:8,noaa:8,rainviewer:8};
 // The FLOOR each source is known-good at. Depth above this is an optimistic
 // ask: providers publish zoom limits, change them, and differ by product, and
 // none of that is knowable from here. So rather than hardcode a number we
 // cannot verify, ask deep and BACK OFF one level whenever tiles are refused —
 // then remember the answer. v7.44, after Esri started refusing a zoom the
 // basemap had been requesting happily ("zoom level unsupported").
-const RADAR_MIN_NATIVE={nexrad:8,noaa:8,rainviewer:7};
+// Floors: one step below the asked depth, so a provider that refuses over HTTP
+// can still be walked down by attachDepthGuard.
+const RADAR_MIN_NATIVE={nexrad:7,noaa:7,rainviewer:7};
 // Learned per-source depth caps, kept for a week so a provider that raises its
 // limit back is picked up again rather than permanently written off.
 const _DEPTH_CAP_KEY='st_depthCap',_DEPTH_CAP_TTL=7*86400000;

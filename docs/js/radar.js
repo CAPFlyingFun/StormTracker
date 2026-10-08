@@ -412,7 +412,14 @@ function stopRadarAnim(map){
 // Stopping at 10 is deliberate — n0q's real resolution is ~250 m, so z10 already
 // oversamples the radar; z11 would double the tile count to draw the same
 // information. RainViewer stays lower: z8 is the deepest the scan path proves.
-const RADAR_MAX_NATIVE={nexrad:10,noaa:10,rainviewer:8};
+// v7.46: RainViewer was pinned to z8 while NEXRAD drew at z10, so switching
+// source quietly quadrupled the magnification — 8x vs 2x, 611 m vs 153 m per
+// source pixel. That is the "NEXRAD zooms close, RainViewer doesn't" the owner
+// reported. The z8 figure was never RainViewer's limit, only the deepest the
+// SCAN path happens to request (radiusMi<=30?8:7), which says nothing about
+// what the tile cache serves. It asks for z10 now, and the depth guard below
+// walks it back if the cache disagrees.
+const RADAR_MAX_NATIVE={nexrad:10,noaa:10,rainviewer:10};
 // The FLOOR each source is known-good at. Depth above this is an optimistic
 // ask: providers publish zoom limits, change them, and differ by product, and
 // none of that is knowable from here. So rather than hardcode a number we
@@ -491,8 +498,13 @@ function showRadarAnimFrame(map,idx){
   if(!frames||!frames[idx])return;
   const frame=frames[idx];
   if(S.radarLayer){map.removeLayer(S.radarLayer);S.radarLayer=null}
-  const maxNZ=radarMaxNative(S._radarAnimSrc==='nexrad'?'nexrad':'rainviewer');
+  const _animSrc=(S._radarAnimSrc==='nexrad')?'nexrad':'rainviewer';
+  const maxNZ=radarMaxNative(_animSrc);
   S.radarLayer=L.tileLayer(frame.url,{opacity:0.7,maxZoom:11,maxNativeZoom:maxNZ}).addTo(map);
+  // v7.46: the loop builds a fresh layer per frame, so it needs the guard too —
+  // otherwise scrubbing would re-ask a depth the still view had already learned
+  // was too deep. The learned cap is shared by key, so one lesson covers both.
+  attachDepthGuard(S.radarLayer,'radar:'+_animSrc,radarMinNative(_animSrc),()=>{});
   if(S._showZones&&S._rawScanPts&&S._rawScanPts.length>0&&!S._radarOverlayVisible&&S._zoneOverlays&&S._zoneOverlays.length>0&&_shouldAutoHideRadar()&&map.hasLayer(S.radarLayer)){try{map.removeLayer(S.radarLayer)}catch(e){}}
   const t=new Date(frame.time*1000);
   const timeStr=fmtClock(t);
@@ -546,13 +558,12 @@ function showRadarLayer(map){
       S.radarSource='rainviewer';
       _showRvLayer(map,lbl,btn,true);
     }else{
-      let _noaaErrs=0;
       S.radarLayer=L.tileLayer.wms(ep.base,{layers:ep.layer,format:'image/png',transparent:true,version:'1.1.1',opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('noaa')}).addTo(map);
       S.radarLayer.on('load',()=>_radarSourceProved('noaa'));
-      S.radarLayer.on('tileerror',()=>{
+      // v7.46: was a fixed counter of 4, which the headless test showed can
+      // never be reached once the layer is shallow enough to draw ~2 tiles.
+      attachDepthGuard(S.radarLayer,'radar:noaa',radarMinNative('noaa'),()=>{
         if(S.radarSource!=='noaa')return;
-        if(++_noaaErrs<4)return;
-        try{S.radarLayer.off('tileerror')}catch(e){}
         _markNoaaBad('overlay tiles failing');
         S.radarSource='rainviewer';
         showRadarLayer(map);
@@ -599,6 +610,14 @@ function _showRvLayer(map,lbl,btn,isFallback){
     const frame=S.radarFrames[S.radarIdx];
     if(S.radarLayer){try{map.removeLayer(S.radarLayer)}catch(e){}S.radarLayer=null}
     S.radarLayer=L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,{opacity:0.7,maxZoom:11,maxNativeZoom:radarMaxNative('rainviewer')}).addTo(map);
+    // v7.46: RainViewer had no depth guard — v7.44 only wired NEXRAD. Without
+    // it, asking deeper would have been a one-way bet. There is no source left
+    // to fail over to here, so an exhausted guard just reports.
+    attachDepthGuard(S.radarLayer,'radar:rainviewer',radarMinNative('rainviewer'),()=>{
+      if(S.radarSource!=='rainviewer')return;
+      console.warn('[radar] RainViewer tiles failing at its floor zoom');
+      if(typeof radarUnavailable==='function')radarUnavailable();
+    });
     const t=new Date(frame.time*1000);
     const el=document.getElementById('radar-time');
     if(el)el.textContent=fmtClock(t);

@@ -430,7 +430,12 @@ function stopRadarAnim(map){
 //
 // 8 is the only depth with years of evidence behind it. Going deeper needs the
 // app to probe on-device, not another inference from here.
-const RADAR_MAX_NATIVE={nexrad:8,noaa:8,rainviewer:8};
+// v7.50: RainViewer back to z7, exactly as it ran before v7.40 — the owner's
+// call. It is one level coarser than NEXRAD on paper, but RainViewer renders
+// with smooth=1 server-side, so its z7 still reads smoother than NEXRAD's z8.
+// (This deliberately relaxes the v7.46 "all sources at one depth" rule: the
+// numbers differ, the look doesn't.)
+const RADAR_MAX_NATIVE={nexrad:8,noaa:8,rainviewer:7};
 // The FLOOR each source is known-good at. Depth above this is an optimistic
 // ask: providers publish zoom limits, change them, and differ by product, and
 // none of that is knowable from here. So rather than hardcode a number we
@@ -439,7 +444,7 @@ const RADAR_MAX_NATIVE={nexrad:8,noaa:8,rainviewer:8};
 // basemap had been requesting happily ("zoom level unsupported").
 // Floors: one step below the asked depth, so a provider that refuses over HTTP
 // can still be walked down by attachDepthGuard.
-const RADAR_MIN_NATIVE={nexrad:7,noaa:7,rainviewer:7};
+const RADAR_MIN_NATIVE={nexrad:7,noaa:7,rainviewer:6};
 // Learned per-source depth caps, kept for a week so a provider that raises its
 // limit back is picked up again rather than permanently written off.
 const _DEPTH_CAP_KEY='st_depthCap',_DEPTH_CAP_TTL=7*86400000;

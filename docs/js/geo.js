@@ -903,7 +903,7 @@ function startMapPick(){
   const initLat=S.lat||39.8,initLon=S.lon||-98.5;
   const pickMap=L.map('map-pick-map',{center:[initLat,initLon],zoom:9,zoomControl:true});
   S._pickMap=pickMap;
-  applyBasemap(pickMap,{maxZoom:19});
+  applyBasemap(pickMap,{maxZoom:19,preferDeep:true});   // v7.45: streets to z19 for placing a pin
   let resolveTimer=null;
   const addrEl=document.getElementById('map-pick-addr');
   async function resolveAddr(lat,lon){

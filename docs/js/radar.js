@@ -3464,7 +3464,7 @@ function _lpBasemap(){
   const cur=basemapChoice(),act=basemapResolve();
   const chip=(v,l,on)=>`<span onclick="setBasemapChoice('${v}')" style="flex:1;text-align:center;font-size:0.6em;padding:4px 2px;border-radius:6px;cursor:pointer;border:1px solid ${on?'var(--accent-cyan)':'var(--border-subtle)'};background:${on?'rgba(0,229,255,0.15)':'transparent'};color:${on?'var(--accent-cyan)':'var(--text-muted)'};font-weight:600">${l}</span>`;
   let h='<div style="padding:3px 2px"><div style="display:flex;gap:3px">'
-    +[['auto','Auto'],['dark','Dark'],['terrain','Terrain'],['satellite','Sat'],['none','Off']]
+    +[['auto','Auto'],['dark','Dark'],['osm','Streets'],['terrain','Terrain'],['satellite','Sat'],['none','Off']]
       .map(o=>chip(o[0],o[1],cur===o[0])).join('')
     +'</div>';
   const keyed=['carto','stadia'].filter(id=>_bmKey(id));
@@ -3473,6 +3473,7 @@ function _lpBasemap(){
       +keyed.map(id=>chip(id,BASEMAPS[id].label,cur===id)).join('')+'</div>';
   }
   h+=`<div style="font-size:0.55em;color:var(--text-muted);margin-top:4px;line-height:1.5">Showing: <b style="color:var(--text-secondary)">${(BASEMAPS[act]||{}).label||act}</b>${cur==='auto'?' · auto-selected':''}`
+    +`<br>Streets (OpenStreetMap) carries roads and names to z19 — the others stop near z15-16 and upscale past it.`
     +`<br><span onclick="setBasemapKey('carto')" style="cursor:pointer;text-decoration:underline">CARTO key</span> · `
     +`<span onclick="setBasemapKey('stadia')" style="cursor:pointer;text-decoration:underline">Stadia key</span></div></div>`;
   return h;

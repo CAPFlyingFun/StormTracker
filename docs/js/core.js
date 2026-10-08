@@ -1141,10 +1141,15 @@ function updateStormBadges(){
 // the manual override are for.
 const BASEMAPS={
   auto:{label:'Auto'},
-  dark:{label:'Dark',maxNative:16,
+  // v7.45: Esri's Canvas basemaps are PUBLISHED as LOD 0-16, but the cache is
+  // regional — Pensacola was refusing a zoom it is supposed to serve, and the
+  // refusal arrives as an image carrying the message rather than an HTTP error,
+  // so the v7.44 back-off guard never sees it. Ask one level shallower and let
+  // Leaflet upscale past it (which is the behaviour anyway above maxNative).
+  dark:{label:'Dark',maxNative:15,
     tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
     attrib:'Esri, HERE, Garmin, © OpenStreetMap contributors'},
-  terrain:{label:'Terrain',maxNative:16,
+  terrain:{label:'Terrain',maxNative:15,
     tiles:['https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
            'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'],
     attrib:'Esri, USGS, NOAA, © OpenStreetMap contributors'},
@@ -1158,6 +1163,17 @@ const BASEMAPS={
   carto:{label:'CARTO',maxNative:19,keyStore:'st_cartoKey',
     tiles:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
     attrib:'© CARTO, © OpenStreetMap contributors'},
+  // v7.45: the street-level option. Esri's Canvas styles stop around z15-16 and
+  // carry almost no road detail when you are placing a pin on a driveway, which
+  // is exactly what the location picker is for. OSM renders roads, names and
+  // addresses to z19 and needs no key. Dimmed to sit inside the dark app.
+  // NOTE: tile.openstreetmap.org is a donated, volunteer-run service. Its usage
+  // policy is fine with an app this size but explicitly not with a large
+  // userbase — if StormTracker ever grows, move to the CARTO or Stadia key
+  // (both already supported above) rather than leaning harder on OSM.
+  osm:{label:'Streets',maxNative:19,dim:true,
+    tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    attrib:'© OpenStreetMap contributors'},
   // Auto-only backstop, and a deliberately DIFFERENT vendor: if Esri's legacy
   // tiled services are ever withdrawn they all go together, so the fallback has
   // to come from somewhere else entirely. USGS National Map is free, keyless and
@@ -1182,7 +1198,11 @@ function _bmMarkBad(id){
   try{localStorage.setItem('st_bmBad',JSON.stringify(m))}catch(e){}
 }
 function _bmIsBad(id){const m=_bmBad();return !!(m[id]&&m[id]>Date.now())}
-function basemapResolve(){
+// opts.preferDeep: this map is for picking a spot, not watching weather, so a
+// style that actually draws streets at z19 wins — but only when the user is on
+// Auto. A pinned choice (Satellite is a perfectly good way to place a pin) is
+// theirs to keep. v7.45.
+function basemapResolve(opts){
   const c=basemapChoice();
   if(c!=='auto'&&BASEMAPS[c]){
     // a pinned keyed provider with no key would just render watermarks
@@ -1190,12 +1210,15 @@ function basemapResolve(){
     return c;
   }
   const order=[];
+  if(opts&&opts.preferDeep&&!_bmIsBad('osm'))order.push('osm');
   if(_bmKey('carto'))order.push('carto');
   if(_bmKey('stadia'))order.push('stadia');
   // keyless chain: preferred dark style, then a different vendor entirely.
   // Someone opening a shared link has set nothing up, so Auto has to land on a
   // working map by itself — 'none' is the last resort, not the second step.
-  order.push('dark','usgs');
+  // v7.45: OSM sits between the Esri canvas and the US-only USGS backstop — if
+  // Esri is marked bad, streets at z19 beat a topo sheet that stops at z16.
+  order.push('dark','osm','usgs');
   for(const id of order){if(!_bmIsBad(id))return id}
   return 'none';
 }
@@ -1213,7 +1236,7 @@ function _bmUrl(tpl,keyStr){
 function applyBasemap(map,opts){
   if(!map||typeof L==='undefined')return null;
   opts=opts||{};
-  const id=basemapResolve();
+  const id=basemapResolve(opts);
   const def=BASEMAPS[id]||BASEMAPS.dark;
   if(map._bmLayers){for(const l of map._bmLayers){try{map.removeLayer(l)}catch(e){}}}
   map._bmLayers=[];map._bmId=id;map._bmOpts=opts;

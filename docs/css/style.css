@@ -838,3 +838,85 @@ canvas.offscreen{display:none}
   body.v3d-immersive .app-header h1{font-size:0.9em}
   body.v3d-immersive .header-loc-btn{width:28px;height:28px;font-size:0.85em;border-radius:8px}
 }
+
+/* ==========================================
+   v7.52: LANDSCAPE PHONES — short + wide (orientation landscape, ≤560px tall)
+   ==========================================
+   Every phone in landscape is under 1024px wide (932, 852, 844, 667...), so it
+   got the PORTRAIT layout stretched sideways: header + ticker + bottom nav ate
+   ~142 of 430px, the sonar was cut mid-dial and the radar's control columns ran
+   off the bottom. On a sideways phone HEIGHT is the scarce axis and width is
+   plentiful, so borrow the desktop answer — nav moves to a left rail — and fit
+   everything else to the height that is actually left.
+   Portrait phones and ≥561px-tall screens (tablets, PC) are untouched. */
+@media (orientation:landscape) and (max-height:560px){
+  :root{--ls-rail:64px}
+
+  /* nav: bottom bar → compact left rail */
+  body{padding-left:var(--ls-rail);padding-bottom:0}
+  .bottom-nav{
+    position:fixed;left:0;top:0;bottom:0;right:auto;
+    width:var(--ls-rail);height:100%;
+    flex-direction:column;justify-content:center;align-items:center;
+    gap:2px;padding:6px 0;
+    border-right:1px solid rgba(0,200,255,0.1);border-top:none;
+    background:rgba(5,8,15,0.97)
+  }
+  /* !important on flex: updateNavForLocation() (geo.js) sets an INLINE flex:1
+     on every tab, which otherwise stretches each one to fill the rail's height —
+     5 tabs × 70px covered a 375px screen top to bottom. */
+  .nav-item{flex:0 0 auto!important;max-width:none;width:58px;padding:5px 2px;gap:2px;border-radius:10px}
+  .nav-item .nav-icon{font-size:1.2em}
+  .nav-item .nav-label{font-size:0.6em}
+  .nav-badge{top:0;right:2px}
+  /* tabs ride the top of the rail so its foot is free for the AI button */
+  .bottom-nav{justify-content:flex-start;padding-top:10px}
+  /* AI button: bottom:72px only existed to clear the bottom nav. In landscape it
+     sat on the radar's bottom-right controls; it now lives at the foot of the
+     rail, clear of every map control. (Inline style → needs !important.) */
+  #ai-fab{left:calc((var(--ls-rail) - 44px) / 2)!important;right:auto!important;bottom:8px!important;width:44px!important;height:44px!important}
+
+  /* content uses the full width beside the rail; no bottom-nav clearance */
+  .container{max-width:none;width:100%;margin:0;padding:0 12px 12px}
+
+  /* header: same pieces, less height */
+  .app-header{padding:6px 10px 24px;max-width:none;margin:0}
+  /* the h1 clips for its ellipsis; at this size its tight line box shaved the
+     tops off the glyphs, so give the line a little more room */
+  .app-header h1{font-size:1.02em;line-height:1.4}
+  .header-loc-btn{width:30px;height:30px;font-size:0.92em;border-radius:8px}
+  #threat-ticker{height:20px!important;line-height:20px!important;font-size:0.66em!important}
+  /* data-source credits: in portrait this sits BEHIND the fixed bottom nav and
+     costs nothing; with the rail it is exposed and was eating ~65px. Keep the
+     attribution (Open-Meteo asks for it) but as one thin line. */
+  .powered-by{padding:2px 8px 3px;font-size:0.58em;line-height:1.3}
+  .powered-by br{display:none}
+  .powered-by br+a::before{content:' \00b7  '}
+
+  /* RADAR: the map takes the height that is left, not a fixed 480px */
+  /* measured at 430/393/375px tall: header 69 + radar title row 28 above the
+     map, thin credits line 17 below it, 5px breathing room */
+  .map-container{height:calc(100dvh - 119px);min-height:220px;margin-bottom:6px}
+  /* control columns wrap into a second column instead of running off the
+     bottom; the right column wraps leftward so it never covers its own edge */
+  .map-controls{flex-wrap:wrap;align-content:flex-start;max-height:calc(100% - 64px);gap:4px}
+  .map-controls-right{flex-wrap:wrap-reverse}
+  .map-ctrl-btn{width:30px;height:30px}
+  /* the left controls now wrap into a 2nd column — start the time pill after it */
+  .radar-time-label{left:82px}
+
+  /* WEATHER: two columns, like the desktop dashboard. The sonar is square, so
+     on a short screen it is sized by the HEIGHT left, not the column width —
+     otherwise its bottom half is always below the fold. */
+  #page-weather{column-count:2;column-gap:12px}
+  #page-weather > *{break-inside:avoid;-webkit-column-break-inside:avoid;margin-bottom:10px}
+  #page-weather #mini-sonar-card{max-width:100%;margin:0 0 10px}
+  #mini-sonar-wrap{max-width:calc(100dvh - 145px);margin:0 auto}
+
+  /* STORMS / ALERTS: tile and flow like desktop instead of one long column */
+  #page-storms .storm-group-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+  #page-storms .storm-cell-card{margin-bottom:0}
+  #page-alerts{column-count:2;column-gap:12px}
+  #page-alerts > *{break-inside:avoid;-webkit-column-break-inside:avoid;margin-bottom:10px}
+  #page-alerts > .card[data-alert-sec="nws"]{column-span:all}
+}
